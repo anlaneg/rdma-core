@@ -116,6 +116,7 @@ struct rdma_route {
 };
 
 struct rdma_event_channel {
+    //对应字符设备/dev/infiniband/rdma_cm的fd
 	int			fd;
 };
 

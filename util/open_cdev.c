@@ -44,6 +44,7 @@
 
 #include <config.h>
 
+//打开cdev设备
 static int open_cdev_internal(const char *path, dev_t cdev)
 {
 	struct stat st;

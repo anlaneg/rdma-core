@@ -57,7 +57,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 {
 	struct ibv_device **l = NULL;
 	struct verbs_device *device;
-	static bool initialized;
+	static bool initialized;/*是否已初始化*/
 	int num_devices;
 	int i = 0;
 
@@ -77,6 +77,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 		goto out;
 	}
 
+	//申请内存，记录所有ib设备
 	l = calloc(num_devices + 1, sizeof (struct ibv_device *));
 	if (!l) {
 		errno = ENOMEM;

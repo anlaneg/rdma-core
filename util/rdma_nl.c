@@ -69,6 +69,7 @@ struct nl_sock *rdmanl_socket_alloc(void)
 	nl_socket_disable_auto_ack(nl);
 	nl_socket_disable_msg_peek(nl);
 
+	//创建rdma netlink socket
 	if (nl_connect(nl, NETLINK_RDMA)) {
 		nl_socket_free(nl);
 		return NULL;
@@ -102,7 +103,8 @@ int rdmanl_get_devices(struct nl_sock *nl, nl_recvmsg_msg_cb_t cb_func,
 	return 0;
 }
 
-int rdmanl_get_chardev(struct nl_sock *nl, int ibidx, const char *name,
+int rdmanl_get_chardev(struct nl_sock *nl, int ibidx/*ib设备编号*/,
+        const char *name/*chardev对应的type名称*/,
 		       nl_recvmsg_msg_cb_t cb_func, void *data)
 
 {

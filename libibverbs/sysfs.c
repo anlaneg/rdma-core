@@ -49,6 +49,7 @@ const char *ibv_get_sysfs_path(void)
 {
 	const char *env = NULL;
 
+	//已设置，则直接返回
 	if (sysfs_path)
 		return sysfs_path;
 
@@ -70,6 +71,7 @@ const char *ibv_get_sysfs_path(void)
 			dup[len] = '\0';
 		}
 	} else
+	    //默认使用/sys
 		sysfs_path = "/sys";
 
 	return sysfs_path;

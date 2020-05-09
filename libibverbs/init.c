@@ -116,6 +116,9 @@ int setup_sysfs_uverbs(int uv_dirfd, const char *uverbs,
 		return -1;
 	sysfs_dev->time_created = buf.st_mtim;
 
+	//读取dev文件
+	//root@host:/sys/class/infiniband/mlx5_0/device/infiniband_verbs/uverbs0# cat dev
+	//231:192
 	if (ibv_read_sysfs_file_at(uv_dirfd, "dev", value,
 				   sizeof(value)) < 0)
 		return -1;
@@ -123,6 +126,7 @@ int setup_sysfs_uverbs(int uv_dirfd, const char *uverbs,
 		return -1;
 	sysfs_dev->sysfs_cdev = makedev(major, minor);
 
+	//读取abi版本
 	if (ibv_read_sysfs_file_at(uv_dirfd, "abi_version", value,
 				   sizeof(value)) > 0)
 		sysfs_dev->abi_ver = strtoul(value, NULL, 10);
@@ -528,6 +532,7 @@ static void try_all_drivers(struct list_head *sysfs_list,
 	}
 }
 
+//收集所有ib设备
 int ibverbs_get_device_list(struct list_head *device_list)
 {
 	LIST_HEAD(sysfs_list);

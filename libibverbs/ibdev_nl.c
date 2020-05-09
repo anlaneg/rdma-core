@@ -50,6 +50,7 @@ static int find_uverbs_sysfs(struct verbs_sysfs_dev *sysfs_dev)
 	DIR *class_dir;
 	int ret = ENOENT;
 
+	//例如/sys/class/infiniband/mlx5_0/device/infiniband_verbs/
 	if (!check_snprintf(path, sizeof(path), "%s/device/infiniband_verbs",
 			    sysfs_dev->ibdev_path))
 		return ENOMEM;
@@ -58,13 +59,16 @@ static int find_uverbs_sysfs(struct verbs_sysfs_dev *sysfs_dev)
 	if (!class_dir)
 		return ENOSYS;
 
+	//例如：uverbs0
 	while ((dent = readdir(class_dir))) {
 		int uv_dirfd;
 		bool failed;
 
+		//跳过‘.’,‘..’目录
 		if (dent->d_name[0] == '.')
 			continue;
 
+		//打开verbs fd
 		uv_dirfd = openat(dirfd(class_dir), dent->d_name,
 				  O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 		if (uv_dirfd == -1)
@@ -143,6 +147,7 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 	struct verbs_sysfs_dev *sysfs_dev;
 	int ret;
 
+	//解析netlink消息
 	ret = nlmsg_parse(nlmsg_hdr(msg), 0, tb, RDMA_NLDEV_ATTR_MAX - 1,
 			  rdmanl_policy);
 	if (ret < 0)
@@ -164,11 +169,15 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 			    sizeof(sysfs_dev->ibdev_name), "%s",
 			    nla_get_string(tb[RDMA_NLDEV_ATTR_DEV_NAME])))
 		goto err;
+
+	//取ib设备名称，构造infiniband设备路径
 	if (!check_snprintf(
 		    sysfs_dev->ibdev_path, sizeof(sysfs_dev->ibdev_path),
 		    "%s/class/infiniband/%s", ibv_get_sysfs_path(),
 		    sysfs_dev->ibdev_name))
 		goto err;
+
+	//取ib设备fw
 	if (tb[RDMA_NLDEV_ATTR_FW_VERSION]) {
 		if (!check_snprintf(
 			    sysfs_dev->fw_ver, sizeof(sysfs_dev->fw_ver), "%s",
@@ -184,6 +193,7 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 	 * this namespace
 	 */
 
+	//串连sysfs_dev
 	list_add(sysfs_list, &sysfs_dev->entry);
 	return NL_OK;
 
@@ -193,7 +203,7 @@ err:
 }
 
 /* Fetch the list of IB devices and uverbs from netlink */
-int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list)
+int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list/*收集系统中可用的所有ib设备*/)
 {
 	struct verbs_sysfs_dev *dev, *dev_tmp;
 	struct nl_sock *nl;
@@ -202,11 +212,13 @@ int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list)
 	if (!nl)
 		return -EOPNOTSUPP;
 
+	//向kernel发送请求，要求列取当前系统所有ib设备
 	if (rdmanl_get_devices(nl, find_sysfs_devs_nl_cb, tmp_sysfs_dev_list))
 		goto err;
 
 	list_for_each_safe (tmp_sysfs_dev_list, dev, dev_tmp, entry) {
 		if (find_uverbs_nl(nl, dev) && find_uverbs_sysfs(dev)) {
+		    /*移除掉无效的设备*/
 			list_del(&dev->entry);
 			free(dev);
 		}

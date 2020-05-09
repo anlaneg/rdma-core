@@ -192,14 +192,14 @@ struct verbs_sysfs_dev {
 	unsigned int flags;
 	char sysfs_name[IBV_SYSFS_NAME_MAX];
 	dev_t sysfs_cdev;
-	char ibdev_name[IBV_SYSFS_NAME_MAX];
-	char ibdev_path[IBV_SYSFS_PATH_MAX];
+	char ibdev_name[IBV_SYSFS_NAME_MAX];/*ib设备名称*/
+	char ibdev_path[IBV_SYSFS_PATH_MAX];/*ib设备路径*/
 	char modalias[512];
-	char fw_ver[64];
+	char fw_ver[64];/*ib设备fw版本*/
 	uint64_t node_guid;
 	uint32_t driver_id;
 	enum ibv_node_type node_type;
-	int ibdev_idx;
+	int ibdev_idx;/*ib设备索引号*/
 	uint32_t abi_ver;
 	struct timespec time_created;
 };

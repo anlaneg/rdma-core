@@ -132,6 +132,7 @@ static struct cma_device *cma_dev_array;
 static int cma_dev_cnt;
 static int cma_init_cnt;
 static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
+//自文件class/misc/rdma_cm/abi_version中读取
 static int abi_ver = -1;
 static char dev_name[64] = "rdma_cm";
 static dev_t dev_cdev;
@@ -196,6 +197,7 @@ static void check_abi_version_sysfs(void)
 {
 	char value[8];
 
+	//读取abi_version文件(两者只选其一）
 	if ((ibv_read_sysfs_file(ibv_get_sysfs_path(),
 				 "class/misc/rdma_cm/abi_version",
 				 value, sizeof value) < 0) &&
@@ -221,6 +223,7 @@ static int check_abi_version(void)
 			check_abi_version_sysfs();
 	}
 
+	//abi必须在指定范围以内
 	if (abi_ver < RDMA_USER_CM_MIN_ABI_VERSION ||
 	    abi_ver > RDMA_USER_CM_MAX_ABI_VERSION)
 		return -1;
@@ -255,7 +258,7 @@ static void ucma_set_af_ib_support(void)
 
 int ucma_init(void)
 {
-	struct ibv_device **dev_list = NULL;
+	struct ibv_device **dev_list/*ib设备列表*/ = NULL;
 	int i, ret, dev_cnt;
 
 	/* Quick check without lock to see if we're already initialized */
@@ -263,6 +266,7 @@ int ucma_init(void)
 		return 0;
 
 	pthread_mutex_lock(&mut);
+	//加锁后再检查
 	if (cma_dev_cnt) {
 		pthread_mutex_unlock(&mut);
 		return 0;
@@ -275,8 +279,9 @@ int ucma_init(void)
 		goto err1;
 	}
 
-	dev_list = ibv_get_device_list(&dev_cnt);
+	dev_list = ibv_get_device_list(&dev_cnt/*ib设备数目*/);
 	if (!dev_list) {
+	    /*无可用ib设备，退出*/
 		ret = ERR(ENODEV);
 		goto err1;
 	}
@@ -425,6 +430,7 @@ void rdma_free_devices(struct ibv_context **list)
 	free(list);
 }
 
+//创建event channel(打开rdma_cm设备）
 struct rdma_event_channel *rdma_create_event_channel(void)
 {
 	struct rdma_event_channel *channel;
@@ -436,6 +442,7 @@ struct rdma_event_channel *rdma_create_event_channel(void)
 	if (!channel)
 		return NULL;
 
+	//打开dev /dev/infiniband/rdma_cm
 	channel->fd = open_cdev(dev_name, dev_cdev);
 	if (channel->fd < 0) {
 		goto err;
