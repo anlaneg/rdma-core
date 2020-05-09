@@ -72,3 +72,6 @@ Session.vim
 
 # python
 *.pyc
+.cproject
+.project
+.settings/
