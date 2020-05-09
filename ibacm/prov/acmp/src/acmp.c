@@ -1230,8 +1230,10 @@ acmp_sa_resp(struct acm_sa_mad *mad)
 
 	req->msg.hdr.opcode |= ACM_OP_ACK;
 	if (!mad->umad.status) {
+		struct acm_ep_addr_data *resolve_data = req->msg.resolve_data;
+
 		req->msg.hdr.status = (uint8_t) (be16toh(sa_mad->status) >> 8);
-		memcpy(&req->msg.resolve_data[0].info.path, sa_mad->data,
+		memcpy(&resolve_data->info.path, sa_mad->data,
 		       sizeof(struct ibv_path_record));
 	} else {
 		req->msg.hdr.status = ACM_STATUS_ETIMEDOUT;
@@ -2430,6 +2432,7 @@ static int __acmp_add_addr(const struct acm_address *addr, struct acmp_ep *ep,
 		acm_log(0, "ERROR - unable to create loopback dest %s\n",
 			addr->id_string);
 		memset(&ep->addr_info[i], 0, sizeof(ep->addr_info[i]));
+		free(addr_ctx);
 		return -1;
 	}
 

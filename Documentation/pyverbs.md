@@ -594,3 +594,35 @@ var_map = mmap.mmap(fileno=ctx.cmd_fd, length=var.length, offset=var.mmap_off)
 var_map.close()
 var.close()
 ```
+
+##### MLX5 PP
+Packet Pacing (PP) entry can be used for some device commands over the DEVX
+interface. It allows a rate-limited flow configuration on SQs.
+The following code snippet demonstrates how to allocate an mlx5dv_pp with rate
+limit value of 5, then frees the entry.
+```python
+from pyverbs.providers.mlx5.mlx5dv import Mlx5Context, Mlx5DVContextAttr, Mlx5PP
+import pyverbs.providers.mlx5.mlx5_enums as e
+
+# The device must be opened as DEVX context
+mlx5dv_attr = Mlx5DVContextAttr(e.MLX5DV_CONTEXT_FLAGS_DEVX)
+ctx = Mlx5Context(attr=mlx5dv_attr, name='rocep0s8f0')
+rate_limit_inbox = (5).to_bytes(length=4, byteorder='big', signed=True)
+pp = Mlx5PP(ctx, rate_limit_inbox)
+pp.close()
+```
+
+##### MLX5 UAR
+User Access Region (UAR) is part of PCI address space that is mapped for direct
+access to the HCA from the CPU.
+The UAR is needed for some device commands over the DevX interface.
+The following code snippet demonstrates how to allocate and free an
+mlx5dv_devx_uar.
+```python
+from pyverbs.providers.mlx5.mlx5dv import Mlx5UAR
+from pyverbs.device import Context
+
+ctx = Context(name='rocep0s8f0')
+uar = Mlx5UAR(ctx)
+uar.close()
+```

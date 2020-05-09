@@ -308,7 +308,6 @@ cdef extern from '<infiniband/verbs.h>':
         IBV_RX_HASH_DST_PORT_UDP
 
     cpdef enum ibv_flow_flags:
-        IBV_FLOW_ATTR_FLAGS_ALLOW_LOOP_BACK
         IBV_FLOW_ATTR_FLAGS_DONT_TRAP
         IBV_FLOW_ATTR_FLAGS_EGRESS
 
@@ -347,6 +346,7 @@ cdef extern from '<infiniband/verbs.h>':
 
     cpdef enum ibv_cq_init_attr_mask:
         IBV_CQ_INIT_ATTR_MASK_FLAGS
+        IBV_CQ_INIT_ATTR_MASK_PD
 
     cpdef enum ibv_create_cq_attr_flags:
         IBV_CREATE_CQ_ATTR_SINGLE_THREADED
@@ -430,3 +430,9 @@ cdef extern from '<infiniband/verbs.h>':
 _IBV_DEVICE_RAW_SCATTER_FCS = IBV_DEVICE_RAW_SCATTER_FCS
 _IBV_DEVICE_PCI_WRITE_END_PADDING = IBV_DEVICE_PCI_WRITE_END_PADDING
 _IBV_ALLOCATOR_USE_DEFAULT = <size_t>IBV_ALLOCATOR_USE_DEFAULT
+
+
+cdef extern from '<infiniband/driver.h>':
+    cpdef enum ibv_gid_type:
+        IBV_GID_TYPE_IB_ROCE_V1
+        IBV_GID_TYPE_ROCE_V2

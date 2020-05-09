@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
 # Copyright (c) 2019 Mellanox Technologies, Inc. All rights reserved. See COPYING file
 
+from libc.stdint cimport uintptr_t
 import logging
 
 from pyverbs.pyverbs_error import PyverbsUserError
 cimport pyverbs.providers.mlx5.mlx5dv_enums as dve
 cimport pyverbs.providers.mlx5.libmlx5 as dv
 from pyverbs.base import PyverbsRDMAErrno
+from pyverbs.base cimport close_weakrefs
 cimport pyverbs.libibverbs_enums as e
 from pyverbs.qp cimport QPInitAttrEx
 from pyverbs.cq cimport CqInitAttrEx
 cimport pyverbs.libibverbs as v
 from pyverbs.pd cimport PD
+import weakref
+
 
 cdef class Mlx5DVContextAttr(PyverbsObject):
     """
@@ -54,10 +58,14 @@ cdef class Mlx5Context(Context):
         :param attr: mlx5-specific device attributes
         :return: None
         """
+        super().__init__(name=name, attr=attr)
         if not dv.mlx5dv_is_supported(self.device):
             raise PyverbsUserError('This is not an MLX5 device')
-        super().__init__(name=name, attr=attr)
+        self.pps = weakref.WeakSet()
         self.context = dv.mlx5dv_open_device(self.device, &attr.attr)
+        if self.context == NULL:
+            raise PyverbsRDMAErrno('Failed to open mlx5 context on {dev}'
+                                   .format(dev=self.name))
 
     def query_mlx5_device(self, comp_mask=-1):
         """
@@ -84,6 +92,20 @@ cdef class Mlx5Context(Context):
             raise PyverbsRDMAErrno('Failed to query mlx5 device {name}, got {rc}'.
                                    format(name=self.name, rc=rc))
         return dv_attr
+
+    cdef add_ref(self, obj):
+        if isinstance(obj, Mlx5PP):
+            self.pps.add(obj)
+        else:
+            super().add_ref(obj)
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.context != NULL:
+            close_weakrefs([self.pps])
+            super(Mlx5Context, self).close()
 
 
 cdef class Mlx5DVContext(PyverbsObject):
@@ -554,7 +576,7 @@ def send_ops_flags_to_str(flags):
 
 
 cdef class Mlx5VAR(VAR):
-    def __cinit__(self, Context context not None, flags=0):
+    def __init__(self, Context context not None, flags=0):
         self.var = dv.mlx5dv_alloc_var(context.context, flags)
         if self.var == NULL:
             raise PyverbsRDMAErrno('Failed to allocate VAR')
@@ -590,3 +612,81 @@ cdef class Mlx5VAR(VAR):
     @property
     def comp_mask(self):
         return self.var.comp_mask
+
+
+cdef class Mlx5PP(PyverbsObject):
+    """
+    Represents mlx5dv_pp, packet pacing struct.
+    """
+    def __init__(self, Context context not None, pp_context, flags=0):
+        """
+        Initializes a Mlx5PP object.
+        :param context: DevX context
+        :param pp_context: Bytes of packet pacing context according to the
+                           device specs. Must be bytes type or implements
+                           __bytes__ method
+        :param flags: Packet pacing allocation flags
+        """
+        self.context = context
+        pp_ctx_bytes = bytes(pp_context)
+        self.pp = dv.mlx5dv_pp_alloc(context.context, len(pp_ctx_bytes),
+                                     <char*>pp_ctx_bytes, flags)
+        if self.pp == NULL:
+            raise PyverbsRDMAErrno('Failed to allocate packet pacing entry')
+        (<Mlx5Context>context).add_ref(self)
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.pp != NULL:
+            dv.mlx5dv_pp_free(self.pp)
+            self.pp = NULL
+
+    @property
+    def index(self):
+        return self.pp.index
+
+
+cdef class Mlx5UAR(PyverbsObject):
+    def __init__(self, Context context not None, flags=0):
+        self.uar = dv.mlx5dv_devx_alloc_uar(context.context, flags)
+        if self.uar == NULL:
+            raise PyverbsRDMAErrno('Failed to allocate UAR')
+        context.uars.add(self)
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.uar != NULL:
+            dv.mlx5dv_devx_free_uar(self.uar)
+            self.uar = NULL
+
+    def __str__(self):
+        print_format = '{:20}: {:<20}\n'
+        return print_format.format('reg addr', <uintptr_t>self.uar.reg_addr) +\
+               print_format.format('base addr', <uintptr_t>self.uar.base_addr) +\
+               print_format.format('page id', self.uar.page_id) +\
+               print_format.format('mmap off', self.uar.mmap_off) +\
+               print_format.format('comp mask', self.uar.comp_mask)
+
+    @property
+    def reg_addr(self):
+        return <uintptr_t>self.uar.reg_addr
+
+    @property
+    def base_addr(self):
+        return <uintptr_t>self.uar.base_addr
+
+    @property
+    def page_id(self):
+        return self.uar.page_id
+
+    @property
+    def mmap_off(self):
+        return self.uar.mmap_off
+
+    @property
+    def comp_mask(self):
+        return self.uar.comp_mask

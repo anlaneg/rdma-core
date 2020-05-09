@@ -50,6 +50,13 @@ cdef class ConnParam(PyverbsObject):
         self.conn_param.srq = srq
         self.conn_param.qp_num = qp_num
 
+    @property
+    def qpn(self):
+        return self.conn_param.qp_num
+    @qpn.setter
+    def qpn(self, val):
+        self.conn_param.qp_num = val
+
     def __str__(self):
         print_format  = '{:<4}: {:<4}\n'
         return '{}: {}\n'.format('Connection parameters', "") +\
@@ -124,8 +131,8 @@ cdef class AddrInfo(PyverbsObject):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing AddrInfo')
         if self.addr_info != NULL:
+            self.logger.debug('Closing AddrInfo')
             cm.rdma_freeaddrinfo(self.addr_info)
         self.addr_info = NULL
 
@@ -148,8 +155,8 @@ cdef class CMEvent(PyverbsObject):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing CMEvent')
         if self.event != NULL:
+            self.logger.debug('Closing CMEvent')
             self.ack_cm_event()
             self.event = NULL
 
@@ -193,8 +200,8 @@ cdef class CMEventChannel(PyverbsObject):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing CMEventChannel')
         if self.event_channel != NULL:
+            self.logger.debug('Closing CMEventChannel')
             cm.rdma_destroy_event_channel(self.event_channel)
             self.event_channel = NULL
 
@@ -267,12 +274,16 @@ cdef class CMID(PyverbsCM):
     def context(self):
         return self.ctx
 
+    @property
+    def pd(self):
+        return self.pd
+
     def __dealloc__(self):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing CMID')
         if self.id != NULL:
+            self.logger.debug('Closing CMID')
             if self.event_channel is None:
                 cm.rdma_destroy_ep(self.id)
             else:

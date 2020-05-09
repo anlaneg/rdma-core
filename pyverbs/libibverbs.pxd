@@ -216,6 +216,7 @@ cdef extern from 'infiniband/verbs.h':
         unsigned long       wc_flags
         unsigned int        comp_mask
         unsigned int        flags
+        ibv_pd              *parent_domain
 
     cdef struct ibv_cq_ex:
         ibv_context         *context
@@ -593,3 +594,8 @@ cdef extern from 'infiniband/verbs.h':
     void ibv_wr_start(ibv_qp_ex *qp)
     int ibv_wr_complete(ibv_qp_ex *qp)
     void ibv_wr_abort(ibv_qp_ex *qp)
+
+
+cdef extern from 'infiniband/driver.h':
+    int ibv_query_gid_type(ibv_context *context, uint8_t port_num,
+                           unsigned int index, ibv_gid_type *type)

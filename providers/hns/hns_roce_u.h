@@ -39,6 +39,7 @@
 
 #include <infiniband/driver.h>
 #include <util/udma_barrier.h>
+#include <util/util.h>
 #include <infiniband/verbs.h>
 #include <ccan/bitmap.h>
 #include <ccan/container_of.h>
@@ -49,12 +50,17 @@
 
 #define PFX				"hns: "
 
+/* The minimum page size is 4K for hardware */
+#define HNS_HW_PAGE_SHIFT 12
+#define HNS_HW_PAGE_SIZE (1 << HNS_HW_PAGE_SHIFT)
+
 #define HNS_ROCE_MAX_INLINE_DATA_LEN	32
 #define HNS_ROCE_MAX_CQ_NUM		0x10000
 #define HNS_ROCE_MAX_SRQWQE_NUM		0x8000
 #define HNS_ROCE_MAX_SRQSGE_NUM		0x100
 #define HNS_ROCE_MIN_CQE_NUM		0x40
-#define HNS_ROCE_MIN_WQE_NUM		0x20
+#define HNS_ROCE_V1_MIN_WQE_NUM		0x20
+#define HNS_ROCE_V2_MIN_WQE_NUM		0x40
 
 #define HNS_ROCE_CQE_ENTRY_SIZE		0x20
 #define HNS_ROCE_SQWQE_SHIFT		6
@@ -113,7 +119,7 @@ struct hns_roce_buf {
 };
 
 #define BIT_CNT_PER_BYTE       8
-#define BIT_CNT_PER_U64		64
+#define BIT_CNT_PER_LONG       (BIT_CNT_PER_BYTE * sizeof(unsigned long))
 
 /* the sw doorbell type; */
 enum hns_roce_db_type {
@@ -176,9 +182,9 @@ struct hns_roce_cq {
 
 struct hns_roce_idx_que {
 	struct hns_roce_buf		buf;
-	int				buf_size;
-	int				entry_sz;
+	int				entry_shift;
 	unsigned long			*bitmap;
+	int				bitmap_cnt;
 };
 
 struct hns_roce_srq {
@@ -187,7 +193,7 @@ struct hns_roce_srq {
 	pthread_spinlock_t		lock;
 	unsigned long			*wrid;
 	unsigned int			srqn;
-	unsigned int			max_wqe;
+	unsigned int			wqe_cnt;
 	unsigned int			max_gs;
 	unsigned int			wqe_shift;
 	int				head;
@@ -261,6 +267,15 @@ struct hns_roce_u_hw {
 	uint32_t hw_version;
 	struct verbs_context_ops hw_ops;
 };
+
+/*
+ * The entries's buffer should be aligned to a multiple of the hardware's
+ * minimum page size.
+ */
+static inline unsigned int to_hr_hem_entries_size(int count, int buf_shift)
+{
+	return align(count << buf_shift, HNS_HW_PAGE_SIZE);
+}
 
 static inline struct hns_roce_device *to_hr_dev(struct ibv_device *ibv_dev)
 {

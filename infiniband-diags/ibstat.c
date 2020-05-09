@@ -309,10 +309,12 @@ int main(int argc, char *argv[])
 	if (!device_list && errno)
 		IBPANIC("can't list IB device names");
 
+	if (umad_sort_ca_device_list(&device_list, 0))
+		IBWARN("can't sort list IB device names");
+
 	if (argc) {
 		for (node = device_list; node; node = node->next)
-			if (!strncmp(node->ca_name, argv[0],
-				     strlen(node->ca_name)))
+			if (!strcmp(node->ca_name, argv[0]))
 				break;
 		if (!node)
 			IBPANIC("'%s' IB device can't be found", argv[0]);

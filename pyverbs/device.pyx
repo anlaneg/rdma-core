@@ -101,6 +101,7 @@ cdef class Context(PyverbsCM):
         self.qps = weakref.WeakSet()
         self.xrcds = weakref.WeakSet()
         self.vars = weakref.WeakSet()
+        self.uars = weakref.WeakSet()
 
         self.name = kwargs.get('name')
         provider_attr = kwargs.get('attr')
@@ -144,10 +145,10 @@ cdef class Context(PyverbsCM):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing Context')
-        close_weakrefs([self.qps, self.ccs, self.cqs, self.dms, self.pds,
-                        self.xrcds, self.vars])
         if self.context != NULL:
+            self.logger.debug('Closing Context')
+            close_weakrefs([self.qps, self.ccs, self.cqs, self.dms, self.pds,
+                            self.xrcds, self.vars])
             rc = v.ibv_close_device(self.context)
             if rc != 0:
                 raise PyverbsRDMAErrno('Failed to close device {dev}'.
@@ -167,8 +168,8 @@ cdef class Context(PyverbsCM):
         dev_attr = DeviceAttr()
         rc = v.ibv_query_device(self.context, &dev_attr.dev_attr)
         if rc != 0:
-            raise PyverbsRDMAErrno('Failed to query device {name}'.
-                                   format(name=self.name))
+            raise PyverbsRDMAError('Failed to query device {name}'.
+                                   format(name=self.name), rc)
         return dev_attr
 
     def query_device_ex(self, QueryDeviceExInput ex_input = None):
@@ -183,8 +184,8 @@ cdef class Context(PyverbsCM):
                                    &ex_input.input if ex_input is not None else NULL,
                                    &dev_attr_ex.dev_attr)
         if rc != 0:
-            raise PyverbsRDMAErrno('Failed to query EX device {name}'.
-                                   format(name=self.name))
+            raise PyverbsRDMAError('Failed to query EX device {name}'.
+                                   format(name=self.name), rc)
         return dev_attr_ex
 
     def query_gid(self, unsigned int port_num, int index):
@@ -195,6 +196,14 @@ cdef class Context(PyverbsCM):
                                                                    format(idx=index, port=port_num))
         return gid
 
+    def query_gid_type(self, unsigned int port_num, unsigned int index):
+        cdef v.ibv_gid_type gid_type
+        rc = v.ibv_query_gid_type(self.context, port_num, index, &gid_type)
+        if rc != 0:
+            raise PyverbsRDMAErrno('Failed to query gid type of port {p} and gid index {g}'
+                                   .format(p=port_num, g=index))
+        return gid_type
+
     def query_port(self, unsigned int port_num):
         """
         Query port <port_num> of the device and returns its attributes.
@@ -204,7 +213,8 @@ cdef class Context(PyverbsCM):
         port_attrs = PortAttr()
         rc = v.ibv_query_port(self.context, port_num, &port_attrs.attr)
         if rc != 0:
-            raise PyverbsRDMAErrno('Failed to query port {p}'.format(p=port_num))
+            raise PyverbsRDMAError('Failed to query port {p}'.
+                                   format(p=port_num), rc)
         return port_attrs
 
     cdef add_ref(self, obj):
@@ -228,6 +238,10 @@ cdef class Context(PyverbsCM):
     @property
     def cmd_fd(self):
         return self.context.cmd_fd
+
+    @property
+    def name(self):
+        return self.name
 
 
 cdef class DeviceAttr(PyverbsObject):
@@ -656,12 +670,12 @@ cdef class DM(PyverbsCM):
         self.close()
 
     cpdef close(self):
-        self.logger.debug('Closing DM')
-        close_weakrefs([self.dm_mrs])
         if self.dm != NULL:
+            self.logger.debug('Closing DM')
+            close_weakrefs([self.dm_mrs])
             rc = v.ibv_free_dm(self.dm)
             if rc != 0:
-                raise PyverbsRDMAErrno('Failed to free dm')
+                raise PyverbsRDMAError('Failed to free dm', rc)
             self.dm = NULL
         self.context = None
 
@@ -673,7 +687,7 @@ cdef class DM(PyverbsCM):
         rc = v.ibv_memcpy_to_dm(<v.ibv_dm *>self.dm, <uint64_t>dm_offset,
                                 <char *>data, <size_t>length)
         if rc != 0:
-            raise PyverbsRDMAErrno('Failed to copy to dm')
+            raise PyverbsRDMAError('Failed to copy to dm', rc)
 
     def copy_from_dm(self, dm_offset, length):
         cdef char *data =<char*>malloc(length)
@@ -681,7 +695,7 @@ cdef class DM(PyverbsCM):
         rc = v.ibv_memcpy_from_dm(<void *>data, <v.ibv_dm *>self.dm,
                                   <uint64_t>dm_offset, <size_t>length)
         if rc != 0:
-            raise PyverbsRDMAErrno('Failed to copy from dm')
+            raise PyverbsRDMAError('Failed to copy from dm', rc)
         res = data[:length]
         free(data)
         return res
@@ -974,7 +988,7 @@ cdef class VAR(PyverbsObject):
     Each device specific VAR implementation should inherit this class
     and initialize it according to the device attributes.
     """
-    def __cinit__(self, Context context not None, **kwargs):
+    def __init__(self, Context context not None, **kwargs):
         self.context = context
 
     def __dealloc__(self):
