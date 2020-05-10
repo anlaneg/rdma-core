@@ -114,6 +114,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_name, 1_1, "IBVERBS_1.1",
 	return device->name;
 }
 
+/*取sysfs_dev的node_guid,如果没有缓存，则读取设备对应的node_guid文件*/
 LATEST_SYMVER_FUNC(ibv_get_device_guid, 1_1, "IBVERBS_1.1",
 		   __be64,
 		   struct ibv_device *device)

@@ -162,6 +162,7 @@ int do_poll(struct pollfd *fds, int timeout)
 	return ret == 1 ? (fds->revents & (POLLERR | POLLHUP)) : ret;
 }
 
+/*打开event channel*/
 struct rdma_event_channel *create_first_event_channel(void)
 {
 	struct rdma_event_channel *channel;

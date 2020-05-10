@@ -108,6 +108,7 @@ struct rping_rdma_info {
  * Control block struct.
  */
 struct rping_cb {
+    /*取1时为server端，取0时为client端*/
 	int server;			/* 0 iff client */
 	pthread_t cqthread;
 	pthread_t persistent_server_thread;
@@ -629,6 +630,7 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 		goto err3;
 	}
 
+	/*创建qp*/
 	ret = rping_create_qp(cb);
 	if (ret) {
 		goto err3;
@@ -652,12 +654,15 @@ static void *cm_thread(void *arg)
 	int ret;
 
 	while (1) {
+	    /*获取event*/
 		ret = rdma_get_cm_event(cb->cm_channel, &event);
 		if (ret) {
 			perror("rdma_get_cm_event");
 			exit(ret);
 		}
+		/*处理event*/
 		ret = rping_cma_event_handler(event->id, event);
+		/*event应答*/
 		rdma_ack_cm_event(event);
 		if (ret)
 			exit(ret);
@@ -1143,8 +1148,10 @@ static int rping_bind_client(struct rping_cb *cb)
 		return ret;
 	}
 
+	//等待信号量触发（完成ct->state赋值后触发）
 	sem_wait(&cb->sem);
 	if (cb->state != ROUTE_RESOLVED) {
+	    //未解决成功，报错
 		fprintf(stderr, "waiting for addr/route resolution state %d\n",
 			cb->state);
 		return -1;
@@ -1254,6 +1261,7 @@ static void usage(const char *name)
 	printf("\t-q\t\tuse self-created, self-modified QP\n");
 }
 
+//rping代码入口
 int main(int argc, char *argv[])
 {
 	struct rping_cb *cb;
@@ -1340,12 +1348,14 @@ int main(int argc, char *argv[])
 	if (ret)
 		goto out;
 
+	/*只能是 client或 server两种模式*/
 	if (cb->server == -1) {
 		usage("rping");
 		ret = EINVAL;
 		goto out;
 	}
 
+	/*打开rdma_cm字符设备*/
 	cb->cm_channel = create_first_event_channel();
 	if (!cb->cm_channel) {
 		ret = errno;
@@ -1359,6 +1369,7 @@ int main(int argc, char *argv[])
 	}
 	DEBUG_LOG("created cm_id %p\n", cb->cm_id);
 
+	//创建cm线程
 	ret = pthread_create(&cb->cmthread, NULL, cm_thread, cb);
 	if (ret) {
 		perror("pthread_create");
@@ -1366,11 +1377,13 @@ int main(int argc, char *argv[])
 	}
 
 	if (cb->server) {
+	    /*server端处理*/
 		if (persistent_server)
 			ret = rping_run_persistent_server(cb);
 		else
 			ret = rping_run_server(cb);
 	} else {
+	    /*client端处理*/
 		ret = rping_run_client(cb);
 	}
 

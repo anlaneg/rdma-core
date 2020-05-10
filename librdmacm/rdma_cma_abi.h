@@ -310,7 +310,7 @@ struct ucma_abi_get_event {
 	__u32 cmd;
 	__u16 in;
 	__u16 out;
-	__u64 response;
+	__u64 response;/*响应地址*/
 };
 
 struct ucma_abi_event_resp {

@@ -533,7 +533,7 @@ static void try_all_drivers(struct list_head *sysfs_list,
 }
 
 //收集所有ib设备
-int ibverbs_get_device_list(struct list_head *device_list)
+int ibverbs_get_device_list(struct list_head *device_list/*出参*/)
 {
 	LIST_HEAD(sysfs_list);
 	struct verbs_sysfs_dev *sysfs_dev, *next_dev;
@@ -602,6 +602,7 @@ out:
 		free(sysfs_dev);
 	}
 
+	/*返回获得的device数目*/
 	return num_devices;
 }
 

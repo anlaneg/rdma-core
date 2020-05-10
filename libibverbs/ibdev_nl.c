@@ -140,6 +140,7 @@ static int find_uverbs_nl(struct nl_sock *nl, struct verbs_sysfs_dev *sysfs_dev)
 	return 0;
 }
 
+//解析netlink消息，收集消息中给定ib设备信息，串连在data指定的verbs_sysfs_dev上
 static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 {
 	struct nlattr *tb[RDMA_NLDEV_ATTR_MAX];
@@ -152,6 +153,8 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 			  rdmanl_policy);
 	if (ret < 0)
 		return ret;
+
+	//返回的消息必须包含以下信息
 	if (!tb[RDMA_NLDEV_ATTR_DEV_NAME] ||
 	    !tb[RDMA_NLDEV_ATTR_DEV_NODE_TYPE] ||
 	    !tb[RDMA_NLDEV_ATTR_DEV_INDEX] ||
@@ -212,10 +215,11 @@ int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list/*收集系统中可�
 	if (!nl)
 		return -EOPNOTSUPP;
 
-	//向kernel发送请求，要求列取当前系统所有ib设备
-	if (rdmanl_get_devices(nl, find_sysfs_devs_nl_cb, tmp_sysfs_dev_list))
+	//向kernel发送请求，要求列取当前net namespace所有ib设备，记在tmp_sysfs_dev_list上
+	if (rdmanl_get_devices(nl, find_sysfs_devs_nl_cb/*处理返回的ib设备信息*/, tmp_sysfs_dev_list/*回调参数*/))
 		goto err;
 
+	/*遍历获取的ib设备*/
 	list_for_each_safe (tmp_sysfs_dev_list, dev, dev_tmp, entry) {
 		if (find_uverbs_nl(nl, dev) && find_uverbs_sysfs(dev)) {
 		    /*移除掉无效的设备*/

@@ -45,6 +45,7 @@
 
 static const char *sysfs_path;
 
+//取ib设备sysfs路径前缀
 const char *ibv_get_sysfs_path(void)
 {
 	const char *env = NULL;

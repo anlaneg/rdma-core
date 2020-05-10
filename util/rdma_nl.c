@@ -59,6 +59,7 @@ static int rdmanl_saw_err_cb(struct sockaddr_nl *nla, struct nlmsgerr *nlerr,
 	return 0;
 }
 
+//创建rdma对应的netlink socket
 struct nl_sock *rdmanl_socket_alloc(void)
 {
 	struct nl_sock *nl;
@@ -77,25 +78,31 @@ struct nl_sock *rdmanl_socket_alloc(void)
 	return nl;
 }
 
-int rdmanl_get_devices(struct nl_sock *nl, nl_recvmsg_msg_cb_t cb_func,
+//获取所有devices,如果获取成功，则通过cb_func进行处理，否则返回-1
+int rdmanl_get_devices(struct nl_sock *nl, nl_recvmsg_msg_cb_t cb_func/*处理返回的ib设备信息*/,
 		       void *data)
 {
 	bool failed = false;
 	int ret;
 
+	//构造type=rdma_nldev_cmd_get,flags=dump的rdma消息，用于获取所有devices
 	if (nl_send_simple(nl,
 			   RDMA_NL_GET_TYPE(RDMA_NL_NLDEV, RDMA_NLDEV_CMD_GET),
 			   NLM_F_DUMP, NULL, 0) < 0)
 		return -1;
 
+	//设置自定义错误处理回调
 	if (nl_socket_modify_err_cb(nl, NL_CB_CUSTOM, rdmanl_saw_err_cb,
 				    &failed))
 		return -1;
+	//设置自定义消息处理回调（成功）
 	if (nl_socket_modify_cb(nl, NL_CB_VALID, NL_CB_CUSTOM, cb_func, data))
 		return -1;
 	do {
 		ret = nl_recvmsgs_default(nl);
 	} while (ret > 0);
+
+	//还原错误处理回调
 	nl_socket_modify_err_cb(nl, NL_CB_CUSTOM, NULL, NULL);
 
 	if (ret || failed)
@@ -112,6 +119,7 @@ int rdmanl_get_chardev(struct nl_sock *nl, int ibidx/*ib设备编号*/,
 	struct nl_msg *msg;
 	int ret;
 
+	//获取设备的chardev,指明ib设备index及name
 	msg = nlmsg_alloc_simple(
 		RDMA_NL_GET_TYPE(RDMA_NL_NLDEV, RDMA_NLDEV_CMD_GET_CHARDEV), 0);
 	if (!msg)
@@ -124,14 +132,18 @@ int rdmanl_get_chardev(struct nl_sock *nl, int ibidx/*ib设备编号*/,
 	if (ret < 0)
 		return -1;
 
+	//如果消息失败，返回-1
 	if (nl_socket_modify_err_cb(nl, NL_CB_CUSTOM, rdmanl_saw_err_cb,
 				    &failed))
 		return -1;
+
+	//通过cb_func处理响应
 	if (nl_socket_modify_cb(nl, NL_CB_VALID, NL_CB_CUSTOM, cb_func, data))
 		return -1;
 	do {
 		ret = nl_recvmsgs_default(nl);
 	} while (ret > 0);
+	//还原错误处理回调
 	nl_socket_modify_err_cb(nl, NL_CB_CUSTOM, NULL, NULL);
 
 	if (ret || failed)

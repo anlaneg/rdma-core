@@ -60,14 +60,14 @@
 #include <util/util.h>
 #include <util/rdma_nl.h>
 
-#define CMA_INIT_CMD(req, req_size, op)		\
+#define CMA_INIT_CMD(req, req_size, op/*请求命令*/)		\
 do {						\
-	memset(req, 0, req_size);		\
+	memset(req, 0, req_size);/*清空请求结构体*/		\
 	(req)->cmd = UCMA_CMD_##op;		\
 	(req)->in  = req_size - sizeof(struct ucma_abi_cmd_hdr); \
 } while (0)
 
-#define CMA_INIT_CMD_RESP(req, req_size, op, resp, resp_size) \
+#define CMA_INIT_CMD_RESP(req/*入参，请求消息*/, req_size/*请求消息大小*/, op/*请求命令*/, resp/*出参，响应消息*/, resp_size/*响应消息大小*/) \
 do {						\
 	CMA_INIT_CMD(req, req_size, op);	\
 	(req)->out = resp_size;			\
@@ -262,11 +262,12 @@ int ucma_init(void)
 	int i, ret, dev_cnt;
 
 	/* Quick check without lock to see if we're already initialized */
+	/*如果已初始化，则退出*/
 	if (cma_dev_cnt)
 		return 0;
 
 	pthread_mutex_lock(&mut);
-	//加锁后再检查
+	//加锁后再检查是否已初始化
 	if (cma_dev_cnt) {
 		pthread_mutex_unlock(&mut);
 		return 0;
@@ -287,6 +288,7 @@ int ucma_init(void)
 	}
 
 	if (!dev_cnt) {
+	    /*设备总数为0，退出*/
 		ret = ERR(ENODEV);
 		goto err2;
 	}
@@ -611,6 +613,7 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 	cmd.ps = ps;
 	cmd.qp_type = qp_type;
 
+	/*创建id*/
 	ret = write(id_priv->id.channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof(cmd)) {
 		ret = (ret >= 0) ? ERR(ENODATA) : -1;
@@ -2177,8 +2180,8 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
 
 retry:
 	memset(evt, 0, sizeof(*evt));
-	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT, &resp, sizeof resp);
-	ret = write(channel->fd, &cmd, sizeof cmd);
+	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT/*请求获取event*/, &resp, sizeof resp);
+	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令*/
 	if (ret != sizeof cmd) {
 		free(evt);
 		return (ret >= 0) ? ERR(ENODATA) : -1;
