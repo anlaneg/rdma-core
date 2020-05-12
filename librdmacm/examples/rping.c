@@ -142,9 +142,9 @@ struct rping_cb {
 	enum test_state state;		/* used for cond/signalling */
 	sem_t sem;
 
-	struct sockaddr_storage sin;
-	struct sockaddr_storage ssource;
-	__be16 port;			/* dst port in NBO */
+	struct sockaddr_storage sin;//-a参数指定的地址（目的地址）
+	struct sockaddr_storage ssource;//-I参数指定的地址(为客户端指定的源地址）
+	__be16 port;			/* dst port in NBO */ //指明目的端口号
 	int verbose;			/* verbose logging */
 	int self_create_qp;		/* Create QP not via cma */
 	int count;			/* ping count */
@@ -1132,15 +1132,18 @@ static int rping_bind_client(struct rping_cb *cb)
 {
 	int ret;
 
+	//填充sin的port信息
 	if (cb->sin.ss_family == AF_INET)
 		((struct sockaddr_in *) &cb->sin)->sin_port = cb->port;
 	else
 		((struct sockaddr_in6 *) &cb->sin)->sin6_port = cb->port;
 
+	//如果指定了cb->ssource,则解析cb->ssource地址执行连接
 	if (cb->ssource.ss_family) 
 		ret = rdma_resolve_addr(cb->cm_id, (struct sockaddr *) &cb->ssource,
 					(struct sockaddr *) &cb->sin, 2000);
 	else
+	    //未指定源ip，选择源ip,并绑定它
 		ret = rdma_resolve_addr(cb->cm_id, NULL, (struct sockaddr *) &cb->sin, 2000);
 
 	if (ret) {
@@ -1161,6 +1164,7 @@ static int rping_bind_client(struct rping_cb *cb)
 	return 0;
 }
 
+//rping客户端处理函数
 static int rping_run_client(struct rping_cb *cb)
 {
 	struct ibv_recv_wr *bad_wr;
@@ -1219,11 +1223,13 @@ err1:
 	return ret;
 }
 
+/*将地址串转换为地址*/
 static int get_addr(char *dst, struct sockaddr *addr)
 {
 	struct addrinfo *res;
 	int ret;
 
+	/*取地址信息，执行地址转换*/
 	ret = getaddrinfo(dst, NULL, NULL, &res);
 	if (ret) {
 		printf("getaddrinfo failed (%s) - invalid hostname or IP address\n", gai_strerror(ret));
@@ -1231,6 +1237,7 @@ static int get_addr(char *dst, struct sockaddr *addr)
 	}
 
 	if (res->ai_family == PF_INET)
+	    /*填充地址*/
 		memcpy(addr, res->ai_addr, sizeof(struct sockaddr_in));
 	else if (res->ai_family == PF_INET6)
 		memcpy(addr, res->ai_addr, sizeof(struct sockaddr_in6));
@@ -1277,7 +1284,7 @@ int main(int argc, char *argv[])
 	cb->server = -1;
 	cb->state = IDLE;
 	cb->size = 64;
-	cb->sin.ss_family = PF_INET;
+	cb->sin.ss_family = PF_INET;/*默认使能ipv4*/
 	cb->port = htobe16(7174);
 	sem_init(&cb->sem, 0, 0);
 

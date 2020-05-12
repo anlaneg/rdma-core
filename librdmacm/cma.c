@@ -101,7 +101,7 @@ struct cma_id_private {
 	int			sync;
 	pthread_cond_t		cond;
 	pthread_mutex_t		mut;
-	uint32_t		handle;
+	uint32_t		handle;/*cma context对应的id号*/
 	struct cma_multicast	*mc_list;
 	struct ibv_qp_init_attr	*qp_init_attr;
 	uint8_t			initiator_depth;
@@ -136,7 +136,7 @@ static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
 static int abi_ver = -1;
 static char dev_name[64] = "rdma_cm";
 static dev_t dev_cdev;
-int af_ib_support;
+int af_ib_support;/*当前是否支持af_ib*/
 static struct index_map ucma_idm;
 static fastlock_t idm_lock;
 
@@ -622,7 +622,7 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
-	id_priv->handle = resp.id;
+	id_priv->handle = resp.id;/*记录cma context对应的id号*/
 	ucma_insert_id(id_priv);
 	*id = &id_priv->id;
 	return 0;
@@ -682,6 +682,7 @@ int rdma_destroy_id(struct rdma_cm_id *id)
 	return 0;
 }
 
+//取socket地址长度
 int ucma_addrlen(struct sockaddr *addr)
 {
 	if (!addr)
@@ -987,6 +988,7 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 	if (!dst_len)
 		return ERR(EINVAL);
 
+	/*容许src_addr为空*/
 	src_len = ucma_addrlen(src_addr);
 	if (src_addr && !src_len)
 		return ERR(EINVAL);
@@ -998,11 +1000,14 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 	CMA_INIT_CMD(&cmd, sizeof cmd, RESOLVE_IP);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
+
+	/*如果指定的源地址，则设置源地址，设置目的地址*/
 	if (src_addr)
 		memcpy(&cmd.src_addr, src_addr, src_len);
 	memcpy(&cmd.dst_addr, dst_addr, dst_len);
-	cmd.timeout_ms = timeout_ms;
+	cmd.timeout_ms = timeout_ms;/*设置超时时间*/
 
+	//与kernel进行通信
 	ret = write(id->channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
