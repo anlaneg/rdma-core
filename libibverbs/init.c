@@ -59,11 +59,12 @@ int abi_ver;
 
 struct ibv_driver {
 	struct list_node	entry;
-	const struct verbs_device_ops *ops;
+	const struct verbs_device_ops *ops;/*驱动操作集*/
 };
 
 static LIST_HEAD(driver_list);
 
+//尝试访问指定设备文件
 static int try_access_device(const struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct stat cdev_stat;
@@ -108,6 +109,7 @@ int setup_sysfs_uverbs(int uv_dirfd, const char *uverbs,
 	struct stat buf;
 	char value[32];
 
+	//构造设备名称
 	if (!check_snprintf(sysfs_dev->sysfs_name,
 			    sizeof(sysfs_dev->sysfs_name), "%s", uverbs))
 		return -1;
@@ -147,23 +149,30 @@ static int setup_sysfs_dev(int dirfd, const char *uverbs,
 
 	sysfs_dev->ibdev_idx = -1;
 
+	//打开dirfd中的文件uverbs
 	uv_dirfd = openat(dirfd, uverbs, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (uv_dirfd == -1)
 		goto err_alloc;
 
+	//打开uv_dirfd目录fd,并读取'ibdev'文件（例如：/sys/class/infiniband_verbs/uverbs0/ibdev)
+	//将获取到的内容存放到sysfs_dev->ibdev_name中
+	//例如读取到'mlx5_0'
 	if (ibv_read_sysfs_file_at(uv_dirfd, "ibdev", sysfs_dev->ibdev_name,
 				   sizeof(sysfs_dev->ibdev_name)) < 0)
 		goto err_fd;
 
+	//构造infiniband文件
 	if (!check_snprintf(
 		    sysfs_dev->ibdev_path, sizeof(sysfs_dev->ibdev_path),
 		    "%s/class/infiniband/%s", ibv_get_sysfs_path(),
 		    sysfs_dev->ibdev_name))
 		goto err_fd;
 
+	//填充sysfs_dev
 	if (setup_sysfs_uverbs(uv_dirfd, uverbs, sysfs_dev))
 		goto err_fd;
 
+	//读取/sys/class/infiniband/%s/node_type
 	if (ibv_read_ibdev_sysfs_file(value, sizeof(value), sysfs_dev,
 				      "node_type") <= 0)
 		sysfs_dev->node_type = IBV_NODE_UNKNOWN;
@@ -171,10 +180,12 @@ static int setup_sysfs_dev(int dirfd, const char *uverbs,
 		sysfs_dev->node_type =
 			decode_knode_type(strtoul(value, NULL, 10));
 
+	//确保设备存在
 	if (try_access_device(sysfs_dev))
 		goto err_fd;
 
 	close(uv_dirfd);
+	//记录sysfs_dev
 	list_add(tmp_sysfs_dev_list, &sysfs_dev->entry);
 	return 0;
 
@@ -193,6 +204,7 @@ static int find_sysfs_devs(struct list_head *tmp_sysfs_dev_list)
 	struct dirent *dent;
 	int ret = 0;
 
+	//构造infiniband_verbs目录路径
 	if (!check_snprintf(class_path, sizeof(class_path),
 			    "%s/class/infiniband_verbs", ibv_get_sysfs_path()))
 		return ENOMEM;
@@ -201,10 +213,12 @@ static int find_sysfs_devs(struct list_head *tmp_sysfs_dev_list)
 	if (!class_dir)
 		return ENOSYS;
 
+	//遍历infiniband_verbs目录
 	while ((dent = readdir(class_dir))) {
 		if (dent->d_name[0] == '.')
-			continue;
+			continue;//跳过'.','..'
 
+		//填充sysfs_dev
 		ret = setup_sysfs_dev(dirfd(class_dir), dent->d_name,
 				      tmp_sysfs_dev_list);
 		if (ret)
@@ -212,6 +226,7 @@ static int find_sysfs_devs(struct list_head *tmp_sysfs_dev_list)
 	}
 	closedir(class_dir);
 
+	//如果出错，则移除设备
 	if (ret) {
 		list_for_each_safe (tmp_sysfs_dev_list, dev, dev_tmp, entry) {
 			list_del(&dev->entry);
@@ -221,6 +236,7 @@ static int find_sysfs_devs(struct list_head *tmp_sysfs_dev_list)
 	return ret;
 }
 
+//注册verbs设备driver
 void verbs_register_driver(const struct verbs_device_ops *ops)
 {
 	struct ibv_driver *driver;
@@ -289,10 +305,12 @@ match_name(const struct verbs_device_ops *ops,
 	char name_ma[100];
 	const struct verbs_match_ent *i;
 
+	//构造匹配名称
 	if (!check_snprintf(name_ma, sizeof(name_ma),
 			    "rdma_device:N%s", sysfs_dev->ibdev_name))
 		return NULL;
 
+	//按名称进行匹配（例如pci地址，模块别名）
 	for (i = ops->match_table; i->kind != VERBS_MATCH_SENTINEL; i++)
 		if (match_modalias(i, name_ma))
 			return i;
@@ -301,15 +319,18 @@ match_name(const struct verbs_device_ops *ops,
 }
 
 /* Match the driver id we get from netlink */
+//按driver_id匹配sysfs_dev
 static const struct verbs_match_ent *
 match_driver_id(const struct verbs_device_ops *ops,
 		struct verbs_sysfs_dev *sysfs_dev)
 {
 	const struct verbs_match_ent *i;
 
+	//如果未配置driver,则返回NULL
 	if (sysfs_dev->driver_id == RDMA_DRIVER_UNKNOWN)
 		return NULL;
 
+	//遍历ops的匹配table,如果按driver id匹配，则比对driver_id,若命中，返回i
 	for (i = ops->match_table; i->kind != VERBS_MATCH_SENTINEL; i++)
 		if (i->kind == VERBS_MATCH_DRIVER_ID &&
 		    i->u.driver_id == sysfs_dev->driver_id)
@@ -322,10 +343,13 @@ static bool match_device(const struct verbs_device_ops *ops,
 			 struct verbs_sysfs_dev *sysfs_dev)
 {
 	if (ops->match_table) {
+	    //尝试driver_id方式匹配
 		sysfs_dev->match = match_driver_id(ops, sysfs_dev);
 		if (!sysfs_dev->match)
+		    //尝试按名称进行匹配
 			sysfs_dev->match = match_name(ops, sysfs_dev);
 		if (!sysfs_dev->match)
+		    //尝试模块别名匹配
 			sysfs_dev->match =
 			    match_modalias_device(ops, sysfs_dev);
 	}
@@ -337,13 +361,16 @@ static bool match_device(const struct verbs_device_ops *ops,
 		 * the match pointer and any other internal information.
 		 */
 		if (!ops->match_device(sysfs_dev))
+		    /*驱动不能匹配此设备，返回false*/
 			return false;
 	} else {
+	    //未指供配置函数，但sysfs_dev仍未匹配，则返回false
 		/* With no match function, we must have a table match */
 		if (!sysfs_dev->match)
 			return false;
 	}
 
+	//执行abi版本号检查
 	if (sysfs_dev->abi_ver < ops->match_min_abi_version ||
 	    sysfs_dev->abi_ver > ops->match_max_abi_version) {
 		fprintf(stderr, PFX
@@ -357,15 +384,18 @@ static bool match_device(const struct verbs_device_ops *ops,
 	return true;
 }
 
+/*创建sysfs_dev对应的verbs_device，并完成创建*/
 static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 				       struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct verbs_device *vdev;
 	struct ibv_device *dev;
 
+	//识别sysfs_dev的驱动，如果不匹配，直接返回NULL
 	if (!match_device(ops, sysfs_dev))
 		return NULL;
 
+	//通过驱动，依据sysfs_dev创建verbs_device
 	vdev = ops->alloc_device(sysfs_dev);
 	if (!vdev) {
 		fprintf(stderr, PFX "Fatal: couldn't allocate device for %s\n",
@@ -373,6 +403,7 @@ static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 		return NULL;
 	}
 
+	//设置device对应的ops
 	vdev->ops = ops;
 
 	atomic_init(&vdev->refcount, 1);
@@ -380,6 +411,7 @@ static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 	assert(dev->_ops._dummy1 == NULL);
 	assert(dev->_ops._dummy2 == NULL);
 
+	//依据设备类型，确定传输层类型
 	dev->node_type = sysfs_dev->node_type;
 	switch (sysfs_dev->node_type) {
 	case IBV_NODE_CA:
@@ -420,6 +452,7 @@ err:
 	return NULL;
 }
 
+//查找sysfs_dev对应的驱动 ，并返回创建的verbs_device
 static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct ibv_driver *driver;
@@ -430,6 +463,7 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 	 * first.
 	 */
 	if (sysfs_dev->driver_id != RDMA_DRIVER_UNKNOWN) {
+	    /*指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
 		list_for_each (&driver_list, driver, entry) {
 			if (match_driver_id(driver->ops, sysfs_dev)) {
 				dev = try_driver(driver->ops, sysfs_dev);
@@ -439,6 +473,7 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 		}
 	}
 
+	//遍历所有driver,检查驱动能否可匹配,如果可匹配，则创建verbs_devices
 	list_for_each(&driver_list, driver, entry) {
 		dev = try_driver(driver->ops, sysfs_dev);
 		if (dev)
@@ -514,26 +549,29 @@ static int same_sysfs_dev(struct verbs_sysfs_dev *sysfs1,
  * removed.
  */
 static void try_all_drivers(struct list_head *sysfs_list,
-			    struct list_head *device_list,
-			    unsigned int *num_devices)
+			    struct list_head *device_list/*出参，sysfs_dev对应的verbs_device*/,
+			    unsigned int *num_devices/*出参，verbs_device设备数目*/)
 {
 	struct verbs_sysfs_dev *sysfs_dev;
 	struct verbs_sysfs_dev *tmp;
 	struct verbs_device *vdev;
 
+	//遍历sysfs_list,针对每个dev,尝试创建其对应的vdev
 	list_for_each_safe(sysfs_list, sysfs_dev, tmp, entry) {
 		vdev = try_drivers(sysfs_dev);
 		if (vdev) {
+		    /*自sysfs_list中移除*/
 			list_del(&sysfs_dev->entry);
 			/* Ownership of sysfs_dev moves into vdev->sysfs */
+			//将其加入到识别的device_list中
 			list_add(device_list, &vdev->entry);
 			(*num_devices)++;
 		}
 	}
 }
 
-//收集所有ib设备
-int ibverbs_get_device_list(struct list_head *device_list/*出参*/)
+//收集所有ib设备,创建verbs_device,并返回设备数目
+int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来的设备verbs_device*/)
 {
 	LIST_HEAD(sysfs_list);
 	struct verbs_sysfs_dev *sysfs_dev, *next_dev;
@@ -542,8 +580,10 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参*/)
 	unsigned int num_devices = 0;
 	int ret;
 
+	//列出系统所有ib设备
 	ret = find_sysfs_devs_nl(&sysfs_list);
 	if (ret) {
+	    //填充sysfs_dev
 		ret = find_sysfs_devs(&sysfs_list);
 		if (ret)
 			return -ret;
@@ -579,11 +619,14 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参*/)
 		}
 	}
 
-	try_all_drivers(&sysfs_list, device_list, &num_devices);
+	//尝试执行driver匹配，将匹配好的构造到device_list
+	try_all_drivers(&sysfs_list, device_list, &num_devices/*device_list链表长度*/);
 
+	/*如果sysfs_list为空，则识别不到设备，如果drivers_loaded则已完成device_list收集*/
 	if (list_empty(&sysfs_list) || drivers_loaded)
 		goto out;
 
+	//加载驱动，重新尝试一次,并构造device_list
 	load_drivers();
 	drivers_loaded = 1;
 
@@ -593,6 +636,7 @@ out:
 	/* Anything left in sysfs_list was not assoicated with a
 	 * driver.
 	 */
+    //如有必要，指明有哪些sysfs_dev未识别到驱动，并释放这些sysfs_dev
 	list_for_each_safe(&sysfs_list, sysfs_dev, next_dev, entry) {
 		if (getenv("IBV_SHOW_WARNINGS")) {
 			fprintf(stderr, PFX
@@ -631,6 +675,7 @@ int ibverbs_init(void)
 	return 0;
 }
 
+//增加ibv_device设备引用计数
 void ibverbs_device_hold(struct ibv_device *dev)
 {
 	struct verbs_device *verbs_device = verbs_get_device(dev);

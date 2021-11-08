@@ -872,6 +872,7 @@ static inline int _mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 		seg += sizeof *ctrl;
 		size = sizeof *ctrl / 16;
 
+		//按qp类型不同处理
 		switch (ibqp->qp_type) {
 		case IBV_QPT_XRC_SEND:
 			if (unlikely(wr->opcode != IBV_WR_BIND_MW &&

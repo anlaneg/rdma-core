@@ -1478,4 +1478,6 @@ bool is_mlx5_dev(struct ibv_device *device)
 
 	return verbs_device->ops == &mlx5_dev_ops;
 }
+
+/*注册verbs设备操作驱动*/
 PROVIDER_DRIVER(mlx5, mlx5_dev_ops);

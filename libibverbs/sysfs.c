@@ -78,6 +78,7 @@ const char *ibv_get_sysfs_path(void)
 	return sysfs_path;
 }
 
+//例如读取文件dirfd=/sys/class/infiniband_verbs/ file=uverbs0
 int ibv_read_sysfs_file_at(int dirfd, const char *file, char *buf, size_t size)
 {
 	ssize_t len;
@@ -122,9 +123,10 @@ int ibv_read_sysfs_file(const char *dir, const char *file,
 	return res;
 }
 
-int ibv_read_ibdev_sysfs_file(char *buf, size_t size,
+//读取sysfs_dev->ibdev_path的指定文件
+int ibv_read_ibdev_sysfs_file(char *buf/*待填充buffer*/, size_t size,
 			      struct verbs_sysfs_dev *sysfs_dev,
-			      const char *fnfmt, ...)
+			      const char *fnfmt/*文件路径格式串*/, ...)
 {
 	char *path;
 	va_list va;

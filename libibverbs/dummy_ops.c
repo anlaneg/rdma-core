@@ -536,11 +536,12 @@ const struct verbs_context_ops verbs_dummy_ops = {
  * not set. This allows the providers to call the function multiple times in
  * order to have variations of the ops for different HW configurations.
  */
+//为verbs_context设置其对应的ops (ops来源于各providers提供的verbs_device_ops）
 void verbs_set_ops(struct verbs_context *vctx,
 		   const struct verbs_context_ops *ops)
 {
 	struct verbs_ex_private *priv = vctx->priv;
-	struct ibv_context_ops *ctx = &vctx->context.ops;
+	struct ibv_context_ops *ctx = &vctx->context.ops;/*设置的ops*/
 
 	/*
 	 * We retain the function pointer for now, just as 'just-in-case' ABI
@@ -562,6 +563,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 			priv->ops.name = ops->name;                            \
 	} while (0)
 
+	//直接回调给值，不容许变名称
 #define SET_OP(ptr, name)                                                      \
 	do {                                                                   \
 		if (ops->name) {                                               \
@@ -570,6 +572,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 		}                                                              \
 	} while (0)
 
+	//容许更改回调名称
 #define SET_OP2(ptr, iname, name)                                              \
 	do {                                                                   \
 		if (ops->name) {                                               \

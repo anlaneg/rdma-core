@@ -51,9 +51,10 @@
 static pthread_mutex_t dev_list_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct list_head device_list = LIST_HEAD_INIT(device_list);
 
+//返回ibv_device设备数目，及ibv_device设备数组
 LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
-		   struct ibv_device **,
-		   int *num)
+		   struct ibv_device **/*返回值类型*/,
+		   int *num/*出参*/)
 {
 	struct ibv_device **l = NULL;
 	struct verbs_device *device;
@@ -84,6 +85,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 		goto out;
 	}
 
+	//遍历所有verbs_device,收集对应的ibv_device
 	list_for_each(&device_list, device, entry) {
 		l[i] = &device->device;
 		ibverbs_device_hold(l[i]);
@@ -283,6 +285,7 @@ int verbs_init_context(struct verbs_context *context_ex,
 	}
 
 	context_ex->priv->driver_id = driver_id;
+	//设置dummy式的ops
 	verbs_set_ops(context_ex, &verbs_dummy_ops);
 	context_ex->priv->use_ioctl_write = has_ioctl_write(context);
 
@@ -334,6 +337,7 @@ static void set_lib_ops(struct verbs_context *vctx)
 	vctx->query_port = __lib_query_port;
 }
 
+//打开ib device
 struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_data)
 {
 	struct verbs_device *verbs_device = verbs_get_device(device);
@@ -344,6 +348,7 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	 * We'll only be doing writes, but we need O_RDWR in case the
 	 * provider needs to mmap() the file.
 	 */
+	//打开/dev/infiniband/下对应的verbs字符设备
 	cmd_fd = open_cdev(verbs_device->sysfs->sysfs_name,
 			   verbs_device->sysfs->sysfs_cdev);
 	if (cmd_fd < 0)
@@ -353,7 +358,8 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	 * cmd_fd ownership is transferred into alloc_context, if it fails
 	 * then it closes cmd_fd and returns NULL
 	 */
-	context_ex = verbs_device->ops->alloc_context(device, cmd_fd, private_data);
+	//由verbs设备创建context
+	context_ex = verbs_device->ops->alloc_context(device, cmd_fd/*device对应的字符设备fd*/, private_data);
 	if (!context_ex)
 		return NULL;
 
@@ -362,6 +368,7 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	return &context_ex->context;
 }
 
+/*打开指定ib 设备，返回其对应的ibv_context*/
 LATEST_SYMVER_FUNC(ibv_open_device, 1_1, "IBVERBS_1.1",
 		   struct ibv_context *,
 		   struct ibv_device *device)

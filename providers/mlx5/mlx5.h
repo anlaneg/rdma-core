@@ -708,6 +708,7 @@ extern int mlx5_single_threaded;
 
 #define to_mxxx(xxx, type) container_of(ib##xxx, struct mlx5_##type, ibv_##xxx)
 
+//由ibv_devcice获得mlx5_device设备
 static inline struct mlx5_device *to_mdev(struct ibv_device *ibdev)
 {
 	return container_of(ibdev, struct mlx5_device, verbs_dev.device);

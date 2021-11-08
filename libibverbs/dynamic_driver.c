@@ -209,6 +209,7 @@ out_dlopen:
 	free(so_name);
 }
 
+//执行驱动加载
 void load_drivers(void)
 {
 	struct ibv_driver_name *name, *next_name;

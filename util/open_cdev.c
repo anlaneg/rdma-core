@@ -132,6 +132,7 @@ err_mem:
 	return res;
 }
 
+//打开/dev/infiniband/下的字符设备
 int open_cdev(const char *devname_hint, dev_t cdev)
 {
 	char *devpath;
@@ -142,6 +143,7 @@ int open_cdev(const char *devname_hint, dev_t cdev)
 	fd = open_cdev_internal(devpath, cdev);
 	free(devpath);
 	if (fd == -1 && cdev != 0)
+	    //打开/dev/char下的字符设备
 		return open_cdev_robust(devname_hint, cdev);
 	return fd;
 }

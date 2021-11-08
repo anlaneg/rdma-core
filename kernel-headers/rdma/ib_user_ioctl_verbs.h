@@ -185,6 +185,7 @@ struct ib_uverbs_query_port_resp_ex {
 	__u8  reserved[6];
 };
 
+//标记使用哪个驱动
 enum rdma_driver_id {
 	RDMA_DRIVER_UNKNOWN,
 	RDMA_DRIVER_MLX5,

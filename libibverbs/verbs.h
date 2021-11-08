@@ -1878,17 +1878,17 @@ enum {
 };
 
 struct ibv_device {
-	struct _ibv_device_ops	_ops;
-	enum ibv_node_type	node_type;
-	enum ibv_transport_type	transport_type;
+	struct _ibv_device_ops	_ops;//设备操作集
+	enum ibv_node_type	node_type;//ib设备类型
+	enum ibv_transport_type	transport_type;//传输层类型
 	/* Name of underlying kernel IB device, eg "mthca0" */
-	char			name[IBV_SYSFS_NAME_MAX];
+	char			name[IBV_SYSFS_NAME_MAX];//ib设备名称
 	/* Name of uverbs device, eg "uverbs0" */
-	char			dev_name[IBV_SYSFS_NAME_MAX];
+	char			dev_name[IBV_SYSFS_NAME_MAX];//设备名称
 	/* Path to infiniband_verbs class device in sysfs */
-	char			dev_path[IBV_SYSFS_PATH_MAX];
+	char			dev_path[IBV_SYSFS_PATH_MAX];//设备在sysfs中的路径信息
 	/* Path to infiniband class device in sysfs */
-	char			ibdev_path[IBV_SYSFS_PATH_MAX];
+	char			ibdev_path[IBV_SYSFS_PATH_MAX];//ib设备在sysfs中的路径信息
 };
 
 struct _compat_ibv_port_attr;
@@ -2084,6 +2084,7 @@ struct verbs_context {
 			       struct ibv_values_ex *values);
 	struct ibv_cq_ex *(*create_cq_ex)(struct ibv_context *context,
 					  struct ibv_cq_init_attr_ex *init_attr);
+	//verbs context的私有结构
 	struct verbs_ex_private *priv;
 	int (*query_device_ex)(struct ibv_context *context,
 			       const struct ibv_query_device_ex_input *input,
@@ -2106,6 +2107,7 @@ struct verbs_context {
 	int			(*close_xrcd)(struct ibv_xrcd *xrcd);
 	uint64_t _ABI_placeholder3;
 	size_t   sz;			/* Must be immediately before struct ibv_context */
+	//ibv_context结构
 	struct ibv_context context;	/* Must be last field in the struct */
 };
 

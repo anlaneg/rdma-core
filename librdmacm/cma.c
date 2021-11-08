@@ -280,6 +280,7 @@ int ucma_init(void)
 		goto err1;
 	}
 
+	//识别系统ib设备
 	dev_list = ibv_get_device_list(&dev_cnt/*ib设备数目*/);
 	if (!dev_list) {
 	    /*无可用ib设备，退出*/
@@ -316,6 +317,7 @@ err1:
 	return ret;
 }
 
+//打开当前系统可见ib device中首个guid相同的设备
 static struct ibv_context *ucma_open_device(__be64 guid)
 {
 	struct ibv_device **dev_list;
@@ -327,6 +329,7 @@ static struct ibv_context *ucma_open_device(__be64 guid)
 		return NULL;
 	}
 
+	//找到合适guid的dev_list
 	for (i = 0; dev_list[i]; i++) {
 		if (ibv_get_device_guid(dev_list[i]) == guid) {
 			verbs = ibv_open_device(dev_list[i]);
@@ -347,6 +350,7 @@ static int ucma_init_device(struct cma_device *cma_dev)
 	if (cma_dev->verbs)
 		return 0;
 
+	//打开设备对应的verbs context
 	cma_dev->verbs = ucma_open_device(cma_dev->guid);
 	if (!cma_dev->verbs)
 		return ERR(ENODEV);
@@ -573,6 +577,7 @@ static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 	id_priv->handle = 0xFFFFFFFF;
 
 	if (!channel) {
+	    //如果未指定channel，则打开channel
 		id_priv->id.channel = rdma_create_event_channel();
 		if (!id_priv->id.channel)
 			goto err;
@@ -591,6 +596,7 @@ err:	ucma_free_id(id_priv);
 	return NULL;
 }
 
+//向kernel发消息，创建context
 static int rdma_create_id2(struct rdma_event_channel *channel,
 			   struct rdma_cm_id **id, void *context,
 			   enum rdma_port_space ps, enum ibv_qp_type qp_type)

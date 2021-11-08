@@ -76,11 +76,14 @@ struct verbs_ex_private {
 	struct verbs_context_ops ops;
 };
 
+//取ibv_context的私有数据
 static inline struct verbs_ex_private *get_priv(struct ibv_context *ctx)
 {
+    //由ibv_context获得其对应的verbs_context,然后取其私有数据
 	return container_of(ctx, struct verbs_context, context)->priv;
 }
 
+//取ibv_context对应的ops
 static inline const struct verbs_context_ops *get_ops(struct ibv_context *ctx)
 {
 	return &get_priv(ctx)->ops;

@@ -128,21 +128,21 @@ struct verbs_dm {
 };
 
 enum {
-	VERBS_MATCH_SENTINEL = 0,
+	VERBS_MATCH_SENTINEL = 0,//标记最后一个匹配项
 	VERBS_MATCH_PCI = 1,
 	VERBS_MATCH_MODALIAS = 2,
-	VERBS_MATCH_DRIVER_ID = 3,
+	VERBS_MATCH_DRIVER_ID = 3,/*标记按driver id进行匹配*/
 };
 
 struct verbs_match_ent {
 	void *driver_data;
 	union {
 		const char *modalias;
-		uint64_t driver_id;
+		uint64_t driver_id;//驱动id号，见结构rdma_driver_id
 	} u;
 	uint16_t vendor;
 	uint16_t device;
-	uint8_t kind;
+	uint8_t kind;//匹配方式，例如VERBS_MATCH_DRIVER_ID
 };
 #define VERBS_DRIVER_ID(_id)                                                   \
 	{                                                                      \
@@ -188,12 +188,12 @@ enum {
 struct verbs_sysfs_dev {
 	struct list_node entry;
 	void *provider_data;
-	const struct verbs_match_ent *match;
+	const struct verbs_match_ent *match;/*匹配的match_table 项*/
 	unsigned int flags;
 	char sysfs_name[IBV_SYSFS_NAME_MAX];
 	dev_t sysfs_cdev;
 	char ibdev_name[IBV_SYSFS_NAME_MAX];/*ib设备名称*/
-	char ibdev_path[IBV_SYSFS_PATH_MAX];/*ib设备路径*/
+	char ibdev_path[IBV_SYSFS_PATH_MAX];/*ib设备路径,例如/sys/class/infiniband/mlx5_0*/
 	char modalias[512];
 	char fw_ver[64];/*ib设备fw版本*/
 	uint64_t node_guid;
@@ -208,18 +208,22 @@ struct verbs_sysfs_dev {
 struct verbs_device_ops {
 	const char *name;
 
-	uint32_t match_min_abi_version;
-	uint32_t match_max_abi_version;
+	uint32_t match_min_abi_version;//可支持的最小abi版本
+	uint32_t match_max_abi_version;//可支持的最大abi版本
+	//列出驱动可支持的设备列表
 	const struct verbs_match_ent *match_table;
 	const struct verbs_device_ops **static_providers;
 
+	//通过此回调，检查驱动是否可匹配指定的sysfs_dev设备
 	bool (*match_device)(struct verbs_sysfs_dev *sysfs_dev);
 
 	struct verbs_context *(*alloc_context)(struct ibv_device *device,
 					       int cmd_fd,
 					       void *private_data);
 
+	/*通过sysfs_dev创建verbs_device*/
 	struct verbs_device *(*alloc_device)(struct verbs_sysfs_dev *sysfs_dev);
+	/*销毁verbs_device*/
 	void (*uninit_device)(struct verbs_device *device);
 };
 
@@ -370,6 +374,7 @@ struct verbs_context_ops {
 	int (*resize_cq)(struct ibv_cq *cq, int cqe);
 };
 
+//由ibv_device获得verbs_device
 static inline struct verbs_device *
 verbs_get_device(const struct ibv_device *dev)
 {
@@ -401,6 +406,7 @@ void verbs_register_driver(const struct verbs_device_ops *ops);
 		__attribute__((alias(stringify(drv_struct))));                 \
 	static __attribute__((constructor)) void drv##__register_driver(void)  \
 	{                                                                      \
+		/*通过PROVIDER_DRIVER宏，直接各provider注册驱动drv_struct*/\
 		verbs_register_driver(&drv_struct);                            \
 	}
 
