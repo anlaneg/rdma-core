@@ -21,6 +21,15 @@ libmlx5.so.1 ibverbs-providers #MINVER#
  MLX5_1.11@MLX5_1.11 25
  MLX5_1.12@MLX5_1.12 28
  MLX5_1.13@MLX5_1.13 29
+ MLX5_1.14@MLX5_1.14 30
+ MLX5_1.15@MLX5_1.15 31
+ MLX5_1.16@MLX5_1.16 32
+ MLX5_1.17@MLX5_1.17 33
+ MLX5_1.18@MLX5_1.18 34
+ MLX5_1.19@MLX5_1.19 35
+ MLX5_1.20@MLX5_1.20 36
+ MLX5_1.21@MLX5_1.21 37
+ MLX5_1.22@MLX5_1.22 38
  mlx5dv_init_obj@MLX5_1.0 13
  mlx5dv_init_obj@MLX5_1.2 15
  mlx5dv_query_device@MLX5_1.0 13
@@ -98,6 +107,48 @@ libmlx5.so.1 ibverbs-providers #MINVER#
  mlx5dv_free_var@MLX5_1.12 28
  mlx5dv_pp_alloc@MLX5_1.13 29
  mlx5dv_pp_free@MLX5_1.13 29
+ mlx5dv_dr_action_create_default_miss@MLX5_1.14 30
+ mlx5dv_dr_domain_set_reclaim_device_memory@MLX5_1.14 30
+ mlx5dv_modify_qp_lag_port@MLX5_1.14 30
+ mlx5dv_query_qp_lag_port@MLX5_1.14 30
+ mlx5dv_dr_action_create_dest_devx_tir@MLX5_1.15 31
+ mlx5dv_dr_action_create_flow_sampler@MLX5_1.16 32
+ mlx5dv_dr_action_create_dest_array@MLX5_1.16 32
+ mlx5dv_dr_action_create_aso@MLX5_1.17 33
+ mlx5dv_dr_action_create_pop_vlan@MLX5_1.17 33
+ mlx5dv_dr_action_create_push_vlan@MLX5_1.17 33
+ mlx5dv_dr_action_modify_aso@MLX5_1.17 33
+ mlx5dv_modify_qp_sched_elem@MLX5_1.17 33
+ mlx5dv_modify_qp_udp_sport@MLX5_1.17 33
+ mlx5dv_sched_leaf_create@MLX5_1.17 33
+ mlx5dv_sched_leaf_destroy@MLX5_1.17 33
+ mlx5dv_sched_leaf_modify@MLX5_1.17 33
+ mlx5dv_sched_node_create@MLX5_1.17 33
+ mlx5dv_sched_node_destroy@MLX5_1.17 33
+ mlx5dv_sched_node_modify@MLX5_1.17 33
+ mlx5dv_reserved_qpn_alloc@MLX5_1.18 34
+ mlx5dv_reserved_qpn_dealloc@MLX5_1.18 34
+ mlx5dv_devx_umem_reg_ex@MLX5_1.19 35
+ mlx5dv_dm_map_op_addr@MLX5_1.19 35
+ _mlx5dv_query_port@MLX5_1.19 35
+ mlx5dv_dr_domain_allow_duplicate_rules@MLX5_1.20 36
+ mlx5dv_map_ah_to_qp@MLX5_1.20 36
+ mlx5dv_qp_cancel_posted_send_wrs@MLX5_1.20 36
+ _mlx5dv_mkey_check@MLX5_1.20 36
+ mlx5dv_crypto_login@MLX5_1.21 37
+ mlx5dv_crypto_login_query_state@MLX5_1.21 37
+ mlx5dv_crypto_logout@MLX5_1.21 37
+ mlx5dv_dci_stream_id_reset@MLX5_1.21 37
+ mlx5dv_dek_create@MLX5_1.21 37
+ mlx5dv_dek_destroy@MLX5_1.21 37
+ mlx5dv_dek_query@MLX5_1.21 37
+ mlx5dv_dr_action_create_dest_ib_port@MLX5_1.21 37
+ mlx5dv_dr_matcher_set_layout@MLX5_1.21 37
+ mlx5dv_get_vfio_device_list@MLX5_1.21 37
+ mlx5dv_vfio_get_events_fd@MLX5_1.21 37
+ mlx5dv_vfio_process_events@MLX5_1.21 37
+ mlx5dv_dr_aso_other_domain_link@MLX5_1.22 38
+ mlx5dv_dr_aso_other_domain_unlink@MLX5_1.22 38
 libefa.so.1 ibverbs-providers #MINVER#
 * Build-Depends-Package: libibverbs-dev
  EFA_1.0@EFA_1.0 24

@@ -76,15 +76,37 @@ struct mlx5dv_qp_init_attr {
 		instead of the default message-based credits (IB spec. section 9.7.7.2). \
 		It is the applications responsibility to make sure that the peer QP is configured with same mode.
 
+	MLX5DV_QP_CREATE_SIG_PIPELINING:
+		If the flag is set, the QP is moved to SQD state upon
+		encountering a signature error, and IBV_EVENT_SQ_DRAINED is
+		generated to inform about the new state. The signature
+		pipelining feature is a performance optimization, which reduces
+		latency for read operations in the storage protocols. The
+		feature is optional. Creating the QP fails if the kernel or
+		device does not support the feature. In this case, an
+		application should fallback to backward compatibility mode
+		and handle read operations without the pipelining. See details
+		about the signature pipelining in
+		**mlx5dv_qp_cancel_posted_send_wrs**(3).
+
 *dc_init_attr*
 :	DC init attributes.
 
 ## *dc_init_attr*
 
 ```c
+
+struct mlx5dv_dci_streams {
+	uint8_t log_num_concurent;
+	uint8_t log_num_errored;
+};
+
 struct mlx5dv_dc_init_attr {
 	enum mlx5dv_dc_type	dc_type;
-	uint64_t dct_access_key;
+	union {
+	    uint64_t dct_access_key;
+	    struct mlx5dv_dci_streams dci_streams;
+	};
 };
 ```
 
@@ -97,6 +119,16 @@ struct mlx5dv_dc_init_attr {
 *dct_access_key*
 :	used to create a DCT QP.
 
+*dci_streams*
+:	dci_streams used to define DCI QP with multiple concurrent streams.
+	Valid when comp_mask includes MLX5DV_QP_INIT_ATTR_MASK_DCI_STREAMS.
+
+	log_num_concurent
+		Defines the number of parallel different streams that could be handled by HW.
+		All work request of a specific stream_id are handled in order.
+
+	log_num_errored
+		Defines the number of dci error stream channels before moving DCI to an error state.
 
 *send_ops_flags*
 :	A bitwise OR of the various values described below.
@@ -107,10 +139,21 @@ struct mlx5dv_dc_init_attr {
 	MLX5DV_QP_EX_WITH_MR_LIST:
 		Enables the mlx5dv_wr_mr_list() work requset on this QP.
 
+	MLX5DV_QP_EX_WITH_MKEY_CONFIGURE:
+		Enables the mlx5dv_wr_mkey_configure() work request and the
+		related setters on this QP.
+
 # NOTES
 
 **mlx5dv_qp_ex_from_ibv_qp_ex()** is used to get *struct mlx5dv_qp_ex* for
 accessing the send ops interfaces when IBV_QP_INIT_ATTR_SEND_OPS_FLAGS is used.
+
+The MLX5DV_QP_CREATE_DISABLE_SCATTER_TO_CQE flag should be set in cases that IOVA doesn't
+match the process' VA and the message payload size is small enough to trigger the scatter to CQE
+feature.
+
+When device memory is used IBV_SEND_INLINE and scatter to CQE should not be used, as the memcpy
+is not possible.
 
 # RETURN VALUE
 

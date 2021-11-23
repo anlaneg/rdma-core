@@ -21,4 +21,6 @@ cdef class SrqInitAttrEx(PyverbsObject):
 cdef class SRQ(PyverbsCM):
     cdef v.ibv_srq *srq
     cdef object cq
-    cpdef close(self)
+    cdef object qps
+    cdef add_ref(self, obj)
+    cdef close(self)

@@ -196,6 +196,11 @@ enum bnxt_re_ud_cqe_mask {
 	BNXT_RE_UD_CQE_SRCQPLO_SHIFT	= 0x30
 };
 
+enum bnxt_re_modes {
+	BNXT_RE_WQE_MODE_STATIC =	0x00,
+	BNXT_RE_WQE_MODE_VARIABLE =	0x01
+};
+
 struct bnxt_re_db_hdr {
 	__le32 indx;
 	__le32 typ_qid; /* typ: 4, qid:20*/
@@ -234,9 +239,16 @@ struct bnxt_re_term_cqe {
 	__le64 rsvd1;
 };
 
+union lower_shdr {
+	__le64 qkey_len;
+	__le64 lkey_plkey;
+	__le64 rva;
+};
+
 struct bnxt_re_bsqe {
 	__le32 rsv_ws_fl_wt;
 	__le32 key_immd;
+	union lower_shdr lhdr;
 };
 
 struct bnxt_re_psns {
@@ -262,42 +274,33 @@ struct bnxt_re_sge {
 #define BNXT_RE_MAX_INLINE_SIZE		0x60
 
 struct bnxt_re_send {
-	__le32 length;
-	__le32 qkey;
 	__le32 dst_qp;
 	__le32 avid;
 	__le64 rsvd;
 };
 
 struct bnxt_re_raw {
-	__le32 length;
-	__le32 rsvd1;
 	__le32 cfa_meta;
 	__le32 rsvd2;
 	__le64 rsvd3;
 };
 
 struct bnxt_re_rdma {
-	__le32 length;
-	__le32 rsvd1;
 	__le64 rva;
 	__le32 rkey;
 	__le32 rsvd2;
 };
 
 struct bnxt_re_atomic {
-	__le64 rva;
 	__le64 swp_dt;
 	__le64 cmp_dt;
 };
 
 struct bnxt_re_inval {
-	__le64 rsvd[3];
+	__le64 rsvd[2];
 };
 
 struct bnxt_re_bind {
-	__le32 plkey;
-	__le32 lkey;
 	__le64 va;
 	__le64 len; /* only 40 bits are valid */
 };
@@ -305,17 +308,15 @@ struct bnxt_re_bind {
 struct bnxt_re_brqe {
 	__le32 rsv_ws_fl_wt;
 	__le32 rsvd;
+	__le32 wrid;
+	__le32 rsvd1;
 };
 
 struct bnxt_re_rqe {
-	__le32 wrid;
-	__le32 rsvd1;
 	__le64 rsvd[2];
 };
 
 struct bnxt_re_srqe {
-	__le32 srq_tag; /* 20 bits are valid */
-	__le32 rsvd1;
 	__le64 rsvd[2];
 };
 #endif

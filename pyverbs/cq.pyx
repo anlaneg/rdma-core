@@ -36,7 +36,7 @@ cdef class CompChannel(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cpdef close(self):
+    cdef close(self):
         if self.cc != NULL:
             self.logger.debug('Closing completion channel')
             close_weakrefs([self.cqs])
@@ -115,7 +115,7 @@ cdef class CQ(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cpdef close(self):
+    cdef close(self):
         if self.cq != NULL:
             self.logger.debug('Closing CQ')
             close_weakrefs([self.qps, self.srqs])
@@ -127,6 +127,16 @@ cdef class CQ(PyverbsCM):
             self.cq = NULL
             self.context = None
             self.channel = None
+
+    def resize(self, cqe):
+        """
+        Resizes the completion queue (CQ) to have at least cqe entries.
+        :param cqe: The requested CQ depth.
+        :return: None
+        """
+        rc = v.ibv_resize_cq(self.cq, cqe)
+        if rc:
+            raise PyverbsRDMAError('Failed to resize CQ', rc)
 
     def poll(self, num_entries=1):
         """
@@ -165,8 +175,8 @@ cdef class CQ(PyverbsCM):
         """
         rc = v.ibv_req_notify_cq(self.cq, solicited_only)
         if rc != 0:
-            raise PyverbsRDMAErrno('Request notify CQ returned {rc}'.
-                                   format(rc=rc))
+            raise PyverbsRDMAError('Request notify CQ returned {rc}'.
+                                   format(rc=rc), rc)
 
     def ack_events(self, num_events):
         """
@@ -186,6 +196,10 @@ cdef class CQ(PyverbsCM):
     @property
     def comp_channel(self):
         return self.channel
+
+    @property
+    def cqe(self):
+        return self.cq.cqe
 
 
 cdef class CqInitAttrEx(PyverbsObject):
@@ -321,7 +335,7 @@ cdef class CQEX(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cpdef close(self):
+    cdef close(self):
         if self.cq != NULL:
             self.logger.debug('Closing CQEx')
             close_weakrefs([self.srqs, self.qps])
@@ -597,7 +611,7 @@ def cqe_opcode_to_str(opcode):
                 0x81: "Receive RDMA with immediate",
                 0x82: "Tag matching - add", 0x83: "Tag matching - delete",
                 0x84: "Tag matching - sync", 0x85: "Tag matching - receive",
-                0x86: "Tag matching - no tag"}[opcode]
+                0x86: "Tag matching - no tag", 0x87: "Driver WR"}[opcode]
     except KeyError:
         return "Unknown CQE opcode {op}".format(op=opcode)
 

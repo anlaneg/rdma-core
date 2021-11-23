@@ -5,6 +5,7 @@
 
 from .base cimport PyverbsObject, PyverbsCM
 from pyverbs cimport libibverbs as v
+from .cmid cimport UDParam
 
 
 cdef class GID(PyverbsObject):
@@ -18,8 +19,9 @@ cdef class GlobalRoute(PyverbsObject):
 
 cdef class AHAttr(PyverbsObject):
     cdef v.ibv_ah_attr ah_attr
+    cdef init_from_ud_param(self, UDParam udparam)
 
 cdef class AH(PyverbsCM):
     cdef v.ibv_ah *ah
     cdef object pd
-    cpdef close(self)
+    cdef close(self)

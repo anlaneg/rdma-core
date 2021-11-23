@@ -164,17 +164,17 @@ static const char *vl_str(uint8_t vl_num)
 }
 
 #define DEVINFO_INVALID_GID_TYPE	2
-static const char *gid_type_str(enum ibv_gid_type type)
+static const char *gid_type_str(enum ibv_gid_type_sysfs type)
 {
 	switch (type) {
-	case IBV_GID_TYPE_IB_ROCE_V1: return "RoCE v1";
-	case IBV_GID_TYPE_ROCE_V2: return "RoCE v2";
+	case IBV_GID_TYPE_SYSFS_IB_ROCE_V1: return "RoCE v1";
+	case IBV_GID_TYPE_SYSFS_ROCE_V2: return "RoCE v2";
 	default: return "Invalid gid type";
 	}
 }
 
 static void print_formated_gid(union ibv_gid *gid, int i,
-			       enum ibv_gid_type type, int ll)
+			       enum ibv_gid_type_sysfs type, int ll)
 {
 	char gid_str[INET6_ADDRSTRLEN] = {};
 	char str[20] = {};
@@ -182,7 +182,7 @@ static void print_formated_gid(union ibv_gid *gid, int i,
 	if (ll == IBV_LINK_LAYER_ETHERNET)
 		sprintf(str, ", %s", gid_type_str(type));
 
-	if (type == IBV_GID_TYPE_IB_ROCE_V1)
+	if (type == IBV_GID_TYPE_SYSFS_IB_ROCE_V1)
 		printf("\t\t\tGID[%3d]:\t\t%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x%s\n",
 		       i, gid->raw[0], gid->raw[1], gid->raw[2],
 		       gid->raw[3], gid->raw[4], gid->raw[5], gid->raw[6],
@@ -190,7 +190,7 @@ static void print_formated_gid(union ibv_gid *gid, int i,
 		       gid->raw[11], gid->raw[12], gid->raw[13], gid->raw[14],
 		       gid->raw[15], str);
 
-	if (type == IBV_GID_TYPE_ROCE_V2) {
+	if (type == IBV_GID_TYPE_SYSFS_ROCE_V2) {
 		inet_ntop(AF_INET6, gid->raw, gid_str, sizeof(gid_str));
 		printf("\t\t\tGID[%3d]:\t\t%s%s\n", i, gid_str, str);
 	}
@@ -198,9 +198,9 @@ static void print_formated_gid(union ibv_gid *gid, int i,
 
 static int print_all_port_gids(struct ibv_context *ctx,
 			       struct ibv_port_attr *port_attr,
-			       uint8_t port_num)
+			       uint32_t port_num)
 {
-	enum ibv_gid_type type;
+	enum ibv_gid_type_sysfs type;
 	union ibv_gid gid;
 	int tbl_len;
 	int rc = 0;
@@ -210,7 +210,7 @@ static int print_all_port_gids(struct ibv_context *ctx,
 	for (i = 0; i < tbl_len; i++) {
 		rc = ibv_query_gid(ctx, port_num, i, &gid);
 		if (rc) {
-			fprintf(stderr, "Failed to query gid to port %d, index %d\n",
+			fprintf(stderr, "Failed to query gid to port %u, index %d\n",
 			       port_num, i);
 			return rc;
 		}
@@ -231,6 +231,7 @@ static const char *link_layer_str(uint8_t link_layer)
 {
 	switch (link_layer) {
 	case IBV_LINK_LAYER_UNSPECIFIED:
+		return "Unspecified";
 	case IBV_LINK_LAYER_INFINIBAND:
 		return "InfiniBand";
 	case IBV_LINK_LAYER_ETHERNET:
@@ -413,10 +414,10 @@ static void print_tso_caps(const struct ibv_tso_caps *caps)
 	uint32_t unknown_general_caps = ~(1 << IBV_QPT_RAW_PACKET |
 					  1 << IBV_QPT_UD);
 	printf("\ttso_caps:\n");
-	printf("\tmax_tso:\t\t\t%d\n", caps->max_tso);
+	printf("\t\tmax_tso:\t\t\t%d\n", caps->max_tso);
 
 	if (caps->max_tso) {
-		printf("\tsupported_qp:\n");
+		printf("\t\tsupported_qp:\n");
 		if (ibv_is_qpt_supported(caps->supported_qpts, IBV_QPT_RAW_PACKET))
 			printf("\t\t\t\t\tSUPPORT_RAW_PACKET\n");
 		if (ibv_is_qpt_supported(caps->supported_qpts, IBV_QPT_UD))
@@ -495,10 +496,10 @@ static void print_raw_packet_caps(uint32_t raw_packet_caps)
 static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 {
 	struct ibv_context *ctx;
-	struct ibv_device_attr_ex device_attr;
+	struct ibv_device_attr_ex device_attr = {};
 	struct ibv_port_attr port_attr;
 	int rc = 0;
-	uint8_t port;
+	uint32_t port;
 	char buf[256];
 
 	ctx = ibv_open_device(ib_dev);
@@ -605,6 +606,8 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 		if (device_attr.max_dm_size)
 			printf("\tmaximum available device memory:\t%" PRIu64"Bytes\n\n",
 			      device_attr.max_dm_size);
+
+		printf("\tnum_comp_vectors:\t\t%d\n", ctx->num_comp_vectors);
 	}
 
 	for (port = 1; port <= device_attr.orig_attr.phys_port_cnt; ++port) {
@@ -617,7 +620,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 			fprintf(stderr, "Failed to query port %u props\n", port);
 			goto cleanup;
 		}
-		printf("\t\tport:\t%d\n", port);
+		printf("\t\tport:\t%u\n", port);
 		printf("\t\t\tstate:\t\t\t%s (%d)\n",
 		       port_state_str(port_attr.state), port_attr.state);
 		printf("\t\t\tmax_mtu:\t\t%s (%d)\n",
@@ -651,7 +654,8 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 				printf("\t\t\tphys_state:\t\t%s (%d)\n",
 				       port_phy_state_str(port_attr.phys_state), port_attr.phys_state);
 
-			if (print_all_port_gids(ctx, &port_attr, port))
+			rc = print_all_port_gids(ctx, &port_attr, port);
+			if (rc)
 				goto cleanup;
 		}
 		printf("\n");
@@ -758,14 +762,16 @@ int main(int argc, char *argv[])
 
 		if (!*dev_list) {
 			fprintf(stderr, "IB device '%s' wasn't found\n", ib_devname);
-			return -1;
+			ret = -1;
+			goto out;
 		}
 
 		ret |= print_hca_cap(*dev_list, ib_port);
 	} else {
 		if (!*dev_list) {
 			fprintf(stderr, "No IB devices found\n");
-			return -1;
+			ret = -1;
+			goto out;
 		}
 
 		while (*dev_list) {
@@ -774,6 +780,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+out:
 	if (ib_devname)
 		free(ib_devname);
 

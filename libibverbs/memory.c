@@ -45,6 +45,7 @@
 #include <inttypes.h>
 
 #include "ibverbs.h"
+#include "util/rdma_nl.h"
 
 struct ibv_mem_node {
 	enum {
@@ -172,6 +173,14 @@ int ibv_fork_init(void)
 	mm_root->refcnt = 0;
 
 	return 0;
+}
+
+enum ibv_fork_status ibv_is_fork_initialized(void)
+{
+	if (get_copy_on_fork())
+		return IBV_FORK_UNNEEDED;
+
+	return mm_root ? IBV_FORK_ENABLED : IBV_FORK_DISABLED;
 }
 
 static struct ibv_mem_node *__mm_prev(struct ibv_mem_node *node)
@@ -587,6 +596,28 @@ static struct ibv_mem_node *undo_node(struct ibv_mem_node *node,
 	return node;
 }
 
+static int do_madvise(void *addr, size_t length, int advice,
+		      unsigned long range_page_size)
+{
+	int ret;
+	void *p;
+
+	ret = madvise(addr, length, advice);
+
+	if (!ret || advice == MADV_DONTFORK)
+		return ret;
+
+	if (length > range_page_size) {
+		/* if MADV_DOFORK failed we will try to remove VM_DONTCOPY
+		 * flag from each page
+		 */
+		for (p = addr; p < addr + length; p += range_page_size)
+			madvise(p, range_page_size, MADV_DOFORK);
+	}
+
+	return 0;
+}
+
 static int ibv_madvise_range(void *base, size_t size, int advice)
 {
 	uintptr_t start, end;
@@ -640,12 +671,13 @@ again:
 			 * and that may lead to a spurious failure.
 			 */
 			if (start > node->start)
-				ret = madvise((void *) start, node->end - start + 1,
-					      advice);
+				ret = do_madvise((void *) start,
+						 node->end - start + 1,
+						 advice, range_page_size);
 			else
-				ret = madvise((void *) node->start,
-					      node->end - node->start + 1,
-					      advice);
+				ret = do_madvise((void *) node->start,
+						 node->end - node->start + 1,
+						 advice, range_page_size);
 			if (ret) {
 				node = undo_node(node, start, inc);
 
@@ -656,10 +688,7 @@ again:
 				rolling_back = 1;
 				advice = advice == MADV_DONTFORK ?
 					MADV_DOFORK : MADV_DONTFORK;
-				tmp = __mm_prev(node);
-				if (!tmp || start > tmp->end)
-					goto out;
-				end = tmp->end;
+				end = node->end;
 				goto again;
 			}
 		}

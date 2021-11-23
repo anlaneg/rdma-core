@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <glob.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -52,10 +53,29 @@
 #include <rdma/rdma_netlink.h>
 
 #include <util/util.h>
+#include "driver.h"
 #include "ibverbs.h"
 #include <infiniband/cmd_write.h>
 
 int abi_ver;
+
+static uint32_t verbs_log_level;
+static FILE *verbs_log_fp;
+
+__attribute__((format(printf, 3, 4)))
+void __verbs_log(struct verbs_context *ctx, uint32_t level,
+		 const char *fmt, ...)
+{
+	va_list args;
+
+	if (level <= verbs_log_level) {
+		int tmp = errno;
+		va_start(args, fmt);
+		vfprintf(verbs_log_fp, fmt, args);
+		va_end(args);
+		errno = tmp;
+	}
+}
 
 struct ibv_driver {
 	struct list_node	entry;
@@ -65,7 +85,7 @@ struct ibv_driver {
 static LIST_HEAD(driver_list);
 
 //尝试访问指定设备文件
-static int try_access_device(const struct verbs_sysfs_dev *sysfs_dev)
+int try_access_device(const struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct stat cdev_stat;
 	char *devpath;
@@ -650,6 +670,49 @@ out:
 	return num_devices;
 }
 
+static void verbs_set_log_level(void)
+{
+	char *env;
+
+	env = getenv("VERBS_LOG_LEVEL");
+	if (env)
+		verbs_log_level = strtol(env, NULL, 0);
+}
+
+/*
+ * Fallback in case log file is not provided or can't be opened.
+ * Release mode: disable debug prints.
+ * Debug mode: Use stderr instead of a file.
+ */
+static void verbs_log_file_fallback(void)
+{
+#ifdef VERBS_DEBUG
+	verbs_log_fp = stderr;
+#else
+	verbs_log_level = VERBS_LOG_LEVEL_NONE;
+#endif
+}
+
+static void verbs_set_log_file(void)
+{
+	char *env;
+
+	if (verbs_log_level == VERBS_LOG_LEVEL_NONE)
+		return;
+
+	env = getenv("VERBS_LOG_FILE");
+	if (!env) {
+		verbs_log_file_fallback();
+		return;
+	}
+
+	verbs_log_fp = fopen(env, "aw+");
+	if (!verbs_log_fp) {
+		verbs_log_file_fallback();
+		return;
+	}
+}
+
 int ibverbs_init(void)
 {
 	char *env_value;
@@ -671,6 +734,8 @@ int ibverbs_init(void)
 		return -errno;
 
 	check_memlock_limit();
+	verbs_set_log_level();
+	verbs_set_log_file();
 
 	return 0;
 }

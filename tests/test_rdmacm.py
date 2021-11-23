@@ -1,73 +1,68 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
 # Copyright (c) 2019 Mellanox Technologies, Inc. All rights reserved. See COPYING file
 
-from tests.rdmacm_utils import sync_traffic, async_traffic, \
-    async_traffic_with_ext_qp
-from pyverbs.pyverbs_error import PyverbsError
-from tests.base import RDMATestCase
-import multiprocessing as mp
-import pyverbs.device as d
-import subprocess
 import unittest
-import json
+import os
 
-NUM_OF_PROCESSES = 2
+from tests.rdmacm_utils import  CMSyncConnection, CMAsyncConnection
+from tests.base import RDMATestCase, RDMACMBaseTest
+from tests.utils import requires_mcast_support
+import pyverbs.cm_enums as ce
+import pyverbs.device as d
+import pyverbs.enums as e
 
 
-class CMTestCase(RDMATestCase):
-    def setUp(self):
-        super().setUp()
-        net_name = self.get_net_name(self.dev_name)
-        try:
-            self.ip_addr = self.get_ip_address(net_name)
-        except KeyError:
-            raise unittest.SkipTest('Device {} doesn\'t have net interface'
-                                    .format(self.dev_name))
+class CMTestCase(RDMACMBaseTest):
+    """
+    RDMACM Test class. Include all the native RDMACM functionalities.
+    """
+    def get_port_space(self):
+        ctx = d.Context(name=self.dev_name)
+        dev_attrs = ctx.query_port(self.ib_port)
+        port_space = ce.RDMA_PS_IPOIB \
+            if dev_attrs.link_layer == e.IBV_LINK_LAYER_INFINIBAND \
+                else ce.RDMA_PS_UDP
+        return port_space
 
-    @staticmethod
-    def get_net_name(dev):
-        out = subprocess.check_output(['ls', '/sys/class/infiniband/{}/device/net/'
-                                      .format(dev)])
-        return out.decode().split('\n')[0]
-
-    @staticmethod
-    def get_ip_address(ifname):
-        out = subprocess.check_output(['ip', '-j', 'addr', 'show', ifname])
-        loaded_json = json.loads(out.decode())
-        interface = loaded_json[0]['addr_info'][0]['local']
-        if 'fe80::' in interface:
-            interface = interface + '%' + ifname
-        return interface
-
-    @staticmethod
-    def two_nodes_rdmacm_traffic(ip_addr, traffic_func):
-        ctx = mp.get_context('fork')
-        syncer = ctx.Barrier(NUM_OF_PROCESSES, timeout=5)
-        notifier = ctx.Queue()
-        passive = ctx.Process(target=traffic_func,
-                              args=[ip_addr, syncer, notifier, True])
-        active = ctx.Process(target=traffic_func,
-                             args=[ip_addr, syncer, notifier, False])
-        passive.start()
-        active.start()
-        while notifier.empty():
-            pass
-
-        for _ in range(NUM_OF_PROCESSES):
-            res = notifier.get()
-            if res is not None:
-                passive.terminate()
-                active.terminate()
-                raise PyverbsError(res)
-
-        passive.join()
-        active.join()
 
     def test_rdmacm_sync_traffic(self):
-        self.two_nodes_rdmacm_traffic(self.ip_addr, sync_traffic)
+        self.two_nodes_rdmacm_traffic(CMSyncConnection, self.rdmacm_traffic)
 
     def test_rdmacm_async_traffic(self):
-        self.two_nodes_rdmacm_traffic(self.ip_addr, async_traffic)
+        # QP ack timeout formula: 4.096 * 2^(ack_timeout) [usec]
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
+                                      qp_timeout=21)
+
+    def test_rdmacm_async_reject_traffic(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
+                                      reject_conn=True)
+
+    @requires_mcast_support()
+    def test_rdmacm_async_multicast_traffic(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection,
+                                      self.rdmacm_multicast_traffic,
+                                      port_space=self.get_port_space())
+
+    @requires_mcast_support()
+    def test_rdmacm_async_ex_multicast_traffic(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection,
+                                      self.rdmacm_multicast_traffic,
+                                      port_space=self.get_port_space(), extended=True)
 
     def test_rdmacm_async_traffic_external_qp(self):
-        self.two_nodes_rdmacm_traffic(self.ip_addr, async_traffic_with_ext_qp)
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
+                                      with_ext_qp=True)
+
+    def test_rdmacm_async_udp_traffic(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
+                                      port_space=self.get_port_space())
+
+    def test_rdmacm_async_read(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection,
+                                      self.rdmacm_remote_traffic,
+                                      remote_op='read')
+
+    def test_rdmacm_async_write(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection,
+                                      self.rdmacm_remote_traffic,
+                                      remote_op='write')

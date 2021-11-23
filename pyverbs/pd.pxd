@@ -13,12 +13,16 @@ cdef class PD(PyverbsCM):
     cdef v.ibv_pd *pd
     cdef Context ctx
     cdef add_ref(self, obj)
+    cdef remove_ref(self, obj)
     cdef object srqs
     cdef object mrs
     cdef object mws
     cdef object ahs
     cdef object qps
     cdef object parent_domains
+    cdef object mkeys
+    cdef object deks
+    cdef object _is_imported
 
 cdef class ParentDomainInitAttr(PyverbsObject):
     cdef v.ibv_parent_domain_init_attr init_attr
@@ -35,3 +39,4 @@ cdef class ParentDomainContext(PyverbsObject):
     cdef object p_alloc
     cdef object p_free
     cdef object pd
+    cdef object user_data

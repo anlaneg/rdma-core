@@ -158,7 +158,8 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 	if (!tb[RDMA_NLDEV_ATTR_DEV_NAME] ||
 	    !tb[RDMA_NLDEV_ATTR_DEV_NODE_TYPE] ||
 	    !tb[RDMA_NLDEV_ATTR_DEV_INDEX] ||
-	    !tb[RDMA_NLDEV_ATTR_NODE_GUID])
+	    !tb[RDMA_NLDEV_ATTR_NODE_GUID] ||
+	    !tb[RDMA_NLDEV_ATTR_PORT_INDEX])
 		return NLE_PARSE_ERR;
 
 	sysfs_dev = calloc(1, sizeof(*sysfs_dev));
@@ -166,6 +167,7 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 		return NLE_NOMEM;
 
 	sysfs_dev->ibdev_idx = nla_get_u32(tb[RDMA_NLDEV_ATTR_DEV_INDEX]);
+	sysfs_dev->num_ports = nla_get_u32(tb[RDMA_NLDEV_ATTR_PORT_INDEX]);
 	sysfs_dev->node_guid = nla_get_u64(tb[RDMA_NLDEV_ATTR_NODE_GUID]);
 	sysfs_dev->flags |= VSYSFS_READ_NODE_GUID;
 	if (!check_snprintf(sysfs_dev->ibdev_name,
@@ -179,15 +181,6 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 		    "%s/class/infiniband/%s", ibv_get_sysfs_path(),
 		    sysfs_dev->ibdev_name))
 		goto err;
-
-	//取ib设备fw
-	if (tb[RDMA_NLDEV_ATTR_FW_VERSION]) {
-		if (!check_snprintf(
-			    sysfs_dev->fw_ver, sizeof(sysfs_dev->fw_ver), "%s",
-			    nla_get_string(tb[RDMA_NLDEV_ATTR_FW_VERSION])))
-			goto err;
-		sysfs_dev->flags |= VSYSFS_READ_FW_VER;
-	}
 	sysfs_dev->node_type = decode_knode_type(
 		nla_get_u8(tb[RDMA_NLDEV_ATTR_DEV_NODE_TYPE]));
 
@@ -221,7 +214,8 @@ int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list/*收集系统中可�
 
 	/*遍历获取的ib设备*/
 	list_for_each_safe (tmp_sysfs_dev_list, dev, dev_tmp, entry) {
-		if (find_uverbs_nl(nl, dev) && find_uverbs_sysfs(dev)) {
+		if ((find_uverbs_nl(nl, dev) && find_uverbs_sysfs(dev)) ||
+		    try_access_device(dev)) {
 		    /*移除掉无效的设备*/
 			list_del(&dev->entry);
 			free(dev);
@@ -238,4 +232,40 @@ err:
 	}
 	nl_socket_free(nl);
 	return EINVAL;
+}
+
+static int get_copy_on_fork_cb(struct nl_msg *msg, void *data)
+{
+	struct nlattr *tb[RDMA_NLDEV_ATTR_MAX];
+	int ret;
+
+	ret = nlmsg_parse(nlmsg_hdr(msg), 0, tb, RDMA_NLDEV_ATTR_MAX - 1,
+			  rdmanl_policy);
+	if (ret < 0)
+		return ret;
+
+	/* Older kernels don't support COF and don't report it through nl */
+	if (!tb[RDMA_NLDEV_SYS_ATTR_COPY_ON_FORK]) {
+		*(uint8_t *)data = 0;
+		return NL_OK;
+	}
+
+	*(uint8_t *)data = nla_get_u8(tb[RDMA_NLDEV_SYS_ATTR_COPY_ON_FORK]);
+	return NL_OK;
+}
+
+bool get_copy_on_fork(void)
+{
+	struct nl_sock *nl;
+	uint8_t cof;
+
+	nl = rdmanl_socket_alloc();
+	if (!nl)
+		return false;
+
+	if (rdmanl_get_copy_on_fork(nl, get_copy_on_fork_cb, &cof))
+		cof = false;
+
+	nl_socket_free(nl);
+	return cof;
 }

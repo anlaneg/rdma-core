@@ -1,5 +1,5 @@
 Name: rdma-core
-Version: 30.0
+Version: 39.0
 Release: 1%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
@@ -27,8 +27,8 @@ BuildRequires: /usr/bin/rst2man
 BuildRequires: valgrind-devel
 BuildRequires: systemd
 BuildRequires: systemd-devel
-%if 0%{?fedora} >= 32
-%define with_pyverbs %{?_with_pyverbs: 0} %{?!_with_pyverbs: 1}
+%if 0%{?fedora} >= 32 || 0%{?rhel} >= 8
+%define with_pyverbs %{?_with_pyverbs: 1} %{?!_with_pyverbs: %{?!_without_pyverbs: 1} %{?_without_pyverbs: 0}}
 %else
 %define with_pyverbs %{?_with_pyverbs: 1} %{?!_with_pyverbs: 0}
 %endif
@@ -53,7 +53,7 @@ BuildRequires: python-docutils
 BuildRequires: perl-generators
 %endif
 
-Requires: dracut, kmod, systemd, pciutils
+Requires: pciutils
 # Red Hat/Fedora previously shipped redhat/ as a stand-alone
 # package called 'rdma', which we're supplanting here.
 Provides: rdma = %{version}-%{release}
@@ -66,8 +66,13 @@ Conflicts: infiniband-diags <= 1.6.7
 # Ninja was introduced in FC23
 BuildRequires: ninja-build
 %define CMAKE_FLAGS -GNinja
+%if 0%{?fedora} >= 33
+%define make_jobs ninja-build -C %{_vpath_builddir} -v %{?_smp_mflags}
+%define cmake_install DESTDIR=%{buildroot} ninja-build -C %{_vpath_builddir} install
+%else
 %define make_jobs ninja-build -v %{?_smp_mflags}
 %define cmake_install DESTDIR=%{buildroot} ninja-build install
+%endif
 %else
 # Fallback to make otherwise
 BuildRequires: make
@@ -87,7 +92,6 @@ scripts, dracut rules, and the rdma-ndd utility.
 
 %package devel
 Summary: RDMA core development libraries and headers
-Requires: %{name}%{?_isa} = %{version}-%{release}
 Requires: libibverbs%{?_isa} = %{version}-%{release}
 Provides: libibverbs-devel = %{version}-%{release}
 Obsoletes: libibverbs-devel < %{version}-%{release}
@@ -97,7 +101,6 @@ Obsoletes: libibumad-devel < %{version}-%{release}
 Requires: librdmacm%{?_isa} = %{version}-%{release}
 Provides: librdmacm-devel = %{version}-%{release}
 Obsoletes: librdmacm-devel < %{version}-%{release}
-Requires: ibacm%{?_isa} = %{version}-%{release}
 Provides: ibacm-devel = %{version}-%{release}
 Obsoletes: ibacm-devel < %{version}-%{release}
 Requires: infiniband-diags%{?_isa} = %{version}-%{release}
@@ -141,17 +144,16 @@ compatibility reasons.
 Summary: A library and drivers for direct userspace use of RDMA (InfiniBand/iWARP/RoCE) hardware
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
-Requires: %{name}%{?_isa} = %{version}-%{release}
 Provides: libcxgb4 = %{version}-%{release}
 Obsoletes: libcxgb4 < %{version}-%{release}
 Provides: libefa = %{version}-%{release}
 Obsoletes: libefa < %{version}-%{release}
 Provides: libhfi1 = %{version}-%{release}
 Obsoletes: libhfi1 < %{version}-%{release}
-Provides: libi40iw = %{version}-%{release}
-Obsoletes: libi40iw < %{version}-%{release}
 Provides: libipathverbs = %{version}-%{release}
 Obsoletes: libipathverbs < %{version}-%{release}
+Provides: libirdma = %{version}-%{release}
+Obsoletes: libirdma < %{version}-%{release}
 Provides: libmlx4 = %{version}-%{release}
 Obsoletes: libmlx4 < %{version}-%{release}
 Provides: libmlx5 = %{version}-%{release}
@@ -176,8 +178,8 @@ Device-specific plug-in ibverbs userspace drivers are included:
 - libefa: Amazon Elastic Fabric Adapter
 - libhfi1: Intel Omni-Path HFI
 - libhns: HiSilicon Hip06 SoC
-- libi40iw: Intel Ethernet Connection X722 RDMA
 - libipathverbs: QLogic InfiniPath HCA
+- libirdma: Intel Ethernet Connection RDMA
 - libmlx4: Mellanox ConnectX-3 InfiniBand HCA
 - libmlx5: Mellanox Connect-IB/X-4+ InfiniBand HCA
 - libmthca: Mellanox InfiniBand HCA
@@ -200,7 +202,6 @@ Summary: InfiniBand Communication Manager Assistant
 Requires(post): systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
-Requires: %{name}%{?_isa} = %{version}-%{release}
 
 %description -n ibacm
 The ibacm daemon helps reduce the load of managing path record lookups on
@@ -217,7 +218,6 @@ Summary: iWarp Port Mapper userspace daemon
 Requires(post): systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
-Requires: %{name}%{?_isa} = %{version}-%{release}
 
 %description -n iwpmd
 iwpmd provides a userspace service for iWarp drivers to claim
@@ -225,7 +225,6 @@ tcp ports through the standard socket interface.
 
 %package -n libibumad
 Summary: OpenFabrics Alliance InfiniBand umad (userspace management datagram) library
-Requires: %{name}%{?_isa} = %{version}-%{release}
 
 %description -n libibumad
 libibumad provides the userspace management datagram (umad) library
@@ -234,7 +233,6 @@ are used by the IB diagnostic and management tools, including OpenSM.
 
 %package -n librdmacm
 Summary: Userspace RDMA Connection Manager
-Requires: %{name}%{?_isa} = %{version}-%{release}
 
 %description -n librdmacm
 librdmacm provides a userspace RDMA Communication Management API.
@@ -254,7 +252,6 @@ Obsoletes: openib-srptools <= 0.0.6
 Requires(post): systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
-Requires: %{name}%{?_isa} = %{version}-%{release}
 
 %description -n srp_daemon
 In conjunction with the kernel ib_srp driver, srp_daemon allows you to
@@ -331,30 +328,28 @@ mkdir -p %{buildroot}%{_libexecdir}
 mkdir -p %{buildroot}%{_udevrulesdir}
 mkdir -p %{buildroot}%{dracutlibdir}/modules.d/05rdma
 mkdir -p %{buildroot}%{sysmodprobedir}
-install -D -m0644 redhat/rdma.conf %{buildroot}/%{_sysconfdir}/rdma/rdma.conf
-install -D -m0644 redhat/rdma.sriov-vfs %{buildroot}/%{_sysconfdir}/rdma/sriov-vfs
 install -D -m0644 redhat/rdma.mlx4.conf %{buildroot}/%{_sysconfdir}/rdma/mlx4.conf
-install -D -m0644 redhat/rdma.service %{buildroot}%{_unitdir}/rdma.service
 install -D -m0755 redhat/rdma.modules-setup.sh %{buildroot}%{dracutlibdir}/modules.d/05rdma/module-setup.sh
-install -D -m0644 redhat/rdma.udev-rules %{buildroot}%{_udevrulesdir}/98-rdma.rules
 install -D -m0644 redhat/rdma.mlx4.sys.modprobe %{buildroot}%{sysmodprobedir}/libmlx4.conf
-install -D -m0755 redhat/rdma.kernel-init %{buildroot}%{_libexecdir}/rdma-init-kernel
-install -D -m0755 redhat/rdma.sriov-init %{buildroot}%{_libexecdir}/rdma-set-sriov-vf
 install -D -m0755 redhat/rdma.mlx4-setup.sh %{buildroot}%{_libexecdir}/mlx4-setup.sh
+rm -f %{buildroot}%{_sysconfdir}/rdma/modules/rdma.conf
+install -D -m0644 redhat/rdma.conf %{buildroot}%{_sysconfdir}/rdma/modules/rdma.conf
 
 # ibacm
-bin/ib_acme -D . -O
-install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/
+(if [ -d %{__cmake_builddir} ]; then cd %{__cmake_builddir}; fi
+ ./bin/ib_acme -D . -O &&
+ install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/)
 
 # Delete the package's init.d scripts
 rm -rf %{buildroot}/%{_initrddir}/
-rm -rf %{buildroot}/%{_sbindir}/srp_daemon.sh
+rm -f %{buildroot}/%{_sbindir}/srp_daemon.sh
 
 %post -n rdma-core
-# we ship udev rules, so trigger an update.
+if [ -x /sbin/udevadm ]; then
 /sbin/udevadm trigger --subsystem-match=infiniband --action=change || true
 /sbin/udevadm trigger --subsystem-match=net --action=change || true
 /sbin/udevadm trigger --subsystem-match=infiniband_mad --action=change || true
+fi
 
 %post -n infiniband-diags -p /sbin/ldconfig
 %postun -n infiniband-diags -p /sbin/ldconfig
@@ -402,16 +397,17 @@ rm -rf %{buildroot}/%{_sbindir}/srp_daemon.sh
 %config(noreplace) %{_sysconfdir}/rdma/modules/opa.conf
 %config(noreplace) %{_sysconfdir}/rdma/modules/rdma.conf
 %config(noreplace) %{_sysconfdir}/rdma/modules/roce.conf
-%config(noreplace) %{_sysconfdir}/rdma/rdma.conf
-%config(noreplace) %{_sysconfdir}/rdma/sriov-vfs
 %config(noreplace) %{_sysconfdir}/udev/rules.d/*
+%dir %{_sysconfdir}/modprobe.d
 %config(noreplace) %{_sysconfdir}/modprobe.d/mlx4.conf
 %config(noreplace) %{_sysconfdir}/modprobe.d/truescale.conf
 %{_unitdir}/rdma-hw.target
 %{_unitdir}/rdma-load-modules@.service
-%{_unitdir}/rdma.service
+%dir %{dracutlibdir}
+%dir %{dracutlibdir}/modules.d
 %dir %{dracutlibdir}/modules.d/05rdma
 %{dracutlibdir}/modules.d/05rdma/module-setup.sh
+%dir %{_udevrulesdir}
 %{_udevrulesdir}/../rdma_rename
 %{_udevrulesdir}/60-rdma-ndd.rules
 %{_udevrulesdir}/60-rdma-persistent-naming.rules
@@ -419,10 +415,8 @@ rm -rf %{buildroot}/%{_sbindir}/srp_daemon.sh
 %{_udevrulesdir}/90-rdma-hw-modules.rules
 %{_udevrulesdir}/90-rdma-ulp-modules.rules
 %{_udevrulesdir}/90-rdma-umad.rules
-%{_udevrulesdir}/98-rdma.rules
+%dir %{sysmodprobedir}
 %{sysmodprobedir}/libmlx4.conf
-%{_libexecdir}/rdma-init-kernel
-%{_libexecdir}/rdma-set-sriov-vf
 %{_libexecdir}/mlx4-setup.sh
 %{_libexecdir}/truescale-serdes.cmds
 %{_sbindir}/rdma-ndd
@@ -491,6 +485,10 @@ rm -rf %{buildroot}/%{_sbindir}/srp_daemon.sh
 %{_sbindir}/ibprintrt.pl
 %{_mandir}/man8/ibprintrt*
 %{_sbindir}/set_nodedesc.sh
+%{_sbindir}/ibclearerrors
+%{_mandir}/man8/ibclearerrors*
+%{_sbindir}/ibclearcounters
+%{_mandir}/man8/ibclearcounters*
 
 %files -n infiniband-diags
 %{_sbindir}/ibaddr
@@ -551,10 +549,6 @@ rm -rf %{buildroot}/%{_sbindir}/srp_daemon.sh
 %{_mandir}/man8/dump_lfts*
 %{_sbindir}/dump_mfts.sh
 %{_mandir}/man8/dump_mfts*
-%{_sbindir}/ibclearerrors
-%{_mandir}/man8/ibclearerrors*
-%{_sbindir}/ibclearcounters
-%{_mandir}/man8/ibclearcounters*
 %{_sbindir}/ibstatus
 %{_mandir}/man8/ibstatus*
 %{_mandir}/man8/infiniband-diags*

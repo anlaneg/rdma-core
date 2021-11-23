@@ -48,8 +48,17 @@
 #   -DENABLE_IBDIAGS_COMPAT=True (default False)
 #      Include obsolete scripts. These scripts are replaced by C programs with
 #      a different interface now.
+#   -DNO_MAN_PAGES=1 (default 0, build/install the man pages)
+#      Disable man pages. Allows rdma-core to be built and installed
+#      (without man pages) when neither pandoc/rst2man nor the pandoc-prebuilt
+#      directory are available.
 
-cmake_minimum_required(VERSION 2.8.11 FATAL_ERROR)
+if (${CMAKE_VERSION} VERSION_LESS "3.18.1")
+	# Centos 6 support
+	cmake_minimum_required(VERSION 2.8.11 FATAL_ERROR)
+else()
+	cmake_minimum_required(VERSION 3.18.1 FATAL_ERROR)
+endif()
 project(rdma-core C)
 
 # CMake likes to use -rdynamic too much, they fixed it in 3.4.
@@ -68,11 +77,11 @@ endif()
 set(PACKAGE_NAME "RDMA")
 
 # See Documentation/versioning.md
-set(PACKAGE_VERSION "30.0")
+set(PACKAGE_VERSION "39.0")
 # When this is changed the values in these files need changing too:
 #   debian/control
 #   debian/libibverbs1.symbols
-set(IBVERBS_PABI_VERSION "25")
+set(IBVERBS_PABI_VERSION "34")
 set(IBVERBS_PROVIDER_SUFFIX "-rdmav${IBVERBS_PABI_VERSION}.so")
 
 #-------------------------
@@ -174,7 +183,15 @@ include(RDMA_DoFixup)
 include(publish_headers)
 include(rdma_functions)
 include(pyverbs_functions)
-include(rdma_man)
+if (NO_MAN_PAGES)
+  # define empty stub functions to omit man page processing
+  function(rdma_man_pages)
+  endfunction()
+  function(rdma_alias_man_pages)
+  endfunction()
+else()
+  include(rdma_man)
+endif()
 
 if (NOT DEFINED ENABLE_STATIC)
   set(ENABLE_STATIC "OFF" CACHE BOOL "Produce static linking libraries as well as shared libraries.")
@@ -209,7 +226,7 @@ RDMA_EnableCStd()
 # but turn off some that are not terribly useful for this source.
 # FIXME: I wonder how many of the signed compares are bugs?
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WARNINGS
-  "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter")
+  "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter -Wno-stringop-overread")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WMISSING_PROTOTYPES "-Wmissing-prototypes")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WMISSING_DECLARATIONS "-Wmissing-declarations")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WWRITE_STRINGS "-Wwrite-strings")
@@ -221,26 +238,21 @@ RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WNESTED_EXTERNS "-Wnested-externs")
 
 # At some point after 4.4 gcc fixed shadow to ignore function vs variable
 # conflicts
-set(SAFE_CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
-  set(CMAKE_REQUIRED_FLAGS "-Wshadow")
-CHECK_C_SOURCE_COMPILES("
+RDMA_Check_C_Compiles(HAVE_C_WORKING_SHADOW "
  #include <unistd.h>
  int main(int argc,const char *argv[]) { int access = 1; return access; }"
-  HAVE_C_WORKING_SHADOW
-  FAIL_REGEX "warning")
+  "-Wshadow")
 if (HAVE_C_WORKING_SHADOW)
   RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WORKING_SHADOW "-Wshadow")
 endif()
-set(CMAKE_REQUIRED_FLAGS "${SAFE_CMAKE_REQUIRED_FLAGS}")
 
 # At some point around 5.4 gcc fixed missing-field-initializers to ignore this
 # common idiom we use extensively. Since this is a useful warning for
 # developers try and leave it on if the compiler supports it.
-CHECK_C_SOURCE_COMPILES("
+RDMA_Check_C_Compiles(HAVE_C_WORKING_MISSING_FIELD_INITIALIZERS "
  struct foo { int a; int b; };
  int main(int argc,const char *argv[]) { struct foo tmp = {}; return tmp.a; }"
-  HAVE_C_WORKING_MISSING_FIELD_INITIALIZERS
-  FAIL_REGEX "warning")
+)
 if (NOT HAVE_C_WORKING_MISSING_FIELD_INITIALIZERS)
   RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WNO_MISSING_FIELD_INITIALIZERS "-Wno-missing-field-initializers")
 endif()
@@ -256,7 +268,7 @@ set(NO_VAR_TRACKING_FLAGS "")
 RDMA_AddOptCFlag(NO_VAR_TRACKING_FLAGS HAVE_NO_VAR_TRACKING_ASSIGNMENTS
   "-fno-var-tracking-assignments")
 
-CHECK_C_SOURCE_COMPILES("
+RDMA_Check_C_Compiles(HAVE_FUNC_ATTRIBUTE_IFUNC "
  #include <unistd.h>
 
  void entry(void);
@@ -267,8 +279,16 @@ CHECK_C_SOURCE_COMPILES("
  static fn_t resolve_entry(void) {return &do_entry;}
 
  int main(int argc,const char *argv[]) { entry(); }"
-  HAVE_FUNC_ATTRIBUTE_IFUNC
-  FAIL_REGEX "warning")
+)
+
+RDMA_Check_C_Compiles(HAVE_FUNC_ATTRIBUTE_SYMVER "
+ #include <unistd.h>
+
+ void _sym(void);
+ __attribute__((__symver__(\"sym@TEST_1.1\"))) void _sym(void) {}
+
+ int main(int argc,const char *argv[]) { _sym(); }"
+)
 
 # The code does not do the racy fcntl if the various CLOEXEC's are not
 # supported so it really doesn't work right if this isn't available. Thus hard
@@ -308,19 +328,17 @@ if (NOT HAS_CLOEXEC)
 endif()
 
 # always_inline is supported
-CHECK_C_SOURCE_COMPILES("
+RDMA_Check_C_Compiles(HAVE_FUNC_ATTRIBUTE_ALWAYS_INLINE "
  int foo(void);
  inline __attribute__((always_inline)) int foo(void) {return 0;}
  int main(int argc,const char *argv[]) { return foo(); }"
-  HAVE_FUNC_ATTRIBUTE_ALWAYS_INLINE
-  FAIL_REGEX "warning")
+)
 
 # Linux __u64 is an unsigned long long
-CHECK_C_SOURCE_COMPILES("
+RDMA_Check_C_Compiles(HAVE_LONG_LONG_U64 "
 #include <linux/types.h>
  int main(int argc,const char *argv[]) { __u64 tmp = 0; unsigned long long *tmp2 = &tmp; return *tmp2; }"
-  HAVE_LONG_LONG_U64
-  FAIL_REGEX "warning")
+)
 
 if (NOT HAVE_LONG_LONG_U64)
   # Modern Linux has switched to use ull in all cases, but to avoid disturbing
@@ -410,10 +428,10 @@ if (CYTHON_EXECUTABLE)
 
  # Get a default installation path
   execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c
-    "from distutils.sysconfig import get_python_lib; print(get_python_lib(True, False, '${CMAKE_INSTALL_PREFIX}'))"
+    "import sysconfig; print(sysconfig.get_path(\"platstdlib\"))"
   OUTPUT_VARIABLE py_path)
   string(STRIP ${py_path} py_path)
-  set(CMAKE_INSTALL_PYTHON_ARCH_LIB "${py_path}"
+  set(CMAKE_INSTALL_PYTHON_ARCH_LIB "${CMAKE_INSTALL_PREFIX}${py_path}"
   CACHE PATH "Location for architecture specific python libraries")
 
  # See PEP3149
@@ -423,9 +441,12 @@ if (CYTHON_EXECUTABLE)
   string(STRIP ${py_path} CMAKE_PYTHON_SO_SUFFIX)
 endif()
 
-# Look for pandoc and rst2man for making manual pages
-FIND_PACKAGE(pandoc)
-FIND_PACKAGE(rst2man)
+set(NO_MAN_PAGES "OFF" CACHE BOOL "Disable build/install of man pages")
+if (NOT NO_MAN_PAGES)
+  # Look for pandoc and rst2man for making manual pages
+  FIND_PACKAGE(pandoc)
+  FIND_PACKAGE(rst2man)
+endif ()
 
 #-------------------------
 # Find libraries
@@ -442,6 +463,7 @@ if (ENABLE_RESOLVE_NEIGH)
   # FIXME use of pkgconfig is discouraged
   pkg_check_modules(NL libnl-3.0 libnl-route-3.0 REQUIRED)
   include_directories(${NL_INCLUDE_DIRS})
+  link_directories(${NL_LIBRARY_DIRS})
   set(NL_KIND 3)
 else()
   set(NL_KIND 0)
@@ -488,6 +510,24 @@ CHECK_C_SOURCE_COMPILES("
 find_package(Systemd)
 include_directories(${SYSTEMD_INCLUDE_DIRS})
 RDMA_DoFixup("${SYSTEMD_FOUND}" "systemd/sd-daemon.h")
+
+# drm headers
+
+# Check if the headers have been installed by kernel-headers
+find_path(DRM_INCLUDE_DIRS "drm.h" PATH_SUFFIXES "drm")
+
+# Alternatively the headers could have been installed by libdrm
+if (NOT DRM_INCLUDE_DIRS)
+  pkg_check_modules(DRM libdrm)
+endif()
+
+if (DRM_INCLUDE_DIRS)
+  if (EXISTS ${DRM_INCLUDE_DIRS}/i915_drm.h AND EXISTS ${DRM_INCLUDE_DIRS}/amdgpu_drm.h)
+    include_directories(${DRM_INCLUDE_DIRS})
+  else()
+    unset(DRM_INCLUDE_DIRS CACHE)
+  endif()
+endif()
 
 #-------------------------
 # Apply fixups
@@ -545,19 +585,29 @@ endif()
 # Old versions of libnl have a duplicated rtnl_route_put, disbale the warning on those
 # systems
 if (NOT NL_KIND EQUAL 0)
-  set(SAFE_CMAKE_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
   set(SAFE_CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
   set(CMAKE_REQUIRED_INCLUDES "${NL_INCLUDE_DIRS}")
-  set(CMAKE_REQUIRED_FLAGS "-Wredundant-decls")
-  CHECK_C_SOURCE_COMPILES("
+  RDMA_Check_C_Compiles(HAVE_C_WREDUNDANT_DECLS "
  #include <netlink/route/route.h>
  int main(int argc,const char *argv[]) { return 0; }"
-  HAVE_C_WREDUNDANT_DECLS
-  FAIL_REGEX "warning")
+  "-Wredundant-decls")
   set(CMAKE_REQUIRED_INCLUDES "${SAFE_CMAKE_REQUIRED_INCLUDES}")
-  set(CMAKE_REQUIRED_FLAGS "${SAFE_CMAKE_REQUIRED_FLAGS}")
 endif()
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WREDUNDANT_DECLS "-Wredundant-decls")
+
+# Support of getrandom() was added to glibc in version 2.25
+CHECK_C_SOURCE_COMPILES("
+ #include <sys/random.h>
+ int main(int argc,const char *argv[]) {char buf[64]; return getrandom(buf, 64, GRND_NONBLOCK);}"
+ HAVE_GLIBC_GETRANDOM)
+RDMA_DoFixup("${HAVE_GLIBC_GETRANDOM}" "sys/random.h")
+
+# glibc 2.33 and newer stopped to properly declare __fxstat in sys/stat.h
+RDMA_Check_C_Compiles(HAVE_GLIBC_FXSTAT "
+ #include <sys/stat.h>
+ int main(int argc,const char *argv[]) {
+ struct stat stat = {};  __fxstat(0, 0, &stat);  return 0;}")
+RDMA_DoFixup("${HAVE_GLIBC_FXSTAT}" "sys/stat.h")
 
 #-------------------------
 # Build Prep
@@ -619,7 +669,7 @@ add_subdirectory(providers/cxgb4) # NO SPARSE
 add_subdirectory(providers/efa)
 add_subdirectory(providers/efa/man)
 add_subdirectory(providers/hns)
-add_subdirectory(providers/i40iw) # NO SPARSE
+add_subdirectory(providers/irdma)
 add_subdirectory(providers/mlx4)
 add_subdirectory(providers/mlx4/man)
 add_subdirectory(providers/mlx5)
@@ -677,6 +727,9 @@ endif()
 if (NOT HAVE_FUNC_ATTRIBUTE_IFUNC)
   message(STATUS " Compiler attribute ifunc NOT supported")
 endif()
+if (NOT HAVE_FUNC_ATTRIBUTE_SYMVER)
+  message(STATUS " Compiler attribute symver NOT supported, can not use LTO")
+endif()
 if (NOT HAVE_COHERENT_DMA)
   message(STATUS " Architecture NOT able to do coherent DMA (check util/udma_barrier.h) some providers disabled!")
 endif()
@@ -702,18 +755,22 @@ else()
     message(STATUS " netlink/route/link.h and net/if.h NOT co-includable (old headers)")
   endif()
 endif()
-if (NOT PANDOC_FOUND)
-  if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
-    message(STATUS " pandoc NOT found and NO prebuilt man pages. 'install' disabled")
-  else()
-    message(STATUS " pandoc NOT found (using prebuilt man pages)")
+if (NO_MAN_PAGES)
+  message(STATUS " man pages NOT built")
+else()
+  if (NOT PANDOC_FOUND)
+    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
+      message(STATUS " pandoc NOT found and NO prebuilt man pages. 'install' disabled")
+    else()
+      message(STATUS " pandoc NOT found (using prebuilt man pages)")
+    endif()
   endif()
-endif()
-if (NOT RST2MAN_FOUND)
-  if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
-    message(STATUS " rst2man NOT found and NO prebuilt man pages. 'install' disabled")
-  else()
-    message(STATUS " rst2man NOT found (using prebuilt man pages)")
+  if (NOT RST2MAN_FOUND)
+    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
+      message(STATUS " rst2man NOT found and NO prebuilt man pages. 'install' disabled")
+    else()
+      message(STATUS " rst2man NOT found (using prebuilt man pages)")
+    endif()
   endif()
 endif()
 if (NOT CYTHON_EXECUTABLE)
@@ -745,4 +802,7 @@ if (NOT HAVE_GLIBC_UAPI_COMPAT)
 endif()
 if (NOT HAVE_TARGET_SSE)
   message(STATUS " attribute(target(\"sse\")) does NOT work")
+endif()
+if (NOT DRM_INCLUDE_DIRS)
+  message(STATUS " DMABUF NOT supported (disabling some tests)")
 endif()

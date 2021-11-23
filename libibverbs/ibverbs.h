@@ -74,6 +74,7 @@ struct verbs_ex_private {
 	uint32_t driver_id;
 	bool use_ioctl_write;
 	struct verbs_context_ops ops;
+	bool imported;
 };
 
 //取ibv_context的私有数据
@@ -92,5 +93,7 @@ static inline const struct verbs_context_ops *get_ops(struct ibv_context *ctx)
 enum ibv_node_type decode_knode_type(unsigned int knode_type);
 
 int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list);
+
+int try_access_device(const struct verbs_sysfs_dev *sysfs_dev);
 
 #endif /* IB_VERBS_H */

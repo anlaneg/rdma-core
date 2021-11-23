@@ -20,6 +20,10 @@ cdef class Context(PyverbsCM):
     cdef object xrcds
     cdef object vars
     cdef object uars
+    cdef object pps
+    cdef object sched_nodes
+    cdef object sched_leafs
+    cdef object dr_domains
 
 cdef class DeviceAttr(PyverbsObject):
     cdef v.ibv_device_attr dev_attr
@@ -59,11 +63,14 @@ cdef class DM(PyverbsCM):
     cdef v.ibv_dm *dm
     cdef object dm_mrs
     cdef object context
+    cdef object _is_imported
     cdef add_ref(self, obj)
 
 cdef class PortAttr(PyverbsObject):
     cdef v.ibv_port_attr attr
 
-cdef class VAR(PyverbsObject):
-    cdef object context
-    cpdef close(self)
+cdef class GIDEntry(PyverbsObject):
+    cdef v.ibv_gid_entry entry
+
+cdef class AsyncEvent(PyverbsObject):
+    cdef v.ibv_async_event event
