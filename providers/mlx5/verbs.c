@@ -5428,6 +5428,7 @@ __mlx5dv_devx_umem_reg_ex(struct ibv_context *context,
 		return NULL;
 	}
 
+	/*in->addr所在的页要求置为do not fork*/
 	if (ibv_dontfork_range(in->addr, in->size))
 		goto err;
 

@@ -309,6 +309,7 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
 	if (!(device->core_support & IB_UVERBS_CORE_SUPPORT_OPTIONAL_MR_ACCESS))
 		access &= ~IBV_ACCESS_OPTIONAL_RANGE;
 
+	/*对这一段内存设置do not fork*/
 	if (!odp_mr && ibv_dontfork_range(addr, length))
 		return NULL;
 

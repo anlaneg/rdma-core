@@ -87,6 +87,7 @@ static unsigned long smaps_page_size(FILE *file)
 	return size;
 }
 
+/*获取当前base所在位置的页大小*/
 static unsigned long get_page_size(void *base)
 {
 	unsigned long ret = page_size;
@@ -101,6 +102,7 @@ static unsigned long get_page_size(void *base)
 	if (!file)
 		goto out;
 
+	/*读取smaps的每一行内容*/
 	while (fgets(buf, sizeof(buf), file) != NULL) {
 		int n;
 		uintptr_t range_start, range_end;
@@ -110,7 +112,9 @@ static unsigned long get_page_size(void *base)
 		if (n < 2)
 			continue;
 
+		/*在此行，找到base所属的区域*/
 		if ((uintptr_t) base >= range_start && (uintptr_t) base < range_end) {
+		    /*取此页对应的大小*/
 			ret = smaps_page_size(file);
 			break;
 		}
@@ -141,6 +145,7 @@ int ibv_fork_init(void)
 	if (page_size < 0)
 		return errno;
 
+	/*申请一页*/
 	if (posix_memalign(&tmp, page_size, page_size))
 		return ENOMEM;
 
@@ -152,12 +157,14 @@ int ibv_fork_init(void)
 		tmp_aligned = tmp;
 	}
 
+	/*先将内存设置成not fork,再设置成fork,用于检查kernel是否支持此调用*/
 	ret = madvise(tmp_aligned, size, MADV_DONTFORK) ||
 	      madvise(tmp_aligned, size, MADV_DOFORK);
 
 	free(tmp);
 
 	if (ret)
+	    /*系统不支持do not fork && do fork,初始化失败*/
 		return ENOSYS;
 
 	mm_root = malloc(sizeof *mm_root);
@@ -503,6 +510,7 @@ static void __mm_remove(struct ibv_mem_node *node)
 		child->color = IBV_BLACK;
 }
 
+/*取start,end对应的ibv_mem_node*/
 static struct ibv_mem_node *__mm_find_start(uintptr_t start, uintptr_t end)
 {
 	struct ibv_mem_node *node = mm_root;
@@ -554,6 +562,7 @@ static struct ibv_mem_node *get_start_node(uintptr_t start, uintptr_t end,
 
 	node = __mm_find_start(start, end);
 	if (node->start < start)
+	    /*node拆分成*/
 		node = split_range(node, start);
 	else {
 		tmp = __mm_prev(node);
@@ -596,6 +605,7 @@ static struct ibv_mem_node *undo_node(struct ibv_mem_node *node,
 	return node;
 }
 
+/*将addr开始，长度为length的一段内存，设置do not fork/do fork*/
 static int do_madvise(void *addr, size_t length, int advice,
 		      unsigned long range_page_size)
 {
@@ -605,8 +615,10 @@ static int do_madvise(void *addr, size_t length, int advice,
 	ret = madvise(addr, length, advice);
 
 	if (!ret || advice == MADV_DONTFORK)
+	    /*do not fork执行成功，返回*/
 		return ret;
 
+	/*执行madvice失败了，尝试恢复/设置DOFORK时长度过大，分开设置*/
 	if (length > range_page_size) {
 		/* if MADV_DOFORK failed we will try to remove VM_DONTCOPY
 		 * flag from each page
@@ -628,13 +640,17 @@ static int ibv_madvise_range(void *base, size_t size, int advice)
 	unsigned long range_page_size;
 
 	if (!size || !base)
+	    /*内存为空，直接返回*/
 		return 0;
 
 	if (huge_page_enabled)
+	    /*大页被启用，取页大小*/
 		range_page_size = get_page_size(base);
 	else
+	    /*使用默认页大小*/
 		range_page_size = page_size;
 
+	/*使base，base+size按页对齐*/
 	start = (uintptr_t) base & ~(range_page_size - 1);
 	end   = ((uintptr_t) (base + size + range_page_size - 1) &
 		 ~(range_page_size - 1)) - 1;
@@ -712,6 +728,7 @@ out:
 	return ret;
 }
 
+/*对base为基准的size长度进行dont fork要求*/
 int ibv_dontfork_range(void *base, size_t size)
 {
 	if (mm_root)

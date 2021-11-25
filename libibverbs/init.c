@@ -719,6 +719,7 @@ int ibverbs_init(void)
 
 	if (getenv("RDMAV_FORK_SAFE") || getenv("IBV_FORK_SAFE"))
 		if (ibv_fork_init())
+		    /*告警,初始化失败，kernel不支持fork回调*/
 			fprintf(stderr, PFX "Warning: fork()-safety requested "
 				"but init failed\n");
 
