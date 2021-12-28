@@ -59,7 +59,9 @@
 
 int abi_ver;
 
+/*verbs日志级别，通过环境变量‘VERBS_LOG_LEVEL’，‘VERBS_LOG_FILE’可以控制*/
 static uint32_t verbs_log_level;
+/*verbs日志输出文件*/
 static FILE *verbs_log_fp;
 
 __attribute__((format(printf, 3, 4)))
@@ -82,6 +84,7 @@ struct ibv_driver {
 	const struct verbs_device_ops *ops;/*驱动操作集*/
 };
 
+/*记录系统中的driver list*/
 static LIST_HEAD(driver_list);
 
 //尝试访问指定设备文件
@@ -269,6 +272,7 @@ void verbs_register_driver(const struct verbs_device_ops *ops)
 		return;
 	}
 
+	/*此driver对应的ops*/
 	driver->ops = ops;
 
 	list_add_tail(&driver_list, &driver->entry);
@@ -483,7 +487,7 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 	 * first.
 	 */
 	if (sysfs_dev->driver_id != RDMA_DRIVER_UNKNOWN) {
-	    /*指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
+	    /*设备指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
 		list_for_each (&driver_list, driver, entry) {
 			if (match_driver_id(driver->ops, sysfs_dev)) {
 				dev = try_driver(driver->ops, sysfs_dev);
@@ -493,7 +497,7 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 		}
 	}
 
-	//遍历所有driver,检查驱动能否可匹配,如果可匹配，则创建verbs_devices
+	//设备没有指明driver_id,遍历所有driver,检查驱动能否可匹配,如果可匹配，则创建verbs_devices
 	list_for_each(&driver_list, driver, entry) {
 		dev = try_driver(driver->ops, sysfs_dev);
 		if (dev)
@@ -510,6 +514,7 @@ static int check_abi_version(void)
 	if (abi_ver)
 		return 0;
 
+	/*读取verbs的abi版本*/
 	if (ibv_read_sysfs_file(ibv_get_sysfs_path(),
 				"class/infiniband_verbs/abi_version", value,
 				sizeof(value)) < 0) {
@@ -520,6 +525,7 @@ static int check_abi_version(void)
 
 	if (abi_ver < IB_USER_VERBS_MIN_ABI_VERSION ||
 	    abi_ver > IB_USER_VERBS_MAX_ABI_VERSION) {
+	    /*abi版本在当前软件支持范围以外，报错*/
 		fprintf(stderr, PFX "Fatal: kernel ABI version %d "
 			"doesn't match library version %d.\n",
 			abi_ver, IB_USER_VERBS_MAX_ABI_VERSION);
@@ -576,7 +582,7 @@ static void try_all_drivers(struct list_head *sysfs_list,
 	struct verbs_sysfs_dev *tmp;
 	struct verbs_device *vdev;
 
-	//遍历sysfs_list,针对每个dev,尝试创建其对应的vdev
+	//遍历sysfs_list,针对自sysfs中获得的每个dev,尝试创建其对应的verbs_device
 	list_for_each_safe(sysfs_list, sysfs_dev, tmp, entry) {
 		vdev = try_drivers(sysfs_dev);
 		if (vdev) {
@@ -600,16 +606,17 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	unsigned int num_devices = 0;
 	int ret;
 
-	//列出系统所有ib设备
+	//列出系统所有可用ib设备
 	ret = find_sysfs_devs_nl(&sysfs_list);
 	if (ret) {
-	    //填充sysfs_dev
+	    //通过netlink获取失败，通过sysfs进行获取
 		ret = find_sysfs_devs(&sysfs_list);
 		if (ret)
 			return -ret;
 	}
 
 	if (!list_empty(&sysfs_list)) {
+	    /*针对此设备显示其abi版本*/
 		ret = check_abi_version();
 		if (ret)
 			return -ret;
@@ -624,16 +631,19 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 
 		list_for_each(&sysfs_list, sysfs_dev, entry) {
 			if (same_sysfs_dev(vdev->sysfs, sysfs_dev)) {
+			    /*跳过已识别出来的设备*/
 				old_sysfs = sysfs_dev;
 				break;
 			}
 		}
 
 		if (old_sysfs) {
+		    /*设备在device_list与sysfs_list中同时存在*/
 			list_del(&old_sysfs->entry);
 			free(old_sysfs);
 			num_devices++;
 		} else {
+		    /*设备针在device_list中存在*/
 			list_del(&vdev->entry);
 			ibverbs_device_put(&vdev->device);
 		}
@@ -642,11 +652,12 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	//尝试执行driver匹配，将匹配好的构造到device_list
 	try_all_drivers(&sysfs_list, device_list, &num_devices/*device_list链表长度*/);
 
-	/*如果sysfs_list为空，则识别不到设备，如果drivers_loaded则已完成device_list收集*/
+	/* 如果sysfs_list为空，则所有设备均完成创建并加入到device_list
+	 * 如果drivers_loaded为真，则上次已完成device_list收集，跳过后面处理*/
 	if (list_empty(&sysfs_list) || drivers_loaded)
 		goto out;
 
-	//加载驱动，重新尝试一次,并构造device_list
+	//由于存在未识别的sysfs_list,故加载驱动，重新尝试一次,并构造device_list
 	load_drivers();
 	drivers_loaded = 1;
 
@@ -656,7 +667,7 @@ out:
 	/* Anything left in sysfs_list was not assoicated with a
 	 * driver.
 	 */
-    //如有必要，指明有哪些sysfs_dev未识别到驱动，并释放这些sysfs_dev
+    //如果仍存在未识别的sysfs_list，告警表示哪些sysfs_dev未识别到驱动，并释放这些sysfs_dev
 	list_for_each_safe(&sysfs_list, sysfs_dev, next_dev, entry) {
 		if (getenv("IBV_SHOW_WARNINGS")) {
 			fprintf(stderr, PFX
@@ -670,6 +681,7 @@ out:
 	return num_devices;
 }
 
+/*设置verbs日志级别*/
 static void verbs_set_log_level(void)
 {
 	char *env;
@@ -693,6 +705,7 @@ static void verbs_log_file_fallback(void)
 #endif
 }
 
+/*verbs日志文件设置*/
 static void verbs_set_log_file(void)
 {
 	char *env;
@@ -702,10 +715,12 @@ static void verbs_set_log_file(void)
 
 	env = getenv("VERBS_LOG_FILE");
 	if (!env) {
+	    /*未设置此环境变量情况下，可以会回退日志level到不生效*/
 		verbs_log_file_fallback();
 		return;
 	}
 
+	/*打开指定的verbs日志文件*/
 	verbs_log_fp = fopen(env, "aw+");
 	if (!verbs_log_fp) {
 		verbs_log_file_fallback();
@@ -713,13 +728,14 @@ static void verbs_set_log_file(void)
 	}
 }
 
+/*verbs初始化函数*/
 int ibverbs_init(void)
 {
 	char *env_value;
 
 	if (getenv("RDMAV_FORK_SAFE") || getenv("IBV_FORK_SAFE"))
 		if (ibv_fork_init())
-		    /*告警,初始化失败，kernel不支持fork回调*/
+		    /*告警,初始化失败，kernel不支持fork调用*/
 			fprintf(stderr, PFX "Warning: fork()-safety requested "
 				"but init failed\n");
 
@@ -731,10 +747,13 @@ int ibverbs_init(void)
 	if (getenv("RDMAV_ALLOW_DISASSOC_DESTROY"))
 		verbs_allow_disassociate_destroy = true;
 
+	/*高级置sysfs前缀路径*/
 	if (!ibv_get_sysfs_path())
 		return -errno;
 
+	//？？？？
 	check_memlock_limit();
+	/*日志级别及日志文件处理*/
 	verbs_set_log_level();
 	verbs_set_log_file();
 
@@ -751,6 +770,7 @@ void ibverbs_device_hold(struct ibv_device *dev)
 
 void ibverbs_device_put(struct ibv_device *dev)
 {
+    /*先转换为verbs_device,并进行引用计数减少，如果减为0，则调用uninit_device进行释放*/
 	struct verbs_device *verbs_device = verbs_get_device(dev);
 
 	if (atomic_fetch_sub(&verbs_device->refcount, 1) == 1) {

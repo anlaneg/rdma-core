@@ -143,12 +143,14 @@ struct ib_uverbs_cq_moderation_caps {
 #define IB_USER_VERBS_CMD_COMMAND_MASK 0xff
 #define IB_USER_VERBS_CMD_FLAG_EXTENDED 0x80000000u
 
+/*通过write操作uberbs时cmd头结构*/
 struct ib_uverbs_cmd_hdr {
 	__u32 command;
 	__u16 in_words;
 	__u16 out_words;
 };
 
+/*通过write操作uberbs时cmd扩展头结构，其跟在ib_uverbs_cmd_hdr结构体后面*/
 struct ib_uverbs_ex_cmd_hdr {
 	__aligned_u64 response;
 	__u16 provider_in_words;

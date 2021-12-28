@@ -279,6 +279,7 @@ LATEST_SYMVER_FUNC(ibv_get_pkey_index, 1_5, "IBVERBS_1.5",
 	}
 }
 
+/*创建pd*/
 LATEST_SYMVER_FUNC(ibv_alloc_pd, 1_1, "IBVERBS_1.1",
 		   struct ibv_pd *,
 		   struct ibv_context *context)
@@ -299,7 +300,7 @@ LATEST_SYMVER_FUNC(ibv_dealloc_pd, 1_1, "IBVERBS_1.1",
 	return get_ops(pd->context)->dealloc_pd(pd);
 }
 
-struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
+struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
 				uint64_t iova, unsigned int access)
 {
 	struct verbs_device *device = verbs_get_device(pd->context->device);
@@ -307,12 +308,14 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
 	struct ibv_mr *mr;
 
 	if (!(device->core_support & IB_UVERBS_CORE_SUPPORT_OPTIONAL_MR_ACCESS))
+	    /*设备不支持option mr访问，清楚相应access*/
 		access &= ~IBV_ACCESS_OPTIONAL_RANGE;
 
-	/*对这一段内存设置do not fork*/
+	/*非odp_mr模式下，需要针对此地址范围执行do not fork*/
 	if (!odp_mr && ibv_dontfork_range(addr, length))
 		return NULL;
 
+	/*调用provider的reg_mr*/
 	mr = get_ops(pd->context)->reg_mr(pd, addr, length, iova, access);
 	if (mr) {
 		mr->context = pd->context;
@@ -327,13 +330,14 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
 	return mr;
 }
 
+/*注册本端内存区域*/
 #undef ibv_reg_mr
 LATEST_SYMVER_FUNC(ibv_reg_mr, 1_1, "IBVERBS_1.1",
 		   struct ibv_mr *,
 		   struct ibv_pd *pd, void *addr,
 		   size_t length, int access)
 {
-	return ibv_reg_mr_iova2(pd, addr, length, (uintptr_t)addr, access);
+	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr, access);
 }
 
 #undef ibv_reg_mr_iova
@@ -488,6 +492,7 @@ LATEST_SYMVER_FUNC(ibv_dereg_mr, 1_1, "IBVERBS_1.1",
 	return ret;
 }
 
+/*创建comp channel*/
 struct ibv_comp_channel *ibv_create_comp_channel(struct ibv_context *context)
 {
 	struct ibv_create_comp_channel req;
@@ -498,6 +503,7 @@ struct ibv_comp_channel *ibv_create_comp_channel(struct ibv_context *context)
 	if (!channel)
 		return NULL;
 
+	/*创建comp channel*/
 	req.core_payload = (struct ib_uverbs_create_comp_channel){};
 	if (execute_cmd_write(context, IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL,
 			      &req, sizeof(req), &resp, sizeof(resp))) {

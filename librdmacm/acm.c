@@ -381,12 +381,14 @@ void ucma_ib_resolve(struct rdma_addrinfo **rai,
 	}
 
 	pthread_mutex_lock(&acm_lock);
+	/*发送消息*/
 	ret = send(sock, (char *) &msg, msg.hdr.length, 0);
 	if (ret != msg.hdr.length) {
 		pthread_mutex_unlock(&acm_lock);
 		return;
 	}
 
+	/*收取消息*/
 	ret = recv(sock, (char *) &msg, sizeof msg, 0);
 	pthread_mutex_unlock(&acm_lock);
 	if (ret < ACM_MSG_HDR_LENGTH || ret != msg.hdr.length || msg.hdr.status)

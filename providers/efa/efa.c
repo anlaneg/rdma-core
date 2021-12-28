@@ -131,6 +131,7 @@ static void efa_uninit_device(struct verbs_device *verbs_device)
 	free(dev);
 }
 
+/*efa对应的verbs设备驱动*/
 static const struct verbs_device_ops efa_dev_ops = {
 	.name = "efa",
 	.match_min_abi_version = EFA_ABI_VERSION,
@@ -147,4 +148,7 @@ bool is_efa_dev(struct ibv_device *device)
 
 	return verbs_device->ops == &efa_dev_ops;
 }
+
+
+/*efa设备注册verbs驱动*/
 PROVIDER_DRIVER(efa, efa_dev_ops);

@@ -43,9 +43,10 @@
 
 #include "ibverbs.h"
 
+/*记录sysfs的路径前缀，默认为"/sys"*/
 static const char *sysfs_path;
 
-//取ib设备sysfs路径前缀
+//取ib设备sysfs路径前缀，默认为"/sys"
 const char *ibv_get_sysfs_path(void)
 {
 	const char *env = NULL;
@@ -65,6 +66,7 @@ const char *ibv_get_sysfs_path(void)
 		int len;
 		char *dup;
 
+		/*移除掉path结尾的'/'符*/
 		sysfs_path = dup = strndup(env, IBV_SYSFS_PATH_MAX);
 		len = strlen(dup);
 		while (len > 0 && dup[len - 1] == '/') {

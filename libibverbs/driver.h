@@ -251,7 +251,9 @@ struct verbs_sysfs_dev {
 	void *provider_data;
 	const struct verbs_match_ent *match;/*匹配的match_table 项*/
 	unsigned int flags;
+	/*对应字符设备的设备名称*/
 	char sysfs_name[IBV_SYSFS_NAME_MAX];
+	/*对应字符设备的设备号*/
 	dev_t sysfs_cdev;
 	char ibdev_name[IBV_SYSFS_NAME_MAX];/*ib设备名称*/
 	char ibdev_path[IBV_SYSFS_PATH_MAX];/*ib设备路径,例如/sys/class/infiniband/mlx5_0*/
@@ -275,24 +277,26 @@ struct verbs_device_ops {
 	const struct verbs_match_ent *match_table;
 	const struct verbs_device_ops **static_providers;
 
-	//通过此回调，检查驱动是否可匹配指定的sysfs_dev设备
+	//通过此回调，检查此驱动是否可匹配指定的sysfs_dev设备
 	bool (*match_device)(struct verbs_sysfs_dev *sysfs_dev);
 
+	/*用于context空间申请*/
 	struct verbs_context *(*alloc_context)(struct ibv_device *device,
 					       int cmd_fd,
 					       void *private_data);
 	struct verbs_context *(*import_context)(struct ibv_device *device,
 						int cmd_fd);
 
-	/*通过sysfs_dev创建verbs_device*/
+	/*通过sysfs_dev创建verbs_device,用于空间匹配*/
 	struct verbs_device *(*alloc_device)(struct verbs_sysfs_dev *sysfs_dev);
-	/*销毁verbs_device*/
+	/*销毁verbs_device时使用*/
 	void (*uninit_device)(struct verbs_device *device);
 };
 
 /* Must change the PRIVATE IBVERBS_PRIVATE_ symbol if this is changed */
 struct verbs_device {
 	struct ibv_device device; /* Must be first */
+	/*verbs设备操作集*/
 	const struct verbs_device_ops *ops;
 	atomic_int refcount;
 	struct list_node entry;
@@ -352,6 +356,7 @@ struct verbs_context_ops {
 					struct ibv_flow_attr *flow_attr);
 	struct ibv_flow_action *(*create_flow_action_esp)(struct ibv_context *context,
 							  struct ibv_flow_action_esp_attr *attr);
+	/*qp创建*/
 	struct ibv_qp *(*create_qp)(struct ibv_pd *pd,
 				    struct ibv_qp_init_attr *attr);
 	struct ibv_qp *(*create_qp_ex)(
@@ -483,7 +488,7 @@ void verbs_register_driver(const struct verbs_device_ops *ops);
 		__attribute__((alias(stringify(drv_struct))));                 \
 	static __attribute__((constructor)) void drv##__register_driver(void)  \
 	{                                                                      \
-		/*通过PROVIDER_DRIVER宏，直接各provider注册驱动drv_struct*/\
+		/*verbs驱动注册，通过PROVIDER_DRIVER宏，直接将各provider注册驱动drv_struct*/\
 		verbs_register_driver(&drv_struct);                            \
 	}
 

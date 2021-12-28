@@ -51,17 +51,21 @@ struct ibv_mem_node {
 	enum {
 		IBV_RED,
 		IBV_BLACK
-	}			color;
-	struct ibv_mem_node    *parent;
-	struct ibv_mem_node    *left, *right;
+	}			color;/*节点颜色*/
+	struct ibv_mem_node    *parent;/*指向父节点*/
+	struct ibv_mem_node    *left/*左子节点*/, *right/*右子节点*/;
 	uintptr_t		start, end;
 	int			refcnt;
 };
 
+/*初始化时，指向申请好的ibv_mem_node空间，为红黑树树根*/
 static struct ibv_mem_node *mm_root;
 static pthread_mutex_t mm_mutex = PTHREAD_MUTEX_INITIALIZER;
+/*页大小*/
 static int page_size;
+/*标记开启了大页*/
 static int huge_page_enabled;
+/*标记初始化过晚*/
 static int too_late;
 
 static unsigned long smaps_page_size(FILE *file)
@@ -133,14 +137,18 @@ int ibv_fork_init(void)
 	unsigned long size;
 
 	if (getenv("RDMAV_HUGEPAGES_SAFE"))
+	    /*标记开启了大页*/
 		huge_page_enabled = 1;
 
 	if (mm_root)
+	    /*mm_root已初始化，退出*/
 		return 0;
 
 	if (too_late)
+	    /*标记出始化过晚，返回错误*/
 		return EINVAL;
 
+	/*取系统页大小*/
 	page_size = sysconf(_SC_PAGESIZE);
 	if (page_size < 0)
 		return errno;
@@ -150,23 +158,27 @@ int ibv_fork_init(void)
 		return ENOMEM;
 
 	if (huge_page_enabled) {
+	    /*开启了大页，取当前页所在页大小*/
 		size = get_page_size(tmp);
+		/*使此指针，按大页对齐*/
 		tmp_aligned = (void *) ((uintptr_t) tmp & ~(size - 1));
 	} else {
 		size = page_size;
 		tmp_aligned = tmp;
 	}
 
-	/*先将内存设置成not fork,再设置成fork,用于检查kernel是否支持此调用*/
+	/*先将内存设置成do not fork,再设置成do fork,用于检查kernel是否支持此两个调用*/
 	ret = madvise(tmp_aligned, size, MADV_DONTFORK) ||
 	      madvise(tmp_aligned, size, MADV_DOFORK);
 
+	/*释放内存*/
 	free(tmp);
 
 	if (ret)
 	    /*系统不支持do not fork && do fork,初始化失败*/
 		return ENOSYS;
 
+	/*初始化树根*/
 	mm_root = malloc(sizeof *mm_root);
 	if (!mm_root)
 		return ENOMEM;

@@ -72,15 +72,19 @@ struct rxe_ah {
 struct rxe_wq {
 	struct rxe_queue_buf	*queue;
 	pthread_spinlock_t	lock;
+	/*容许发送的最大sge数目，单个ibv_send_wr不得超过此值*/
 	unsigned int		max_sge;
+	/*inline式发送时，支持的最大inline消息长度*/
 	unsigned int		max_inline;
 };
 
 struct rxe_qp {
 	struct verbs_qp		vqp;
 	struct mminfo		rq_mmap_info;
+	/*接收队列*/
 	struct rxe_wq		rq;
 	struct mminfo		sq_mmap_info;
+	/*发送队列*/
 	struct rxe_wq		sq;
 	unsigned int		ssn;
 

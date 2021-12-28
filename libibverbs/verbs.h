@@ -623,6 +623,7 @@ struct ibv_mw_bind_info {
 };
 
 struct ibv_pd {
+    /*指向其对应的context*/
 	struct ibv_context     *context;
 	uint32_t		handle;
 };
@@ -661,10 +662,14 @@ enum ibv_rereg_mr_flags {
 struct ibv_mr {
 	struct ibv_context     *context;
 	struct ibv_pd	       *pd;
+	/*待注册的地址*/
 	void		       *addr;
+	/*待注册的地址长度*/
 	size_t			length;
 	uint32_t		handle;
+	/*本端key*/
 	uint32_t		lkey;
+	/*对端key*/
 	uint32_t		rkey;
 };
 
@@ -1099,6 +1104,7 @@ enum ibv_send_flags {
 	IBV_SEND_FENCE		= 1 << 0,
 	IBV_SEND_SIGNALED	= 1 << 1,
 	IBV_SEND_SOLICITED	= 1 << 2,
+	/*inline式发送*/
 	IBV_SEND_INLINE		= 1 << 3,
 	IBV_SEND_IP_CSUM	= 1 << 4
 };
@@ -1109,15 +1115,20 @@ struct ibv_data_buf {
 };
 
 struct ibv_sge {
+    /*缓存起始地址*/
 	uint64_t		addr;
+	/*缓存内容长度*/
 	uint32_t		length;
+	/*本端的key*/
 	uint32_t		lkey;
 };
 
 struct ibv_send_wr {
 	uint64_t		wr_id;
+	/*指向另一个send_wr,用于串成链表*/
 	struct ibv_send_wr     *next;
 	struct ibv_sge	       *sg_list;
+	/*表示ibv_sge数组大小*/
 	int			num_sge;
 	enum ibv_wr_opcode	opcode;
 	unsigned int		send_flags;
@@ -1447,7 +1458,9 @@ struct ibv_ece {
 };
 
 struct ibv_comp_channel {
+    /*对应的context*/
 	struct ibv_context     *context;
+	/*对应的channel fd*/
 	int			fd;
 	int			refcnt;
 };
@@ -1981,9 +1994,13 @@ struct ibv_context_ops {
 };
 
 struct ibv_context {
+    /*对应的ibv设备*/
 	struct ibv_device      *device;
+	/*context操作集*/
 	struct ibv_context_ops	ops;
+	/*用于cmd操作的fd（字符设备）*/
 	int			cmd_fd;
+	/*异步fd*/
 	int			async_fd;
 	int			num_comp_vectors;
 	pthread_mutex_t		mutex;
@@ -2602,6 +2619,7 @@ static inline struct ibv_mw *ibv_alloc_mw(struct ibv_pd *pd,
 {
 	struct ibv_mw *mw;
 
+	/*alloc_mw回调不存在时报错*/
 	if (!pd->context->ops.alloc_mw) {
 		errno = EOPNOTSUPP;
 		return NULL;
@@ -3313,8 +3331,9 @@ static inline int ibv_destroy_rwq_ind_table(struct ibv_rwq_ind_table *rwq_ind_ta
  * immediately after the call returns.
  */
 static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
-				struct ibv_send_wr **bad_wr)
+				struct ibv_send_wr **bad_wr/*出参，损坏的wr*/)
 {
+    /*调用context ops完成数据发送*/
 	return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 
@@ -3324,6 +3343,7 @@ static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
 static inline int ibv_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr,
 				struct ibv_recv_wr **bad_wr)
 {
+    /*调用context ops接收数据*/
 	return qp->context->ops.post_recv(qp, wr, bad_wr);
 }
 

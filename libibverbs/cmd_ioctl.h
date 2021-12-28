@@ -85,6 +85,7 @@ static inline void _scrub_ptr_attr(void **ptr)
 struct ibv_command_buffer {
 	struct ibv_command_buffer *next;
 	struct ib_uverbs_attr *next_attr;
+	/*指向最后一个属性*/
 	struct ib_uverbs_attr *last_attr;
 	/*
 	 * Used by the legacy write interface to keep track of where the UHW
@@ -128,9 +129,12 @@ unsigned int __ioctl_final_num_attrs(unsigned int num_attrs,
 /* If the user doesn't provide a link then don't create a VLA */
 #define _ioctl_final_num_attrs(_num_attrs, _link)                              \
 	((__builtin_constant_p(!(_link)) && !(_link))                          \
+	     /*没有link，以_num_attrs为准*/\
 		 ? (_num_attrs)                                                \
+		 /*通过_link进行合并*/\
 		 : __ioctl_final_num_attrs(_num_attrs, _link))
 
+/*初始化ibv_command_buffer的header*/
 #define _COMMAND_BUFFER_INIT(_hdr, _object_id, _method_id, _num_attrs, _link)  \
 	((struct ibv_command_buffer){                                          \
 		.hdr =                                                         \
@@ -167,9 +171,12 @@ static inline int _ioctl_init_cmdb(struct ibv_command_buffer *cmd,
 #ifndef __CHECKER__
 #define DECLARE_COMMAND_BUFFER_LINK(_name, _object_id, _method_id, _num_attrs, \
 				    _link)                                     \
+	/*定义buffer大小*/\
 	const unsigned int __##_name##total =                                  \
 		_ioctl_final_num_attrs(_num_attrs, _link);                     \
+	/*定义command buffer*/\
 	struct ibv_command_buffer _name[_IOCTL_NUM_CMDB(__##_name##total)];    \
+	/*初始化command buffer*/\
 	int __attribute__((unused)) __##_name##dummy = _ioctl_init_cmdb(       \
 		_name, _object_id, _method_id, __##_name##total, _link)
 #else
@@ -184,6 +191,7 @@ static inline int _ioctl_init_cmdb(struct ibv_command_buffer *cmd,
 		_ioctl_init_cmdb(_name, _object_id, _method_id, 10, _link)
 #endif
 
+/*定义command buffer,并简单初始化（_link为NULL）*/
 #define DECLARE_COMMAND_BUFFER(_name, _object_id, _method_id, _num_attrs)      \
 	DECLARE_COMMAND_BUFFER_LINK(_name, _object_id, _method_id, _num_attrs, \
 				    NULL)
@@ -195,7 +203,10 @@ _ioctl_next_attr(struct ibv_command_buffer *cmd, uint16_t attr_id)
 {
 	struct ib_uverbs_attr *attr;
 
+	/*小于最后一个属性*/
 	assert(cmd->next_attr < cmd->last_attr);
+
+	/*增加attr,并进行设置attr*/
 	attr = cmd->next_attr++;
 
 	*attr = (struct ib_uverbs_attr){
@@ -247,6 +258,7 @@ static inline struct ib_uverbs_attr *attr_optional(struct ib_uverbs_attr *attr)
 static inline struct ib_uverbs_attr *
 fill_attr_in_obj(struct ibv_command_buffer *cmd, uint16_t attr_id, uint32_t idr)
 {
+    /*构造attr，并设置idr*/
 	struct ib_uverbs_attr *attr = _ioctl_next_attr(cmd, attr_id);
 
 	/* UVERBS_ATTR_TYPE_IDR uses a 64 bit value for the idr # */
@@ -257,6 +269,7 @@ fill_attr_in_obj(struct ibv_command_buffer *cmd, uint16_t attr_id, uint32_t idr)
 static inline struct ib_uverbs_attr *
 fill_attr_out_obj(struct ibv_command_buffer *cmd, uint16_t attr_id)
 {
+    /*添加attr_id的struct ib_uverbs_attr*/
 	return fill_attr_in_obj(cmd, attr_id, 0);
 }
 
@@ -353,11 +366,13 @@ static inline struct ib_uverbs_attr *
 fill_attr_out(struct ibv_command_buffer *cmd, uint16_t attr_id, void *data,
 	      size_t len)
 {
+    /*新增attr*/
 	struct ib_uverbs_attr *attr = _ioctl_next_attr(cmd, attr_id);
 
 	if (unlikely(len > UINT16_MAX))
 		cmd->buffer_error = 1;
 
+	/*设置len,data*/
 	attr->len = len;
 	attr->data = ioctl_ptr_to_u64(data);
 

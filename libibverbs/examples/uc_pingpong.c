@@ -536,11 +536,16 @@ int main(int argc, char *argv[])
 	struct pingpong_dest     my_dest;
 	struct pingpong_dest    *rem_dest;
 	struct timeval           start, end;
+	/*指明使用哪个ib设备*/
 	char                    *ib_devname = NULL;
 	char                    *servername = NULL;
+	/*连接/监听的端口*/
 	unsigned int             port = 18515;
+	/*指明使用哪个ib_port*/
 	int                      ib_port = 1;
+	/*指明我们要交换的消息大小*/
 	unsigned int             size = 4096;
+	/*指明对应的mtu*/
 	enum ibv_mtu		 mtu = IBV_MTU_1024;
 	unsigned int             rx_depth = 500;
 	unsigned int             iters = 1000;
@@ -579,6 +584,7 @@ int main(int argc, char *argv[])
 
 		switch (c) {
 		case 'p':
+		    /*连接/监听的端口*/
 			port = strtoul(optarg, NULL, 0);
 			if (port > 65535) {
 				usage(argv[0]);
@@ -587,10 +593,12 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'd':
+		    /*指明使用哪个ib设备*/
 			ib_devname = strdupa(optarg);
 			break;
 
 		case 'i':
+		    /*指明使用哪个ib_port*/
 			ib_port = strtol(optarg, NULL, 0);
 			if (ib_port < 1) {
 				usage(argv[0]);
@@ -599,10 +607,12 @@ int main(int argc, char *argv[])
 			break;
 
 		case 's':
+		    /*指明我们要交换的消息大小*/
 			size = strtoul(optarg, NULL, 0);
 			break;
 
 		case 'm':
+		    /*指明对应的mtu*/
 			mtu = pp_mtu_to_enum(strtol(optarg, NULL, 0));
 			if (mtu == 0) {
 				usage(argv[0]);
@@ -641,6 +651,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (optind == argc - 1)
+	    /*取要连接的servername*/
 		servername = strdupa(argv[optind]);
 	else if (optind < argc) {
 		usage(argv[0]);
@@ -649,6 +660,7 @@ int main(int argc, char *argv[])
 
 	page_size = sysconf(_SC_PAGESIZE);
 
+	/*列出当前系统所有ib device*/
 	dev_list = ibv_get_device_list(NULL);
 	if (!dev_list) {
 		perror("Failed to get IB devices list");

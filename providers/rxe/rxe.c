@@ -217,6 +217,7 @@ err:
 	return errno;
 }
 
+/*注册memory region*/
 static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 				 uint64_t hca_va, int access)
 {
@@ -225,11 +226,12 @@ static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 	struct ib_uverbs_reg_mr_resp resp;
 	int ret;
 
+	/*创建verbs_mr*/
 	vmr = calloc(1, sizeof(*vmr));
 	if (!vmr)
 		return NULL;
 
-	ret = ibv_cmd_reg_mr(pd, addr, length, hca_va, access, vmr, &cmd,
+	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va, access, vmr/*verbs_mr对象*/, &cmd,
 			     sizeof(cmd), &resp, sizeof(resp));
 	if (ret) {
 		free(vmr);
@@ -374,6 +376,7 @@ static uint8_t cq_read_dlid_path_bits(struct ibv_cq_ex *current)
 
 static int rxe_destroy_cq(struct ibv_cq *ibcq);
 
+/*创建cq*/
 static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
 				    struct ibv_comp_channel *channel,
 				    int comp_vector)
@@ -382,6 +385,7 @@ static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
 	struct urxe_create_cq_resp resp = {};
 	int ret;
 
+	/*申请cq*/
 	cq = calloc(1, sizeof(*cq));
 	if (!cq)
 		return NULL;
@@ -563,7 +567,8 @@ static int rxe_destroy_cq(struct ibv_cq *ibcq)
 	return 0;
 }
 
-static int rxe_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
+/*自ibcq->queue中提取最多ne个元素*/
+static int rxe_poll_cq(struct ibv_cq *ibcq, int ne/*期待出队数目*/, struct ibv_wc *wc/*出队内容填充*/)
 {
 	struct rxe_cq *cq = to_rcq(ibcq);
 	struct rxe_queue_buf *q;
@@ -573,12 +578,16 @@ static int rxe_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 	pthread_spin_lock(&cq->lock);
 	q = cq->queue;
 
+	/*消费ne个元素*/
 	for (npolled = 0; npolled < ne; ++npolled, ++wc) {
 		if (queue_empty(q))
+		    /*队列为空*/
 			break;
 
+		/*取消费者地址*/
 		src = consumer_addr(q);
 		memcpy(wc, src, sizeof(*wc));
+		/*变更消费者指针*/
 		advance_consumer(q);
 	}
 
@@ -1109,6 +1118,7 @@ static int wr_complete(struct ibv_qp_ex *ibqp)
 	}
 
 	store_producer_index(qp->sq.queue, qp->cur_index);
+	/*通知doorbell通知kernel*/
 	ret = post_send_db(&qp->vqp.qp);
 
 	pthread_spin_unlock(&qp->sq.lock);
@@ -1474,6 +1484,7 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq,
 	if (ibwr->send_flags & IBV_SEND_INLINE) {
 		uint8_t *inline_data = wqe->dma.inline_data;
 
+		/*将ibwr中多组数据串写到inline_data中*/
 		for (i = 0; i < num_sge; i++) {
 			memcpy(inline_data,
 			       (uint8_t *)(long)ibwr->sg_list[i].addr,
@@ -1481,6 +1492,7 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq,
 			inline_data += ibwr->sg_list[i].length;
 		}
 	} else
+	    /*针对非inline数据，直接复制ibv_sge内容*/
 		memcpy(wqe->dma.sge, ibwr->sg_list,
 		       num_sge*sizeof(struct ibv_sge));
 
@@ -1501,6 +1513,7 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq,
 	return 0;
 }
 
+/*执行一个ibv_send_wr发送*/
 static int post_one_send(struct rxe_qp *qp, struct rxe_wq *sq,
 			 struct ibv_send_wr *ibwr)
 {
@@ -1509,24 +1522,30 @@ static int post_one_send(struct rxe_qp *qp, struct rxe_wq *sq,
 	unsigned int length = 0;
 	int i;
 
+	/*统计待发送内容长度*/
 	for (i = 0; i < ibwr->num_sge; i++)
 		length += ibwr->sg_list[i].length;
 
+	/*参数校验*/
 	err = validate_send_wr(qp, ibwr, length);
 	if (err) {
 		printf("validate send failed\n");
 		return err;
 	}
 
+	/*取生产者索引指向的位置对应的wqe*/
 	wqe = (struct rxe_send_wqe *)producer_addr(sq->queue);
 
+	/*利用ibwr初始化wqe*/
 	err = init_send_wqe(qp, sq, ibwr, length, wqe);
 	if (err)
 		return err;
 
+	/*检查队列是否已满*/
 	if (queue_full(sq->queue))
 		return -ENOMEM;
 
+	/*更新生产者索引*/
 	advance_producer(sq->queue);
 
 	return 0;
@@ -1547,6 +1566,7 @@ static int post_send_db(struct ibv_qp *ibqp)
 	cmd.sge_count	= 0;
 	cmd.wqe_size	= sizeof(struct ibv_send_wr);
 
+	/*通过cmd_fd向kernel发送此cmd,知会send结束*/
 	if (write(ibqp->context->cmd_fd, &cmd, sizeof(cmd)) != sizeof(cmd))
 		return errno;
 
@@ -1571,13 +1591,16 @@ static int rxe_post_send(struct ibv_qp *ibqp,
 	*bad_wr = NULL;
 
 	if (!sq || !wr_list || !sq->queue)
+	    /*sq必须已创建，sq->queue必须已初始化*/
 		return EINVAL;
 
 	pthread_spin_lock(&sq->lock);
 
+	/*循环处理，一次处理一个wr，流量存入sq队列，填充wqe*/
 	while (wr_list) {
 		rc = post_one_send(qp, sq, wr_list);
 		if (rc) {
+		    /*处理出错，指向错误的wr_list*/
 			*bad_wr = wr_list;
 			break;
 		}
@@ -1587,6 +1610,7 @@ static int rxe_post_send(struct ibv_qp *ibqp,
 
 	pthread_spin_unlock(&sq->lock);
 
+	/*通过doorbell通知kernel*/
 	err =  post_send_db(ibqp);
 	return err ? err : rc;
 }
@@ -1699,6 +1723,7 @@ static int rxe_destroy_ah(struct ibv_ah *ibah)
 	return 0;
 }
 
+/*rxe支持的context_ops*/
 static const struct verbs_context_ops rxe_ctx_ops = {
 	.query_device_ex = rxe_query_device,
 	.query_port = rxe_query_port,
@@ -1734,23 +1759,26 @@ static const struct verbs_context_ops rxe_ctx_ops = {
 	.free_context = rxe_free_context,
 };
 
-static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev,
-					       int cmd_fd,
-					       void *private_data)
+static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev/*对应的ib设备*/,
+					       int cmd_fd/*此设备关联的verbs字符设备*/,
+					       void *private_data/*私有数据*/)
 {
 	struct rxe_context *context;
 	struct ibv_get_context cmd;
 	struct ib_uverbs_get_context_resp resp;
 
+	/*申请并初始化一个通用的context*/
 	context = verbs_init_and_alloc_context(ibdev, cmd_fd, context, ibv_ctx,
 					       RDMA_DRIVER_RXE);
 	if (!context)
 		return NULL;
 
+	/*初始化verbs_context*/
 	if (ibv_cmd_get_context(&context->ibv_ctx, &cmd, sizeof(cmd),
 				&resp, sizeof(resp)))
 		goto out;
 
+	/*设置context对应的ops*/
 	verbs_set_ops(&context->ibv_ctx, &rxe_ctx_ops);
 
 	return &context->ibv_ctx;
@@ -1769,6 +1797,7 @@ static void rxe_free_context(struct ibv_context *ibctx)
 	free(context);
 }
 
+/*释放rxe_device*/
 static void rxe_uninit_device(struct verbs_device *verbs_device)
 {
 	struct rxe_device *dev = to_rdev(&verbs_device->device);
@@ -1776,6 +1805,7 @@ static void rxe_uninit_device(struct verbs_device *verbs_device)
 	free(dev);
 }
 
+/*创建rxe_device*/
 static struct verbs_device *rxe_device_alloc(struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct rxe_device *dev;
@@ -1803,4 +1833,6 @@ static const struct verbs_device_ops rxe_dev_ops = {
 	.uninit_device = rxe_uninit_device,
 	.alloc_context = rxe_alloc_context,
 };
+
+/*注册rxe设备driver*/
 PROVIDER_DRIVER(rxe, rxe_dev_ops);

@@ -42,6 +42,7 @@
 extern "C" {
 #endif
 
+/*ret非0时，errno设置ret,并返回-1*/
 static inline int rdma_seterrno(int ret)
 {
 	if (ret) {

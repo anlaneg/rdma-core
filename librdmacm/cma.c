@@ -84,6 +84,7 @@ struct cma_port {
 struct cma_device {
 	struct ibv_device  *dev;
 	struct list_node    entry;
+	/*cma设备的context*/
 	struct ibv_context *verbs;
 	struct ibv_pd	   *pd;
 	struct ibv_xrcd    *xrcd;
@@ -94,6 +95,7 @@ struct cma_device {
 	int		    max_qpsize;
 	uint8_t		    max_initiator_depth;
 	uint8_t		    max_responder_resources;
+	/*设备idx*/
 	int		    ibv_idx;
 	uint8_t		    is_device_dead : 1;
 };
@@ -265,6 +267,7 @@ static void ucma_set_af_ib_support(void)
 	rdma_destroy_id(id);
 }
 
+/*通过ibv_device构造cma_device并添加到cma_dev_list链表*/
 static struct cma_device *insert_cma_dev(struct ibv_device *dev)
 {
 	struct cma_device *cma_dev, *p;
@@ -288,6 +291,7 @@ static struct cma_device *insert_cma_dev(struct ibv_device *dev)
 				break;
 		}
 	}
+	/*按ibv_idx顺序添加到cma_dev_list*/
 	list_add_after(&cma_dev_list, &p->entry, &cma_dev->entry);
 
 	return cma_dev;
@@ -331,6 +335,7 @@ static int sync_devices_list(void)
 	}
 
 	qsort(new_list, numb_dev, sizeof(struct ibv_device *), dev_cmp);
+	/*生成cma_device,并构造初始化cma_dev_list*/
 	if (unlikely(!dev_list)) {
 		/* first sync */
 		for (j = 0; new_list[j]; j++)
@@ -395,6 +400,7 @@ int ucma_init(void)
 
 	pthread_mutex_lock(&mut);
 	if (!list_empty(&cma_dev_list)) {
+	    /*ucma已被初始化，退出*/
 		pthread_mutex_unlock(&mut);
 		return 0;
 	}
@@ -731,6 +737,7 @@ static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 	if (!id_priv)
 		return NULL;
 
+	/*设置id对应的context*/
 	id_priv->id.context = context;
 	id_priv->id.ps = ps;
 	id_priv->id.qp_type = qp_type;
@@ -743,6 +750,7 @@ static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 			goto err;
 		id_priv->sync = 1;
 	} else {
+	    /*指定了channel,直接设置*/
 		id_priv->id.channel = channel;
 	}
 
@@ -790,6 +798,7 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 
 	id_priv->handle = resp.id;/*记录cma context对应的id号*/
 	ucma_insert_id(id_priv);
+	/*设置id*/
 	*id = &id_priv->id;
 	return 0;
 
@@ -2836,6 +2845,7 @@ int rdma_create_ep(struct rdma_cm_id **id, struct rdma_addrinfo *res,
 	}
 
 out:
+    /*初始化id*/
 	*id = cm_id;
 	return 0;
 

@@ -65,13 +65,14 @@ struct nl_sock *rdmanl_socket_alloc(void)
 {
 	struct nl_sock *nl;
 
+	/*分配netlink socket结构体*/
 	nl = nl_socket_alloc();
 	if (!nl)
 		return NULL;
 	nl_socket_disable_auto_ack(nl);
 	nl_socket_disable_msg_peek(nl);
 
-	//创建rdma netlink socket
+	//初始化rdma netlink socket，打开相应fd
 	if (nl_connect(nl, NETLINK_RDMA)) {
 		nl_socket_free(nl);
 		return NULL;
@@ -138,16 +139,17 @@ int rdmanl_get_devices(struct nl_sock *nl, nl_recvmsg_msg_cb_t cb_func/*处理�
 	return 0;
 }
 
+/*获取ibidx对应的类型为name的字符设备信息*/
 int rdmanl_get_chardev(struct nl_sock *nl, int ibidx/*ib设备编号*/,
         const char *name/*chardev对应的type名称*/,
-		       nl_recvmsg_msg_cb_t cb_func, void *data)
+		       nl_recvmsg_msg_cb_t cb_func, void *data/*出参，chardev对应的信息*/)
 
 {
 	bool failed = false;
 	struct nl_msg *msg;
 	int ret;
 
-	//获取设备的chardev,指明ib设备index及name
+	//获取ib_dev设备的chardev,指明ib设备index及name
 	msg = nlmsg_alloc_simple(
 		RDMA_NL_GET_TYPE(RDMA_NL_NLDEV, RDMA_NLDEV_CMD_GET_CHARDEV), 0);
 	if (!msg)

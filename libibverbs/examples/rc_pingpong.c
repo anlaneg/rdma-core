@@ -76,7 +76,9 @@ struct pingpong_context {
 	} cq_s;
 	struct ibv_qp		*qp;
 	struct ibv_qp_ex	*qpx;
+	/*消息buffer,已按页对齐*/
 	char			*buf;
+	/*消息大小*/
 	int			 size;
 	int			 send_flags;
 	int			 rx_depth;
@@ -344,6 +346,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	ctx->send_flags = IBV_SEND_SIGNALED;
 	ctx->rx_depth   = rx_depth;
 
+	/*按页对齐，申请消息buffer*/
 	ctx->buf = memalign(page_size, size);
 	if (!ctx->buf) {
 		fprintf(stderr, "Couldn't allocate work buf.\n");
@@ -353,6 +356,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	/* FIXME memset(ctx->buf, 0, size); */
 	memset(ctx->buf, 0x7b, size);
 
+	/*创建ibv_context*/
 	ctx->context = ibv_open_device(ib_dev);
 	if (!ctx->context) {
 		fprintf(stderr, "Couldn't get context for %s\n",
@@ -360,6 +364,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		goto clean_buffer;
 	}
 
+	/*使用了sleep,创建channel*/
 	if (use_event) {
 		ctx->channel = ibv_create_comp_channel(ctx->context);
 		if (!ctx->channel) {
@@ -369,6 +374,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	} else
 		ctx->channel = NULL;
 
+	/*创建pd*/
 	ctx->pd = ibv_alloc_pd(ctx->context);
 	if (!ctx->pd) {
 		fprintf(stderr, "Couldn't allocate PD\n");
@@ -431,6 +437,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		}
 	}
 
+	/*注册内存区域*/
 	if (implicit_odp) {
 		ctx->mr = ibv_reg_mr(ctx->pd, NULL, SIZE_MAX, access_flags);
 	} else {
@@ -512,6 +519,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 			ctx->qp = ibv_create_qp_ex(ctx->context, &init_attr_ex);
 		} else {
+		    /*创建qp*/
 			ctx->qp = ibv_create_qp(ctx->pd, &init_attr);
 		}
 
@@ -642,6 +650,7 @@ static int pp_post_recv(struct pingpong_context *ctx, int n)
 	struct ibv_recv_wr *bad_wr;
 	int i;
 
+	/*尝试n次post recv*/
 	for (i = 0; i < n; ++i)
 		if (ibv_post_recv(ctx->qp, &wr, &bad_wr))
 			break;
@@ -651,11 +660,13 @@ static int pp_post_recv(struct pingpong_context *ctx, int n)
 
 static int pp_post_send(struct pingpong_context *ctx)
 {
+    /*构造一组待发送的地址*/
 	struct ibv_sge list = {
 		.addr	= use_dm ? 0 : (uintptr_t) ctx->buf,
 		.length = ctx->size,
 		.lkey	= ctx->mr->lkey
 	};
+	/*构造work request*/
 	struct ibv_send_wr wr = {
 		.wr_id	    = PINGPONG_SEND_WRID,
 		.sg_list    = &list,
@@ -676,6 +687,7 @@ static int pp_post_send(struct pingpong_context *ctx)
 
 		return ibv_wr_complete(ctx->qpx);
 	} else {
+	    /*不使用new_send,仍采用ibv_post_send进行发送完成通知*/
 		return ibv_post_send(ctx->qp, &wr, &bad_wr);
 	}
 }
@@ -797,11 +809,16 @@ int main(int argc, char *argv[])
 	struct pingpong_dest     my_dest;
 	struct pingpong_dest    *rem_dest;
 	struct timeval           start, end;
+	/*指明使用哪个ib设备*/
 	char                    *ib_devname = NULL;
 	char                    *servername = NULL;
+	/*连接/监听的端口*/
 	unsigned int             port = 18515;
+	/*指明使用哪个ib_port*/
 	int                      ib_port = 1;
+	/*指明我们要交换的消息大小*/
 	unsigned int             size = 4096;
+	/*指明对应的mtu*/
 	enum ibv_mtu		 mtu = IBV_MTU_1024;
 	unsigned int             rx_depth = 500;
 	unsigned int             iters = 1000;
@@ -848,6 +865,7 @@ int main(int argc, char *argv[])
 
 		switch (c) {
 		case 'p':
+		    /*连接/监听的端口*/
 			port = strtoul(optarg, NULL, 0);
 			if (port > 65535) {
 				usage(argv[0]);
@@ -856,10 +874,12 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'd':
+		    /*指明使用哪个ib设备*/
 			ib_devname = strdupa(optarg);
 			break;
 
 		case 'i':
+		    /*指明使用哪个ib_port*/
 			ib_port = strtol(optarg, NULL, 0);
 			if (ib_port < 1) {
 				usage(argv[0]);
@@ -868,10 +888,12 @@ int main(int argc, char *argv[])
 			break;
 
 		case 's':
+		    /*指明我们要交换的消息大小*/
 			size = strtoul(optarg, NULL, 0);
 			break;
 
 		case 'm':
+		    /*指明对应的mtu*/
 			mtu = pp_mtu_to_enum(strtol(optarg, NULL, 0));
 			if (mtu == 0) {
 				usage(argv[0]);
@@ -921,6 +943,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'N':
+		    /*指明采用new的发送*/
 			use_new_send = 1;
 			break;
 
@@ -931,18 +954,22 @@ int main(int argc, char *argv[])
 	}
 
 	if (optind == argc - 1)
+	    /*取要连接的servername*/
 		servername = strdupa(argv[optind]);
 	else if (optind < argc) {
+	    /*有多余参数，显示用法并退出*/
 		usage(argv[0]);
 		return 1;
 	}
 
 	if (use_odp && use_dm) {
+	    /*-o与-j选项冲突*/
 		fprintf(stderr, "DM memory region can't be on demand\n");
 		return 1;
 	}
 
 	if (!use_odp && prefetch_mr) {
+	    /*-P选项仅在-o选项情况下有效*/
 		fprintf(stderr, "prefetch is valid only with on-demand memory region\n");
 		return 1;
 	}
@@ -956,8 +983,10 @@ int main(int argc, char *argv[])
 		ts.comp_with_time_iters = 0;
 	}
 
+	/*取页大小*/
 	page_size = sysconf(_SC_PAGESIZE);
 
+	/*返回当前所有可用的ib设备*/
 	dev_list = ibv_get_device_list(NULL);
 	if (!dev_list) {
 		perror("Failed to get IB devices list");
@@ -965,12 +994,14 @@ int main(int argc, char *argv[])
 	}
 
 	if (!ib_devname) {
+	    /*没有指定设备，使用第一个设备*/
 		ib_dev = *dev_list;
 		if (!ib_dev) {
 			fprintf(stderr, "No IB devices found\n");
 			return 1;
 		}
 	} else {
+	    /*指定了设备名称，查找到对应的ib_dev*/
 		int i;
 		for (i = 0; dev_list[i]; ++i)
 			if (!strcmp(ibv_get_device_name(dev_list[i]), ib_devname))
@@ -1047,6 +1078,7 @@ int main(int argc, char *argv[])
 	ctx->pending = PINGPONG_RECV_WRID;
 
 	if (servername) {
+	    /*client端处理*/
 		if (validate_buf)
 			for (int i = 0; i < size; i += page_size)
 				ctx->buf[i] = i / page_size % sizeof(char);

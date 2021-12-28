@@ -77,17 +77,24 @@ struct ex_hdr {
 	struct _name {                                                         \
 		struct ib_uverbs_cmd_hdr hdr;                                  \
 		union {                                                        \
+	        /*添加kabi结构体类型，看make_abi_struct.py脚本定义*/\
 			_STRUCT_##_kabi;                                       \
 			struct _kabi core_payload;                             \
 		};                                                             \
 	};                                                                     \
+	/*定义_name结构体的别名*/\
 	typedef struct _name IBV_ABI_REQ(_enum);                               \
+	/*定义_kabi结构体的别名*/\
 	typedef struct _kabi IBV_KABI_REQ(_enum);                              \
+	/*定义_kabi_resp结构体的别名*/\
 	typedef struct _kabi_resp IBV_KABI_RESP(_enum);                        \
+	/*定义枚举，此枚举对齐方式为4*/\
 	enum { IBV_ABI_ALIGN(_enum) = 4 };                                     \
+	/*结构体struct _kabi_resp以4字节对齐*/\
 	static_assert(sizeof(struct _kabi_resp) % 4 == 0,                      \
 		      "Bad resp alignment");                                   \
 	static_assert(_enum != -1, "Bad enum");                                \
+	/*_STRUCT_##_kabi;大小不能超过struct _kabi core_payload; */\
 	static_assert(sizeof(struct _name) ==                                  \
 			      sizeof(struct ib_uverbs_cmd_hdr) +               \
 				      sizeof(struct _kabi),                    \

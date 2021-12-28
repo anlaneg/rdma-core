@@ -132,6 +132,7 @@ static int find_uverbs_nl_cb(struct nl_msg *msg, void *data)
 /* Ask the kernel for the uverbs char device information */
 static int find_uverbs_nl(struct nl_sock *nl, struct verbs_sysfs_dev *sysfs_dev)
 {
+    /*取此设备对应的uverbs client相关信息*/
 	if (rdmanl_get_chardev(nl, sysfs_dev->ibdev_idx, "uverbs",
 				  find_uverbs_nl_cb, sysfs_dev))
 		return -1;
@@ -208,11 +209,11 @@ int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list/*收集系统中可�
 	if (!nl)
 		return -EOPNOTSUPP;
 
-	//向kernel发送请求，要求列取当前net namespace所有ib设备，记在tmp_sysfs_dev_list上
+	//通过netlink向kernel发送请求，要求列取当前net namespace所有ib设备，记在tmp_sysfs_dev_list上
 	if (rdmanl_get_devices(nl, find_sysfs_devs_nl_cb/*处理返回的ib设备信息*/, tmp_sysfs_dev_list/*回调参数*/))
 		goto err;
 
-	/*遍历获取的ib设备*/
+	/*遍历获取的ib设备，排除掉非uverbs设备/无效设备*/
 	list_for_each_safe (tmp_sysfs_dev_list, dev, dev_tmp, entry) {
 		if ((find_uverbs_nl(nl, dev) && find_uverbs_sysfs(dev)) ||
 		    try_access_device(dev)) {

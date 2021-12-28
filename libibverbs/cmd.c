@@ -47,6 +47,7 @@
 
 bool verbs_allow_disassociate_destroy;
 
+/*执行alloc pd命令*/
 int ibv_cmd_alloc_pd(struct ibv_context *context, struct ibv_pd *pd,
 		     struct ibv_alloc_pd *cmd, size_t cmd_size,
 		     struct ib_uverbs_alloc_pd_resp *resp, size_t resp_size)
@@ -98,8 +99,8 @@ int ibv_cmd_open_xrcd(struct ibv_context *context, struct verbs_xrcd *xrcd,
 
 int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 		   uint64_t hca_va, int access,
-		   struct verbs_mr *vmr, struct ibv_reg_mr *cmd,
-		   size_t cmd_size,
+		   struct verbs_mr *vmr, struct ibv_reg_mr *cmd/*命令变量*/,
+		   size_t cmd_size/*命令变量长度*/,
 		   struct ib_uverbs_reg_mr_resp *resp, size_t resp_size)
 {
 	int ret;
@@ -119,14 +120,17 @@ int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 	}
 
 	cmd->hca_va 	  = hca_va;
+	/*填充pd_handle*/
 	cmd->pd_handle 	  = pd->handle;
 	cmd->access_flags = access;
 
+	/*执行memory region注册*/
 	ret = execute_cmd_write(pd->context, IB_USER_VERBS_CMD_REG_MR, cmd,
 				cmd_size, resp, resp_size);
 	if (ret)
 		return ret;
 
+	/*使用响应结果*/
 	vmr->ibv_mr.handle  = resp->mr_handle;
 	vmr->ibv_mr.lkey    = resp->lkey;
 	vmr->ibv_mr.rkey    = resp->rkey;

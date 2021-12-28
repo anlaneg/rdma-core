@@ -40,17 +40,23 @@ def in_struct(ln,FO,nesting=0):
 def find_struct(ln,FO):
     """Look for the start of a top level structure"""
     if ln.startswith("struct ") or ln.startswith("union "):
+        #遇到匹配的行，生成匿名结构体定行首行
         g = re.match(r"(struct|union)\s+(\S+)\s+{",ln);
         FO.write("#define _STRUCT_%s %s { \\\n"%(g.group(2),g.group(1)));
+        #返回结构体内部处理，直接复制
         return in_struct;
     return find_struct;
 
+#打开argv[1]用于读取，打开argv[2]用于写入
 with open(sys.argv[1]) as FI:
     with open(sys.argv[2],"w") as FO:
         state = find_struct;
+        #遍历输入文件的每一行
         for ln in FI:
             # Drop obvious comments
             ln = ln.strip();
             ln = re.sub(r"/\*.*\*/","",ln);
             ln = re.sub(r"//.*$","",ln);
+            #调用find_struct，并返回下一行的处理函数
+            #这种处理方式为简化的语法解析处理，极简洁
             state = state(ln,FO);

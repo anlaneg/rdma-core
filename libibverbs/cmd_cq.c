@@ -48,6 +48,7 @@ static int ibv_icmd_create_cq(struct ibv_context *context, int cqe,
 
 	cq->context = context;
 
+	/*增加attr，并填充attr_id及value*/
 	handle = fill_attr_out_obj(cmdb, UVERBS_ATTR_CREATE_CQ_HANDLE);
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_CREATE_CQ_RESP_CQE, &resp_cqe);
 
@@ -67,9 +68,11 @@ static int ibv_icmd_create_cq(struct ibv_context *context, int cqe,
 		if ((flags & ~IB_UVERBS_CQ_FLAGS_TIMESTAMP_COMPLETION) ||
 		    (!(cmd_flags & CREATE_CQ_CMD_FLAGS_TS_IGNORED_EX)))
 			fallback_require_ex(cmdb);
+		/*添加cq_flags*/
 		fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_FLAGS, flags);
 	}
 
+	/*执行create_cq*/
 	switch (execute_ioctl_fallback(cq->context, create_cq, cmdb, &ret)) {
 	case TRY_WRITE: {
 		DECLARE_LEGACY_UHW_BUFS(link, IB_USER_VERBS_CMD_CREATE_CQ);
@@ -191,6 +194,7 @@ int ibv_cmd_destroy_cq(struct ibv_cq *cq)
 			.cq_handle = cq->handle,
 		};
 
+		/*执行destroy cq命令*/
 		ret = execute_cmd_write(cq->context,
 					IB_USER_VERBS_CMD_DESTROY_CQ, &req,
 					sizeof(req), &resp, sizeof(resp));

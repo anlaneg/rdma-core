@@ -88,13 +88,17 @@ enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
 	struct verbs_ex_private *priv = get_priv(ctx);
 
 	if (bitmap_test_bit(priv->unsupported_ioctls, cmd_bit))
+	    /*此命令不支持ioctl*/
 		return _check_legacy(cmdb, ret);
 
+	/*通过ioctl进行调用*/
 	*ret = execute_ioctl(ctx, cmdb);
 
 	if (likely(*ret == 0))
+	    /*如果执行成功，则返回*/
 		return SUCCESS;
 
+	/*执行失败，尝试fallback到write接口*/
 	if (*ret == ENOTTY) {
 		/* ENOTTY means the ioctl framework is entirely absent */
 		bitmap_fill(priv->unsupported_ioctls, VERBS_OPS_NUM);
@@ -230,19 +234,21 @@ static int ioctl_write(struct ibv_context *ctx, unsigned int write_method,
 	return execute_ioctl(ctx, cmdb);
 }
 
-int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
-		       struct ib_uverbs_cmd_hdr *req, size_t core_req_size,
-		       size_t req_size, void *resp, size_t core_resp_size,
+int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method/*write方法名*/,
+		       struct ib_uverbs_cmd_hdr *req/*req命令头*/, size_t core_req_size,
+		       size_t req_size/*request命令长度*/, void *resp, size_t core_resp_size,
 		       size_t resp_size)
 {
 	struct verbs_ex_private *priv = get_priv(ctx);
 
 	if (!VERBS_WRITE_ONLY && (VERBS_IOCTL_ONLY || priv->use_ioctl_write))
+	    /*通过ioctl方式进行write操作*/
 		return ioctl_write(ctx, write_method, req + 1,
 				   core_req_size - sizeof(*req),
 				   req_size - sizeof(*req), resp,
 				   core_resp_size, resp_size);
 
+	/*直接调用write函数进行操作*/
 	req->command = write_method;
 	req->in_words = __check_divide(req_size, 4);
 	req->out_words = __check_divide(resp_size, 4);

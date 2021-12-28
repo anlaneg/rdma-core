@@ -70,8 +70,11 @@ void load_drivers(void);
 #endif
 
 struct verbs_ex_private {
+    /*指明这些命令是否支持ioctl*/
 	BITMAP_DECLARE(unsupported_ioctls, VERBS_OPS_NUM);
+	/*driver类型*/
 	uint32_t driver_id;
+	/*是否使用ioctl中的write方法*/
 	bool use_ioctl_write;
 	struct verbs_context_ops ops;
 	bool imported;
@@ -84,7 +87,7 @@ static inline struct verbs_ex_private *get_priv(struct ibv_context *ctx)
 	return container_of(ctx, struct verbs_context, context)->priv;
 }
 
-//取ibv_context对应的ops
+//取ibv_context对应private的ops
 static inline const struct verbs_context_ops *get_ops(struct ibv_context *ctx)
 {
 	return &get_priv(ctx)->ops;

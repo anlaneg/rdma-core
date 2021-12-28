@@ -36,7 +36,9 @@
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 
+/*对端服务ip*/
 static const char *server = "127.0.0.1";
+/*对端服务端口*/
 static const char *port = "7471";
 
 static struct rdma_cm_id *id;
@@ -45,6 +47,7 @@ static int send_flags;
 static uint8_t send_msg[16];
 static uint8_t recv_msg[16];
 
+/*client总入口*/
 static int run(void)
 {
 	struct rdma_addrinfo hints, *res;
@@ -146,9 +149,11 @@ int main(int argc, char **argv)
 	while ((op = getopt(argc, argv, "s:p:")) != -1) {
 		switch (op) {
 		case 's':
+		    /*server地址*/
 			server = optarg;
 			break;
 		case 'p':
+		    /*对端port*/
 			port = optarg;
 			break;
 		default:

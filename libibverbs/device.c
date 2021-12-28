@@ -51,10 +51,10 @@
 static pthread_mutex_t dev_list_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct list_head device_list = LIST_HEAD_INIT(device_list);
 
-//返回ibv_device设备数目，及ibv_device设备数组
+//返回当前系统所有ibv_device设备数目，及ibv_device设备数组
 LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
-		   struct ibv_device **/*返回值类型*/,
-		   int *num/*出参*/)
+		   struct ibv_device **/*返回值类型，识别的所有ibv_device指针*/,
+		   int *num/*出参,识别的ibv_device数目*/)
 {
 	struct ibv_device **l = NULL;
 	struct verbs_device *device;
@@ -67,11 +67,14 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 
 	pthread_mutex_lock(&dev_list_lock);
 	if (!initialized) {
+	    /*未初始化，执行verbs初始化*/
 		if (ibverbs_init())
 			goto out;
+		/*标明已初始化*/
 		initialized = true;
 	}
 
+	/*获取系统内所有ib设备列表*/
 	num_devices = ibverbs_get_device_list(&device_list);
 	if (num_devices < 0) {
 		errno = -num_devices;
@@ -95,20 +98,24 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 		*num = num_devices;
 out:
 	pthread_mutex_unlock(&dev_list_lock);
+	/*返回收集的ibv_device*/
 	return l;
 }
 
+/*释放由ibv_get_device_list函数识别出来的ibv_device*/
 LATEST_SYMVER_FUNC(ibv_free_device_list, 1_1, "IBVERBS_1.1",
 		   void,
 		   struct ibv_device **list)
 {
 	int i;
 
+	/*遍历list指定的ibv_device,并将其释放*/
 	for (i = 0; list[i]; i++)
 		ibverbs_device_put(list[i]);
 	free(list);
 }
 
+/*取ibv设备名称*/
 LATEST_SYMVER_FUNC(ibv_get_device_name, 1_1, "IBVERBS_1.1",
 		   const char *,
 		   struct ibv_device *device)
@@ -154,6 +161,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_guid, 1_1, "IBVERBS_1.1",
 	return htobe64(guid);
 }
 
+/*取ibv设备的ibdev_idx*/
 int ibv_get_device_index(struct ibv_device *device)
 {
 	struct verbs_sysfs_dev *sysfs_dev = verbs_get_device(device)->sysfs;
@@ -201,6 +209,7 @@ __lib_ibv_create_cq_ex(struct ibv_context *context,
 	return cq;
 }
 
+/*检查是否有ioctl write*/
 static bool has_ioctl_write(struct ibv_context *ctx)
 {
 	int rc;
@@ -267,14 +276,15 @@ int verbs_init_context(struct verbs_context *context_ex,
  * driver wrapper, and context_offset is the number of bytes into the wrapper
  * structure where the verbs_context starts.
  */
-void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd,
-				    size_t alloc_size,
-				    struct verbs_context *context_offset,
+void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd/*字符设备*/,
+				    size_t alloc_size/*context申请的大小*/,
+				    struct verbs_context *context_offset/*driver context到verbs_context的偏移量*/,
 				    uint32_t driver_id)
 {
 	void *drv_context;
 	struct verbs_context *context;
 
+	/*申请driver context*/
 	drv_context = calloc(1, alloc_size);
 	if (!drv_context) {
 		errno = ENOMEM;
@@ -282,11 +292,14 @@ void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd,
 		return NULL;
 	}
 
+	/*dirver-context的后半部分为verbs_context*/
 	context = drv_context + (uintptr_t)context_offset;
 
+	/*初始化context*/
 	if (verbs_init_context(context, device, cmd_fd, driver_id))
 		goto err_free;
 
+	/*返回driver context*/
 	return drv_context;
 
 err_free:
@@ -325,9 +338,10 @@ static void set_lib_ops(struct verbs_context *vctx)
 		(void (*)(void))vctx->ibv_destroy_flow;
 }
 
-//打开ib device
+//打开ib device，获取其对应的ibv_context
 struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_data)
 {
+    /*取此设备对应的verbs_device*/
 	struct verbs_device *verbs_device = verbs_get_device(device);
 	int cmd_fd = -1;
 	struct verbs_context *context_ex;
@@ -349,7 +363,7 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	 * cmd_fd ownership is transferred into alloc_context, if it fails
 	 * then it closes cmd_fd and returns NULL
 	 */
-	//由verbs设备创建context
+	//由此verbs设备的provider负责创建context
 	context_ex = verbs_device->ops->alloc_context(device, cmd_fd/*device对应的字符设备fd*/, private_data);
 	if (!context_ex)
 		return NULL;
@@ -368,12 +382,12 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	return &context_ex->context;
 }
 
-/*打开指定ib 设备，返回其对应的ibv_context*/
+/*打开指定ib设备，返回其对应的ibv_context*/
 LATEST_SYMVER_FUNC(ibv_open_device, 1_1, "IBVERBS_1.1",
 		   struct ibv_context *,
 		   struct ibv_device *device)
 {
-	return verbs_open_device(device, NULL);
+	return verbs_open_device(device, NULL/*私有数据为空*/);
 }
 
 struct ibv_context *ibv_import_device(int cmd_fd)

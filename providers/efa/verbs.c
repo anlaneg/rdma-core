@@ -187,6 +187,7 @@ struct ibv_pd *efa_alloc_pd(struct ibv_context *ibvctx)
 	struct efa_pd *pd;
 	int err;
 
+	/*申请pd空间*/
 	pd = calloc(1, sizeof(*pd));
 	if (!pd)
 		return NULL;

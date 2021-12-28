@@ -44,6 +44,7 @@
 unsigned int __ioctl_final_num_attrs(unsigned int num_attrs,
 				     struct ibv_command_buffer *link)
 {
+    /*遍历link,合并num_attrs*/
 	for (; link; link = link->next)
 		num_attrs += link->next_attr - link->hdr.attrs;
 
@@ -125,6 +126,7 @@ static void finalize_attrs(struct ibv_command_buffer *cmd)
 	}
 }
 
+/*通过ioctl执行rdma command*/
 int execute_ioctl(struct ibv_context *context, struct ibv_command_buffer *cmd)
 {
 	struct verbs_context *vctx = verbs_get_ctx(context);
@@ -144,6 +146,7 @@ int execute_ioctl(struct ibv_context *context, struct ibv_command_buffer *cmd)
 	cmd->hdr.reserved2 = 0;
 	cmd->hdr.driver_id = vctx->priv->driver_id;
 
+	/*ib_uverbs_ioctl将被调用*/
 	if (ioctl(context->cmd_fd, RDMA_VERBS_IOCTL, &cmd->hdr))
 		return errno;
 

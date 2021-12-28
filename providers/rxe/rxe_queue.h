@@ -67,6 +67,7 @@ static inline _atomic_t *consumer(struct rxe_queue_buf *q)
 /* Must hold consumer_index lock (used by CQ only) */
 static inline int queue_empty(struct rxe_queue_buf *q)
 {
+    /*检查q队列是否为空*/
 	__u32 prod;
 	__u32 cons;
 
@@ -82,15 +83,19 @@ static inline int queue_full(struct rxe_queue_buf *q)
 	__u32 prod;
 	__u32 cons;
 
+	/*取生产者索引*/
 	prod = atomic_load_explicit(producer(q), memory_order_relaxed);
+	/*取消费者索引*/
 	cons = atomic_load_explicit(consumer(q), memory_order_acquire);
 
+	/*检查队列是否为满*/
 	return (cons == ((prod + 1) & q->index_mask));
 }
 
 /* Must hold producer_index lock */
 static inline void advance_producer(struct rxe_queue_buf *q)
 {
+    /*更新生产者指针*/
 	__u32 prod;
 
 	prod = atomic_load_explicit(producer(q), memory_order_relaxed);
@@ -102,6 +107,7 @@ static inline void advance_producer(struct rxe_queue_buf *q)
 /* Must hold consumer_index lock */
 static inline void advance_consumer(struct rxe_queue_buf *q)
 {
+    /*更新消费者指针*/
 	__u32 cons;
 
 	cons = atomic_load_explicit(consumer(q), memory_order_relaxed);
@@ -141,8 +147,10 @@ static inline void *producer_addr(struct rxe_queue_buf *q)
 {
 	__u32 prod;
 
+	/*取q生产者索引*/
 	prod = atomic_load_explicit(producer(q), memory_order_relaxed);
 
+	/*取prod号元素*/
 	return q->data + (prod << q->log2_elem_size);
 }
 
@@ -151,8 +159,10 @@ static inline void *consumer_addr(struct rxe_queue_buf *q)
 {
 	__u32 cons;
 
+	/*取q消费者索引*/
 	cons = atomic_load_explicit(consumer(q), memory_order_relaxed);
 
+	/*取cons号元素*/
 	return q->data + (cons << q->log2_elem_size);
 }
 

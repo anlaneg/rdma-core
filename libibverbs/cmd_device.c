@@ -85,6 +85,7 @@ int ibv_cmd_query_port(struct ibv_context *context, uint8_t port_num,
 		memset(cmd->reserved, 0, sizeof(cmd->reserved));
 		memset(&resp, 0, sizeof(resp));
 
+		/*执行query port命令*/
 		ret = execute_cmd_write(context,
 					IB_USER_VERBS_CMD_QUERY_PORT, cmd,
 					cmd_size, &resp, sizeof(resp));
@@ -113,6 +114,7 @@ int ibv_cmd_alloc_async_fd(struct ibv_context *context)
 	struct ib_uverbs_attr *handle;
 	int ret;
 
+	/*申请异步fd*/
 	handle = fill_attr_out_fd(cmdb, UVERBS_ATTR_ASYNC_EVENT_ALLOC_FD_HANDLE,
 				  0);
 
@@ -147,6 +149,7 @@ static int cmd_get_context(struct verbs_context *context_ex,
 	 */
 	switch (execute_ioctl_fallback(context, free_context, cmdb, &ret)) {
 	case TRY_WRITE: {
+	    /*ioctl执行失败，回退到write方式进行执行get_context*/
 		DECLARE_LEGACY_UHW_BUFS(link, IB_USER_VERBS_CMD_GET_CONTEXT);
 
 		ret = execute_write_bufs(context, IB_USER_VERBS_CMD_GET_CONTEXT,
@@ -176,6 +179,7 @@ int ibv_cmd_get_context(struct verbs_context *context_ex,
 			struct ib_uverbs_get_context_resp *resp,
 			size_t resp_size)
 {
+    /*定义command buffer:cmdb,调用get context方法*/
 	DECLARE_CMD_BUFFER_COMPAT(cmdb, UVERBS_OBJECT_DEVICE,
 				  UVERBS_METHOD_GET_CONTEXT, cmd, cmd_size,
 				  resp, resp_size);
@@ -556,6 +560,7 @@ int ibv_cmd_query_device_any(struct ibv_context *context,
 	if (attr_size == sizeof(attr->orig_attr)) {
 		struct ibv_query_device cmd = {};
 
+		/*执行query device命令*/
 		err = execute_cmd_write(context, IB_USER_VERBS_CMD_QUERY_DEVICE,
 					&cmd, sizeof(cmd), &resp->base,
 					sizeof(resp->base));

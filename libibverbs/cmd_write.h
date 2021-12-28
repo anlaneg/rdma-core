@@ -145,7 +145,7 @@ int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
 		       struct ib_uverbs_cmd_hdr *req, size_t core_req_size,
 		       size_t req_size, void *resp, size_t core_resp_size,
 		       size_t resp_size);
-#define execute_cmd_write(ctx, enum, cmd, cmd_size, resp, resp_size)           \
+#define execute_cmd_write(ctx, enum/*write方法*/, cmd/*request消息头*/, cmd_size/*消息长度*/, resp/*响应结果*/, resp_size/*响应buffer长度*/)           \
 	({                                                                     \
 		(cmd)->core_payload.response = ioctl_ptr_to_u64(resp);         \
 		_execute_cmd_write(                                            \
@@ -157,7 +157,7 @@ int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
 	})
 
 /* For write() commands that have no response */
-#define execute_cmd_write_req(ctx, enum, cmd, cmd_size)                        \
+#define execute_cmd_write_req(ctx, enum/*write方法*/, cmd/*request消息头*/, cmd_size/*消息长度*/)                        \
 	({                                                                     \
 		static_assert(sizeof(IBV_KABI_RESP(enum)) == 0,                \
 			      "Method has a response!");                       \
@@ -173,7 +173,7 @@ int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
  * needed if the core structure ends in a flex array, as the internal sizeof()
  * in execute_cmd_write() will give the wrong size.
  */
-#define execute_cmd_write_no_uhw(ctx, enum, cmd, cmd_size, resp, resp_size)    \
+#define execute_cmd_write_no_uhw(ctx, enum/*write方法*/, cmd/*request消息头*/, cmd_size/*消息长度*/, resp/*响应结果*/, resp_size/*响应buffer长度*/)    \
 	({                                                                     \
 		(cmd)->core_payload.response = ioctl_ptr_to_u64(resp);         \
 		_execute_cmd_write(                                            \
@@ -244,6 +244,7 @@ int _execute_cmd_write_ex(struct ibv_context *ctx, unsigned int write_method,
  * These two macros are used only with execute_ioctl_fallback - they allow the
  * IOCTL code to be elided by the compiler when disabled.
  */
+/*定义command buffer,并指定link*/
 #define DECLARE_FBCMD_BUFFER DECLARE_COMMAND_BUFFER_LINK
 
 /*
