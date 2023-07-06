@@ -54,13 +54,14 @@ struct rxe_context {
 /* common between cq and cq_ex */
 struct rxe_cq {
 	struct verbs_cq		vcq;
-	struct mminfo		mmap_info;
+	struct mminfo		mmap_info;/*cq对应的映射信息*/
+	/*cq队列，用户态与kernel共同维护*/
 	struct rxe_queue_buf	*queue;
-	pthread_spinlock_t	lock;
+	pthread_spinlock_t	lock;/*多线程队列保护*/
 
 	/* new API support */
 	struct ib_uverbs_wc	*wc;
-	size_t			wc_size;
+	size_t			wc_size;/*记录cqe的大小*/
 	uint32_t		cur_index;
 };
 
@@ -80,12 +81,15 @@ struct rxe_wq {
 
 struct rxe_qp {
 	struct verbs_qp		vqp;
+	/*记录rq的映射信息*/
 	struct mminfo		rq_mmap_info;
 	/*接收队列*/
 	struct rxe_wq		rq;
+	/*记录sq的映射信息*/
 	struct mminfo		sq_mmap_info;
 	/*发送队列*/
 	struct rxe_wq		sq;
+	/*全局发送用编号*/
 	unsigned int		ssn;
 
 	/* new API support */

@@ -219,6 +219,7 @@ struct ibv_device_attr {
 	int			max_srq_sge;
 	uint16_t		max_pkeys;
 	uint8_t			local_ca_ack_delay;
+	/*设备包含的ib_port最大数目*/
 	uint8_t			phys_port_cnt;
 };
 
@@ -603,6 +604,7 @@ struct ibv_wc {
 	uint8_t			dlid_path_bits;
 };
 
+/*内存访问标记*/
 enum ibv_access_flags {
 	IBV_ACCESS_LOCAL_WRITE		= 1,
 	IBV_ACCESS_REMOTE_WRITE		= (1<<1),
@@ -610,6 +612,7 @@ enum ibv_access_flags {
 	IBV_ACCESS_REMOTE_ATOMIC	= (1<<3),
 	IBV_ACCESS_MW_BIND		= (1<<4),
 	IBV_ACCESS_ZERO_BASED		= (1<<5),
+	/*需要在demand模式下运行*/
 	IBV_ACCESS_ON_DEMAND		= (1<<6),
 	IBV_ACCESS_HUGETLB		= (1<<7),
 	IBV_ACCESS_RELAXED_ORDERING	= IBV_ACCESS_OPTIONAL_FIRST,
@@ -625,6 +628,7 @@ struct ibv_mw_bind_info {
 struct ibv_pd {
     /*指向其对应的context*/
 	struct ibv_context     *context;
+	/*kernel返回的pd handle*/
 	uint32_t		handle;
 };
 
@@ -660,12 +664,15 @@ enum ibv_rereg_mr_flags {
 };
 
 struct ibv_mr {
+    /*所属的context*/
 	struct ibv_context     *context;
+	/*所属的pd*/
 	struct ibv_pd	       *pd;
 	/*待注册的地址*/
 	void		       *addr;
 	/*待注册的地址长度*/
 	size_t			length;
+	/*通过此handle可以查找到对应的mr*/
 	uint32_t		handle;
 	/*本端key*/
 	uint32_t		lkey;
@@ -762,6 +769,7 @@ struct ibv_ah_attr {
 	uint8_t			src_path_bits;
 	uint8_t			static_rate;
 	uint8_t			is_global;
+	/*port编号*/
 	uint8_t			port_num;
 };
 
@@ -898,7 +906,7 @@ enum ibv_qp_type {
 	IBV_QPT_RC = 2,
 	IBV_QPT_UC,
 	IBV_QPT_UD,
-	IBV_QPT_RAW_PACKET = 8,
+	IBV_QPT_RAW_PACKET = 8,/*qp类型，传递raw packet*/
 	IBV_QPT_XRC_SEND = 9,
 	IBV_QPT_XRC_RECV,
 	IBV_QPT_DRIVER = 0xff,
@@ -914,10 +922,13 @@ struct ibv_qp_cap {
 
 struct ibv_qp_init_attr {
 	void		       *qp_context;
+	/*发送对应的cq*/
 	struct ibv_cq	       *send_cq;
+	/*接收对应的cq*/
 	struct ibv_cq	       *recv_cq;
 	struct ibv_srq	       *srq;
 	struct ibv_qp_cap	cap;
+	/*qp类型*/
 	enum ibv_qp_type	qp_type;
 	int			sq_sig_all;
 };
@@ -965,14 +976,18 @@ struct ibv_rx_hash_conf {
 
 struct ibv_qp_init_attr_ex {
 	void		       *qp_context;
+	/*send对应的cq*/
 	struct ibv_cq	       *send_cq;
+	/*recv对应的cq*/
 	struct ibv_cq	       *recv_cq;
 	struct ibv_srq	       *srq;
 	struct ibv_qp_cap	cap;
+	/*qp类型*/
 	enum ibv_qp_type	qp_type;
 	int			sq_sig_all;
 
 	uint32_t		comp_mask;
+	/*对应的pd*/
 	struct ibv_pd	       *pd;
 	struct ibv_xrcd	       *xrcd;
 	uint32_t                create_flags;
@@ -1128,7 +1143,7 @@ struct ibv_send_wr {
 	/*指向另一个send_wr,用于串成链表*/
 	struct ibv_send_wr     *next;
 	struct ibv_sge	       *sg_list;
-	/*表示ibv_sge数组大小*/
+	/*表示sg_list数组大小*/
 	int			num_sge;
 	enum ibv_wr_opcode	opcode;
 	unsigned int		send_flags;
@@ -1466,6 +1481,7 @@ struct ibv_comp_channel {
 };
 
 struct ibv_cq {
+    /*cq所属的context*/
 	struct ibv_context     *context;
 	struct ibv_comp_channel *channel;
 	void		       *cq_context;
@@ -1936,17 +1952,24 @@ enum {
 };
 
 struct ibv_device {
-	struct _ibv_device_ops	_ops;//设备操作集
-	enum ibv_node_type	node_type;//ib设备类型
-	enum ibv_transport_type	transport_type;//传输层类型
+    //设备操作集(虚假的ops)
+	struct _ibv_device_ops	_ops;
+	//ib设备类型
+	enum ibv_node_type	node_type;
+	//传输层类型
+	enum ibv_transport_type	transport_type;
 	/* Name of underlying kernel IB device, eg "mthca0" */
-	char			name[IBV_SYSFS_NAME_MAX];//ib设备名称
+	//ib设备名称(例如rxe0）
+	char			name[IBV_SYSFS_NAME_MAX];
 	/* Name of uverbs device, eg "uverbs0" */
-	char			dev_name[IBV_SYSFS_NAME_MAX];//设备名称
+	//设备名称（例如uverbs0)
+	char			dev_name[IBV_SYSFS_NAME_MAX];
 	/* Path to infiniband_verbs class device in sysfs */
-	char			dev_path[IBV_SYSFS_PATH_MAX];//设备在sysfs中的路径信息
+	//设备在sysfs中的路径信息,例如：/sys/class/infiniband_verbs/uverbs0
+	char			dev_path[IBV_SYSFS_PATH_MAX];
 	/* Path to infiniband class device in sysfs */
-	char			ibdev_path[IBV_SYSFS_PATH_MAX];//ib设备在sysfs中的路径信息
+	//ib设备在sysfs中的路径信息，例如：/sys/class/infiniband/rxe0
+	char			ibdev_path[IBV_SYSFS_PATH_MAX];
 };
 
 struct _compat_ibv_port_attr;
@@ -1966,6 +1989,7 @@ struct ibv_context_ops {
 					   struct ibv_mw_bind *mw_bind);
 	int			(*dealloc_mw)(struct ibv_mw *mw);
 	void *(*_compat_create_cq)(void);
+	/*轮询cq队列*/
 	int			(*poll_cq)(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
 	int			(*req_notify_cq)(struct ibv_cq *cq, int solicited_only);
 	void *(*_compat_cq_event)(void);
@@ -2003,6 +2027,7 @@ struct ibv_context {
 	/*异步fd*/
 	int			async_fd;
 	int			num_comp_vectors;
+	/*保护用结构*/
 	pthread_mutex_t		mutex;
 	void		       *abi_compat;
 };
@@ -2019,7 +2044,7 @@ enum ibv_create_cq_attr_flags {
 
 struct ibv_cq_init_attr_ex {
 	/* Minimum number of entries required for CQ */
-	uint32_t			cqe;
+	uint32_t			cqe;/*cqe数目*/
 	/* Consumer-supplied context returned for completion events */
 	void			*cq_context;
 	/* Completion channel where completion events will be queued.
@@ -2169,14 +2194,17 @@ struct verbs_context {
 					     struct ibv_xrcd_init_attr *xrcd_init_attr);
 	int			(*close_xrcd)(struct ibv_xrcd *xrcd);
 	uint64_t _ABI_placeholder3;
+	/*verbs context结构体大小*/
 	size_t   sz;			/* Must be immediately before struct ibv_context */
 	//ibv_context结构
 	struct ibv_context context;	/* Must be last field in the struct */
 };
 
+/*由ibv_context获取verbs_context*/
 static inline struct verbs_context *verbs_get_ctx(struct ibv_context *ctx)
 {
 	if (ctx->abi_compat != __VERBS_ABI_IS_EXTENDED)
+	    /*abi不兼容，直接返回NULL*/
 		return NULL;
 
 	/* open code container_of to not pollute the global namespace */
@@ -2186,9 +2214,11 @@ static inline struct verbs_context *verbs_get_ctx(struct ibv_context *ctx)
 }
 
 #define verbs_get_ctx_op(ctx, op) ({ \
+    /*由ib context获得verbs context*/\
 	struct verbs_context *__vctx = verbs_get_ctx(ctx); \
+	/*添加校验，确保返回的ctx满足条件*/\
 	(!__vctx || (__vctx->sz < sizeof(*__vctx) - offsetof(struct verbs_context, op)) || \
-	 !__vctx->op) ? NULL : __vctx; })
+	 !__vctx->op) ? NULL/*校验失败的，返回NULL*/ : __vctx; })
 
 /**
  * ibv_get_device_list - Get list of IB devices currently available
@@ -2813,6 +2843,7 @@ static inline
 struct ibv_cq_ex *ibv_create_cq_ex(struct ibv_context *context,
 				   struct ibv_cq_init_attr_ex *cq_attr)
 {
+    /*创建cq_ex，先拿到verbs context*/
 	struct verbs_context *vctx = verbs_get_ctx_op(context, create_cq_ex);
 
 	if (!vctx) {
@@ -2820,6 +2851,7 @@ struct ibv_cq_ex *ibv_create_cq_ex(struct ibv_context *context,
 		return NULL;
 	}
 
+	/*再通过context调用create_cq_ex*/
 	return vctx->create_cq_ex(context, cq_attr);
 }
 
@@ -2879,6 +2911,7 @@ void ibv_ack_cq_events(struct ibv_cq *cq, unsigned int nevents);
  */
 static inline int ibv_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc)
 {
+	/*通过ops轮询cq队列*/
 	return cq->context->ops.poll_cq(cq, num_entries, wc);
 }
 
@@ -3104,7 +3137,7 @@ ibv_query_rt_values_ex(struct ibv_context *context,
  * ibv_query_device_ex - Get extended device properties
  */
 static inline int
-ibv_query_device_ex(struct ibv_context *context,
+ibv_query_device_ex(struct ibv_context *context/*ib设备context*/,
 		    const struct ibv_query_device_ex_input *input,
 		    struct ibv_device_attr_ex *attr)
 {
@@ -3118,6 +3151,7 @@ ibv_query_device_ex(struct ibv_context *context,
 	if (!vctx)
 		goto legacy;
 
+	/*查询设备属性*/
 	ret = vctx->query_device_ex(context, input, attr, sizeof(*attr));
 	if (ret == EOPNOTSUPP || ret == ENOSYS)
 		goto legacy;
@@ -3333,7 +3367,7 @@ static inline int ibv_destroy_rwq_ind_table(struct ibv_rwq_ind_table *rwq_ind_ta
 static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
 				struct ibv_send_wr **bad_wr/*出参，损坏的wr*/)
 {
-    /*调用context ops完成数据发送*/
+    /*调用context ops向qp中发送数据*/
 	return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 

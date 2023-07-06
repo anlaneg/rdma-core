@@ -158,7 +158,8 @@ static int pp_connect_ctx(struct pingpong_context *ctx, int port, int my_psn,
 	return 0;
 }
 
-static struct pingpong_dest *pp_client_exch_dest(const char *servername, int port,
+/*两端通过带外交换pingpong_dest*/
+static struct pingpong_dest *pp_client_exch_dest(const char *servername/*目的地址*/, int port/*目的端口*/,
 						 const struct pingpong_dest *my_dest)
 {
 	struct addrinfo *res, *t;
@@ -173,9 +174,11 @@ static struct pingpong_dest *pp_client_exch_dest(const char *servername, int por
 	struct pingpong_dest *rem_dest = NULL;
 	char gid[33];
 
+	/*格式化目的port*/
 	if (asprintf(&service, "%d", port) < 0)
 		return NULL;
 
+	/*解析目的地址*/
 	n = getaddrinfo(servername, service, &hints, &res);
 
 	if (n < 0) {
@@ -184,9 +187,12 @@ static struct pingpong_dest *pp_client_exch_dest(const char *servername, int por
 		return NULL;
 	}
 
+	/*遍历解析结果*/
 	for (t = res; t; t = t->ai_next) {
+		/*创建与解析地址匹配的socket*/
 		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
 		if (sockfd >= 0) {
+			/*连接到对应，如果成功，则跳出*/
 			if (!connect(sockfd, t->ai_addr, t->ai_addrlen))
 				break;
 			close(sockfd);
@@ -198,31 +204,40 @@ static struct pingpong_dest *pp_client_exch_dest(const char *servername, int por
 	free(service);
 
 	if (sockfd < 0) {
+		/*与对端连接失败*/
 		fprintf(stderr, "Couldn't connect to %s:%d\n", servername, port);
 		return NULL;
 	}
 
+	/*将gid内容转换后写入gid中*/
 	gid_to_wire_gid(&my_dest->gid, gid);
+	/*格式化my_dest,并填充到msg中*/
 	sprintf(msg, "%04x:%06x:%06x:%s", my_dest->lid, my_dest->qpn,
 							my_dest->psn, gid);
+
+	/*将msg填充发送给对端*/
 	if (write(sockfd, msg, sizeof msg) != sizeof msg) {
 		fprintf(stderr, "Couldn't send local address\n");
 		goto out;
 	}
 
+	/*从对端读取响应，将内容填充到msg*/
 	if (read(sockfd, msg, sizeof msg) != sizeof msg ||
+			/*并向对端写done*/
 	    write(sockfd, "done", sizeof "done") != sizeof "done") {
 		perror("client read/write");
 		fprintf(stderr, "Couldn't read/write remote address\n");
 		goto out;
 	}
 
+	/*解析server端响应的msg,并填充到rem_dest中*/
 	rem_dest = malloc(sizeof *rem_dest);
 	if (!rem_dest)
 		goto out;
 
 	sscanf(msg, "%x:%x:%x:%s", &rem_dest->lid, &rem_dest->qpn,
 						&rem_dest->psn, gid);
+	/*填充远端gid*/
 	wire_gid_to_gid(gid, &rem_dest->gid);
 
 out:
@@ -252,6 +267,7 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 	if (asprintf(&service, "%d", port) < 0)
 		return NULL;
 
+	/*解析service*/
 	n = getaddrinfo(NULL, service, &hints, &res);
 
 	if (n < 0) {
@@ -260,6 +276,7 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 		return NULL;
 	}
 
+	/*遍历解析地址，完成端口监听*/
 	for (t = res; t; t = t->ai_next) {
 		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
 		if (sockfd >= 0) {
@@ -290,6 +307,7 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 		return NULL;
 	}
 
+	/*读取client发送过来的消息*/
 	n = read(connfd, msg, sizeof msg);
 	if (n != sizeof msg) {
 		perror("server read");
@@ -301,10 +319,12 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 	if (!rem_dest)
 		goto out;
 
+	/*解析目地地址*/
 	sscanf(msg, "%x:%x:%x:%s", &rem_dest->lid, &rem_dest->qpn,
 							&rem_dest->psn, gid);
 	wire_gid_to_gid(gid, &rem_dest->gid);
 
+	/*连接对端qp*/
 	if (pp_connect_ctx(ctx, ib_port, my_dest->psn, mtu, sl, rem_dest,
 								sgid_idx)) {
 		fprintf(stderr, "Couldn't connect to remote QP\n");
@@ -314,10 +334,12 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 	}
 
 
+	/*向对端发送自已的地址*/
 	gid_to_wire_gid(&my_dest->gid, gid);
 	sprintf(msg, "%04x:%06x:%06x:%s", my_dest->lid, my_dest->qpn,
 							my_dest->psn, gid);
 	if (write(connfd, msg, sizeof msg) != sizeof msg ||
+		/*并收取对端成功接收后，传回的done*/
 	    read(connfd, msg, sizeof msg) != sizeof "done") {
 		fprintf(stderr, "Couldn't send/recv local address\n");
 		free(rem_dest);
@@ -331,6 +353,7 @@ out:
 	return rem_dest;
 }
 
+/*初始化pingpong_context*/
 static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 					    int rx_depth, int port,
 					    int use_event)
@@ -356,7 +379,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	/* FIXME memset(ctx->buf, 0, size); */
 	memset(ctx->buf, 0x7b, size);
 
-	/*创建ibv_context*/
+	/*打开ib设备，创建ibv_context*/
 	ctx->context = ibv_open_device(ib_dev);
 	if (!ctx->context) {
 		fprintf(stderr, "Couldn't get context for %s\n",
@@ -478,6 +501,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 		ctx->cq_s.cq_ex = ibv_create_cq_ex(ctx->context, &attr_ex);
 	} else {
+		/*创建cq*/
 		ctx->cq_s.cq = ibv_create_cq(ctx->context, rx_depth + 1, NULL,
 					     ctx->channel, 0);
 	}
@@ -498,7 +522,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 				.max_send_sge = 1,
 				.max_recv_sge = 1
 			},
-			.qp_type = IBV_QPT_RC
+			.qp_type = IBV_QPT_RC /*指明qp类型为rc*/
 		};
 
 		if (use_new_send) {
@@ -533,6 +557,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 		ibv_query_qp(ctx->qp, &attr, IBV_QP_CAP, &init_attr);
 		if (init_attr.cap.max_inline_data >= size && !use_dm)
+			/*max_inline数据大于size,打上inline标记*/
 			ctx->send_flags |= IBV_SEND_INLINE;
 	}
 
@@ -708,6 +733,7 @@ static inline int parse_single_wc(struct pingpong_context *ctx, int *scnt,
 				  struct ts_params *ts)
 {
 	if (status != IBV_WC_SUCCESS) {
+		/*不成功*/
 		fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
 			ibv_wc_status_str(status),
 			status, (int)wr_id);
@@ -716,11 +742,13 @@ static inline int parse_single_wc(struct pingpong_context *ctx, int *scnt,
 
 	switch ((int)wr_id) {
 	case PINGPONG_SEND_WRID:
+		/*发送成功*/
 		++(*scnt);
 		break;
 
 	case PINGPONG_RECV_WRID:
 		if (--(*routs) <= 1) {
+			/*执行post recv*/
 			*routs += pp_post_recv(ctx, ctx->rx_depth - *routs);
 			if (*routs < ctx->rx_depth) {
 				fprintf(stderr,
@@ -730,7 +758,7 @@ static inline int parse_single_wc(struct pingpong_context *ctx, int *scnt,
 			}
 		}
 
-		++(*rcnt);
+		++(*rcnt);/*收成功*/
 		if (use_ts) {
 			if (ts->last_comp_with_ts) {
 				uint64_t delta;
@@ -764,6 +792,7 @@ static inline int parse_single_wc(struct pingpong_context *ctx, int *scnt,
 
 	ctx->pending &= ~(int)wr_id;
 	if (*scnt < iters && !ctx->pending) {
+		/*继续执行post send*/
 		if (pp_post_send(ctx)) {
 			fprintf(stderr, "Couldn't post send\n");
 			return 1;
@@ -809,18 +838,20 @@ int main(int argc, char *argv[])
 	struct pingpong_dest     my_dest;
 	struct pingpong_dest    *rem_dest;
 	struct timeval           start, end;
-	/*指明使用哪个ib设备*/
+	/*通过-d参数指明使用哪个ib设备，如不指明，默认使用第一个设备*/
 	char                    *ib_devname = NULL;
-	char                    *servername = NULL;
-	/*连接/监听的端口*/
+	char                    *servername = NULL;/*server端名称*/
+	/*通过-p参数指明的连接/监听的端口*/
 	unsigned int             port = 18515;
-	/*指明使用哪个ib_port*/
+	/*通过-i参数指明使用ib设备的哪个ib_port*/
 	int                      ib_port = 1;
-	/*指明我们要交换的消息大小*/
+	/*通过-s参数指明我们要交换的消息大小，如不指明，默认大小4096*/
 	unsigned int             size = 4096;
 	/*指明对应的mtu*/
 	enum ibv_mtu		 mtu = IBV_MTU_1024;
+	/*通过-r参数指明我们一次收多少*/
 	unsigned int             rx_depth = 500;
+	/*通过-n参数提明迭代次数*/
 	unsigned int             iters = 1000;
 	int                      use_event = 0;
 	int                      routs;
@@ -994,7 +1025,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (!ib_devname) {
-	    /*没有指定设备，使用第一个设备*/
+	    /*没有指定设备名，使用第一个设备*/
 		ib_dev = *dev_list;
 		if (!ib_dev) {
 			fprintf(stderr, "No IB devices found\n");
@@ -1008,15 +1039,18 @@ int main(int argc, char *argv[])
 				break;
 		ib_dev = dev_list[i];
 		if (!ib_dev) {
+			/*没有找到给定名称的设备*/
 			fprintf(stderr, "IB device %s not found\n", ib_devname);
 			return 1;
 		}
 	}
 
-	ctx = pp_init_ctx(ib_dev, size, rx_depth, ib_port, use_event);
+	/*初始化pingpong ctx*/
+	ctx = pp_init_ctx(ib_dev/*用于通信的设备*/, size/*要交换的数据长度*/, rx_depth, ib_port/*交换用的port id*/, use_event);
 	if (!ctx)
 		return 1;
 
+	/*执行post recv*/
 	routs = pp_post_recv(ctx, ctx->rx_depth);
 	if (routs < ctx->rx_depth) {
 		fprintf(stderr, "Couldn't post receive (%d)\n", routs);
@@ -1043,11 +1077,13 @@ int main(int argc, char *argv[])
 	}
 
 	if (gidx >= 0) {
+		/*通过gidx,查询并填充gid*/
 		if (ibv_query_gid(ctx->context, ib_port, gidx, &my_dest.gid)) {
 			fprintf(stderr, "can't read sgid of index %d\n", gidx);
 			return 1;
 		}
 	} else
+		/*将gid初始化为0*/
 		memset(&my_dest.gid, 0, sizeof my_dest.gid);
 
 	my_dest.qpn = ctx->qp->qp_num;
@@ -1058,19 +1094,23 @@ int main(int argc, char *argv[])
 
 
 	if (servername)
+		/*设置了servername,即client端处理,与server端交换my_dest*/
 		rem_dest = pp_client_exch_dest(servername, port, &my_dest);
 	else
+		/*服务端处理,连接client端的qp，并交换my_dest*/
 		rem_dest = pp_server_exch_dest(ctx, ib_port, mtu, port, sl,
 								&my_dest, gidx);
 
 	if (!rem_dest)
 		return 1;
 
+	/*显示对端地址*/
 	inet_ntop(AF_INET6, &rem_dest->gid, gid, sizeof gid);
 	printf("  remote address: LID 0x%04x, QPN 0x%06x, PSN 0x%06x, GID %s\n",
 	       rem_dest->lid, rem_dest->qpn, rem_dest->psn, gid);
 
 	if (servername)
+		/*客户端连接对端qp*/
 		if (pp_connect_ctx(ctx, ib_port, my_dest.psn, mtu, sl, rem_dest,
 					gidx))
 			return 1;
@@ -1089,6 +1129,7 @@ int main(int argc, char *argv[])
 				return 1;
 			}
 
+		/*客户端执行post send*/
 		if (pp_post_send(ctx)) {
 			fprintf(stderr, "Couldn't post send\n");
 			return 1;
@@ -1096,6 +1137,7 @@ int main(int argc, char *argv[])
 		ctx->pending |= PINGPONG_SEND_WRID;
 	}
 
+	/*取start时间*/
 	if (gettimeofday(&start, NULL)) {
 		perror("gettimeofday");
 		return 1;
@@ -1166,6 +1208,7 @@ int main(int argc, char *argv[])
 			struct ibv_wc wc[2];
 
 			do {
+				/*等待完成*/
 				ne = ibv_poll_cq(pp_cq(ctx), 2, wc);
 				if (ne < 0) {
 					fprintf(stderr, "poll CQ failed %d\n", ne);
@@ -1173,9 +1216,10 @@ int main(int argc, char *argv[])
 				}
 			} while (!use_event && ne < 1);
 
+			/*遍历完成的*/
 			for (i = 0; i < ne; ++i) {
 				ret = parse_single_wc(ctx, &scnt, &rcnt, &routs,
-						      iters,
+						      iters/*当前次数*/,
 						      wc[i].wr_id,
 						      wc[i].status,
 						      0, &ts);
@@ -1187,11 +1231,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/*获取结束时间*/
 	if (gettimeofday(&end, NULL)) {
 		perror("gettimeofday");
 		return 1;
 	}
 
+	/*显示pingpong结果*/
 	{
 		float usec = (end.tv_sec - start.tv_sec) * 1000000 +
 			(end.tv_usec - start.tv_usec);

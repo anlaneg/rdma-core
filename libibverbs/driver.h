@@ -148,6 +148,7 @@ enum ibv_mr_type {
 struct verbs_mr {
 	struct ibv_mr		ibv_mr;
 	enum ibv_mr_type        mr_type;
+	/*访问标记*/
 	int access;
 };
 
@@ -282,8 +283,8 @@ struct verbs_device_ops {
 
 	/*用于context空间申请*/
 	struct verbs_context *(*alloc_context)(struct ibv_device *device,
-					       int cmd_fd,
-					       void *private_data);
+					       int cmd_fd/*verbs命令用fd*/,
+					       void *private_data/*用户传入的私有数据*/);
 	struct verbs_context *(*import_context)(struct ibv_device *device,
 						int cmd_fd);
 
@@ -298,7 +299,9 @@ struct verbs_device {
 	struct ibv_device device; /* Must be first */
 	/*verbs设备操作集*/
 	const struct verbs_device_ops *ops;
+	/*引用计数*/
 	atomic_int refcount;
+	/*用于串连verbs设备*/
 	struct list_node entry;
 	struct verbs_sysfs_dev *sysfs;
 	uint64_t core_support;
@@ -346,9 +349,11 @@ struct verbs_context_ops {
 				    struct ibv_ah_attr *attr);
 	struct ibv_counters *(*create_counters)(struct ibv_context *context,
 						struct ibv_counters_init_attr *init_attr);
+	/*创建cq*/
 	struct ibv_cq *(*create_cq)(struct ibv_context *context, int cqe,
 				    struct ibv_comp_channel *channel,
 				    int comp_vector);
+	/*创建cq_ex*/
 	struct ibv_cq_ex *(*create_cq_ex)(
 		struct ibv_context *context,
 		struct ibv_cq_init_attr_ex *init_attr);
@@ -425,8 +430,9 @@ struct verbs_context_ops {
 			       struct ibv_device_attr_ex *attr,
 			       size_t attr_size);
 	int (*query_ece)(struct ibv_qp *qp, struct ibv_ece *ece);
-	int (*query_port)(struct ibv_context *context, uint8_t port_num,
-			  struct ibv_port_attr *port_attr);
+	/*获取port属性*/
+	int (*query_port)(struct ibv_context *context, uint8_t port_num/*port编号*/,
+			  struct ibv_port_attr *port_attr/*取port属性*/);
 	int (*query_qp)(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 			int attr_mask, struct ibv_qp_init_attr *init_attr);
 	int (*query_qp_data_in_order)(struct ibv_qp *qp, enum ibv_wr_opcode op,
@@ -497,11 +503,11 @@ void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd,
 				    struct verbs_context *context_offset,
 				    uint32_t driver_id);
 
-#define verbs_init_and_alloc_context(ibdev, cmd_fd, drv_ctx_ptr, ctx_memb,     \
-				     driver_id)				       \
+#define verbs_init_and_alloc_context(ibdev/*关联的ib设备*/, cmd_fd/*verbs命令对应的fd*/, drv_ctx_ptr/*ctx指针*/, ctx_memb/*ibv ctx对应的member*/,     \
+				     driver_id/*driver驱动编号*/)				       \
 	((typeof(drv_ctx_ptr))_verbs_init_and_alloc_context(                   \
-		ibdev, cmd_fd, sizeof(*drv_ctx_ptr),                           \
-		&((typeof(drv_ctx_ptr))NULL)->ctx_memb, (driver_id)))
+		ibdev, cmd_fd, sizeof(*drv_ctx_ptr)/*ctx结构大小*/,                           \
+		&((typeof(drv_ctx_ptr))NULL)->ctx_memb/*到ibv_ctx成员offset*/, (driver_id)))
 
 int verbs_init_context(struct verbs_context *context_ex,
 		       struct ibv_device *device, int cmd_fd,

@@ -155,7 +155,10 @@ int rdmanl_get_chardev(struct nl_sock *nl, int ibidx/*ib设备编号*/,
 	if (!msg)
 		return -1;
 	if (ibidx != -1)
+		/*指明设备index*/
 		NLA_PUT_U32(msg, RDMA_NLDEV_ATTR_DEV_INDEX, ibidx);
+
+	/*指明设备类型*/
 	NLA_PUT_STRING(msg, RDMA_NLDEV_ATTR_CHARDEV_TYPE, name);
 	ret = nl_send_auto(nl, msg);
 	nlmsg_free(msg);

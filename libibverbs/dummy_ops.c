@@ -598,22 +598,27 @@ void verbs_set_ops(struct verbs_context *vctx,
 	 * compatibility. If any ever get changed incompatibly they should be
 	 * set to NULL instead.
 	 */
+	/*如果ops->name不为0，则priv->ops,ptr->_compat_$name将被设置为ops->name*/
 #define SET_PRIV_OP(ptr, name)                                                 \
 	do {                                                                   \
 		if (ops->name) {                                               \
+		    /*ops有此name成员,设置priv->ops相应成员*/\
 			priv->ops.name = ops->name;                            \
+			/*ptr对应的_compat_##name成员也将被设置成此成员*/\
 			(ptr)->_compat_##name = (void *)ops->name;             \
 		}                                                              \
 	} while (0)
 
 	/* Same as SET_PRIV_OP but without the compatibility pointer */
+	/*如果ops->name不为0，则priv->ops 则priv->ops.$name将被设置为ops->$name*/
 #define SET_PRIV_OP_IC(ptr, name)                                              \
 	do {                                                                   \
 		if (ops->name)                                                 \
+		    /*ops有此name成员,设置priv->ops相应成员*/\
 			priv->ops.name = ops->name;                            \
 	} while (0)
 
-	//直接回调给值，不容许变名称
+	/*如果ops->name不为0，则priv->ops.$name,ptr->$name将被设置为ops->name*/
 #define SET_OP(ptr, name)                                                      \
 	do {                                                                   \
 		if (ops->name) {                                               \
@@ -622,7 +627,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 		}                                                              \
 	} while (0)
 
-	//容许更改回调名称
+	/*如果ops->name不为0，则priv->ops.$name,ptr->$iname将被设置为ops->name*/
 #define SET_OP2(ptr, iname, name)                                              \
 	do {                                                                   \
 		if (ops->name) {                                               \
@@ -631,6 +636,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 		}                                                              \
 	} while (0)
 
+	/*以下成员将被填充到priv->ops.$name = ops->name;vctx->$name = ops->name*/
 	SET_OP(vctx, advise_mr);
 	SET_OP(vctx, alloc_dm);
 	SET_OP(ctx, alloc_mw);

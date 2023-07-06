@@ -33,10 +33,11 @@
 #include <infiniband/cmd_write.h>
 #include "ibverbs.h"
 
+/*创建cq对应的cmd*/
 static int ibv_icmd_create_cq(struct ibv_context *context, int cqe,
 			      struct ibv_comp_channel *channel, int comp_vector,
 			      uint32_t flags, struct ibv_cq *cq,
-			      struct ibv_command_buffer *link,
+			      struct ibv_command_buffer *link/*待link的cmd buffer*/,
 			      uint32_t cmd_flags)
 {
 	DECLARE_FBCMD_BUFFER(cmdb, UVERBS_OBJECT_CQ, UVERBS_METHOD_CQ_CREATE, 8, link);
@@ -52,9 +53,10 @@ static int ibv_icmd_create_cq(struct ibv_context *context, int cqe,
 	handle = fill_attr_out_obj(cmdb, UVERBS_ATTR_CREATE_CQ_HANDLE);
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_CREATE_CQ_RESP_CQE, &resp_cqe);
 
-	fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_CQE, cqe);
+	fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_CQE, cqe);/*指明cqe数目*/
 	fill_attr_in_uint64(cmdb, UVERBS_ATTR_CREATE_CQ_USER_HANDLE, (uintptr_t)cq);
 	if (channel)
+		/*如果有channel,则指定channel fd*/
 		fill_attr_in_fd(cmdb, UVERBS_ATTR_CREATE_CQ_COMP_CHANNEL, channel->fd);
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_COMP_VECTOR, comp_vector);
 	async_fd_attr = fill_attr_in_fd(cmdb, UVERBS_ATTR_CREATE_CQ_EVENT_FD, context->async_fd);
@@ -136,6 +138,7 @@ int ibv_cmd_create_cq(struct ibv_context *context, int cqe,
 		      size_t cmd_size, struct ib_uverbs_create_cq_resp *resp,
 		      size_t resp_size)
 {
+    /*初始化cmdb*/
 	DECLARE_CMD_BUFFER_COMPAT(cmdb, UVERBS_OBJECT_CQ,
 				  UVERBS_METHOD_CQ_CREATE, cmd, cmd_size, resp,
 				  resp_size);
@@ -171,7 +174,8 @@ int ibv_cmd_create_cq_ex(struct ibv_context *context,
 	    cq_attr->flags & IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN)
 		flags |= IB_UVERBS_CQ_FLAGS_IGNORE_OVERRUN;
 
-	return ibv_icmd_create_cq(context, cq_attr->cqe, cq_attr->channel,
+	/*调用create cq*/
+	return ibv_icmd_create_cq(context, cq_attr->cqe/*cqe数目*/, cq_attr->channel,
 				  cq_attr->comp_vector, flags,
 				  &cq->cq, cmdb, cmd_flags);
 }

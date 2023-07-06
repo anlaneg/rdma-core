@@ -50,6 +50,7 @@ struct ibv_driver_name {
 	char *name;
 };
 
+/*记录系统中的driver*/
 static LIST_HEAD(driver_name_list);
 
 static void read_config_file(const char *path)
@@ -68,9 +69,11 @@ static void read_config_file(const char *path)
 		return;
 	}
 
+	/*自配置文件中读取*/
 	while ((len = getline(&line, &buflen, conf)) != -1) {
 		config = line + strspn(line, "\t ");
 		if (config[0] == '\n' || config[0] == '#')
+		    /*跳过空行/注释行*/
 			continue;
 
 		field = strsep(&config, "\n\t ");
@@ -90,6 +93,7 @@ static void read_config_file(const char *path)
 				continue;
 			}
 
+			/*设置driver名称*/
 			driver_name->name = strdup(field);
 			if (!driver_name->name) {
 				fprintf(stderr,
@@ -119,6 +123,7 @@ static void read_config(void)
 	struct dirent *dent;
 	char *path;
 
+	/*打开配置目录*/
 	conf_dir = opendir(IBV_CONFIG_DIR);
 	if (!conf_dir) {
 		fprintf(stderr,
@@ -127,9 +132,11 @@ static void read_config(void)
 		return;
 	}
 
+	/*遍历目录中所有文件*/
 	while ((dent = readdir(conf_dir))) {
 		struct stat buf;
 
+		/*生成当前访问文件的路径*/
 		if (asprintf(&path, "%s/%s", IBV_CONFIG_DIR, dent->d_name) <
 		    0) {
 			fprintf(stderr,
@@ -147,6 +154,7 @@ static void read_config(void)
 			goto next;
 		}
 
+		/*跳过非普通文件*/
 		if (!S_ISREG(buf.st_mode))
 			goto next;
 
@@ -159,6 +167,7 @@ out:
 	closedir(conf_dir);
 }
 
+/*按名称加载驱动,需要驱动被载入后，自动完成初始化*/
 static void load_driver(const char *name)
 {
 	char *so_name;
@@ -168,8 +177,10 @@ static void load_driver(const char *name)
 	 * the trailer suffix
 	 */
 	if (name[0] == '/') {
+	    /*构造provider so文件名称*/
 		if (asprintf(&so_name, "%s" VERBS_PROVIDER_SUFFIX, name) < 0)
 			goto out_asprintf;
+		/*打开so*/
 		dlhandle = dlopen(so_name, RTLD_NOW);
 		if (!dlhandle)
 			goto out_dlopen;
@@ -222,6 +233,7 @@ void load_drivers(void)
 	 * if we're not running setuid.
 	 */
 	if (getuid() == geteuid()) {
+	    /*自环境变量中进行driver加载*/
 		if ((env = getenv("RDMAV_DRIVERS"))) {
 			list = strdupa(env);
 			while ((env_name = strsep(&list, ":;")))
@@ -233,6 +245,7 @@ void load_drivers(void)
 		}
 	}
 
+	/*自list中进行driver加载*/
 	list_for_each_safe (&driver_name_list, name, next_name, entry) {
 		load_driver(name->name);
 		free(name->name);

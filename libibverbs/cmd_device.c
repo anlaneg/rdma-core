@@ -69,12 +69,15 @@ int ibv_cmd_query_port(struct ibv_context *context, uint8_t port_num,
 		       struct ibv_port_attr *port_attr,
 		       struct ibv_query_port *cmd, size_t cmd_size)
 {
+	/*指明device下query_port*/
 	DECLARE_FBCMD_BUFFER(cmdb, UVERBS_OBJECT_DEVICE,
 			     UVERBS_METHOD_QUERY_PORT, 2, NULL);
 	int ret;
 	struct ib_uverbs_query_port_resp_ex resp_ex = {};
 
+	/*填充port_num*/
 	fill_attr_const_in(cmdb, UVERBS_ATTR_QUERY_PORT_PORT_NUM, port_num);
+	/*填充port_resp指针*/
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_QUERY_PORT_RESP, &resp_ex);
 
 	switch (execute_ioctl_fallback(context, query_port, cmdb, &ret)) {
@@ -109,6 +112,7 @@ int ibv_cmd_query_port(struct ibv_context *context, uint8_t port_num,
 
 int ibv_cmd_alloc_async_fd(struct ibv_context *context)
 {
+    /*obj为async_envent,method为event_alloc*/
 	DECLARE_COMMAND_BUFFER(cmdb, UVERBS_OBJECT_ASYNC_EVENT,
 			       UVERBS_METHOD_ASYNC_EVENT_ALLOC, 1);
 	struct ib_uverbs_attr *handle;
@@ -139,6 +143,7 @@ static int cmd_get_context(struct verbs_context *context_ex,
 	uint32_t num_comp_vectors;
 	int ret;
 
+	/*增加属性*/
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_GET_CONTEXT_NUM_COMP_VECTORS,
 			  &num_comp_vectors);
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_GET_CONTEXT_CORE_SUPPORT,
@@ -175,7 +180,7 @@ static int cmd_get_context(struct verbs_context *context_ex,
 }
 
 int ibv_cmd_get_context(struct verbs_context *context_ex,
-			struct ibv_get_context *cmd, size_t cmd_size,
+			struct ibv_get_context *cmd/*命令buffer*/, size_t cmd_size/*cmd buffer大小*/,
 			struct ib_uverbs_get_context_resp *resp,
 			size_t resp_size)
 {
@@ -446,6 +451,7 @@ int __ibv_query_gid_ex(struct ibv_context *context, uint32_t port_num,
 			       UVERBS_METHOD_QUERY_GID_ENTRY, 4);
 	int ret;
 
+	/*填充cmd*/
 	fill_attr_const_in(cmdb, UVERBS_ATTR_QUERY_GID_ENTRY_PORT, port_num);
 	fill_attr_const_in(cmdb, UVERBS_ATTR_QUERY_GID_ENTRY_GID_INDEX,
 			   gid_index);

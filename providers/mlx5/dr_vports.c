@@ -198,17 +198,19 @@ dr_vports_table_get_ib_port_cap(struct dr_devx_caps *caps, uint32_t ib_port)
 	struct dr_devx_vport_cap *vport_cap;
 
 	if (!ib_port) {
+		/*不得为0*/
 		errno = EINVAL;
 		return NULL;
 	}
 
 	if (!vports->ib_ports || ib_port > vports->num_ports) {
+		/*ib_ports不存在情况，会返回NULL*/
 		errno = ENOTSUP;
 		return NULL;
 	}
 
 	/* Query IB port if not found */
-	vport_cap = vports->ib_ports[ib_port - 1];
+	vport_cap = vports->ib_ports[ib_port - 1];/*取此ports对应的能力*/
 	if (vport_cap)
 		return vport_cap;
 

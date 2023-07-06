@@ -5605,9 +5605,10 @@ static void set_devx_obj_info(const void *in, const void *out,
 }
 
 static struct mlx5dv_devx_obj *
-_mlx5dv_devx_obj_create(struct ibv_context *context, const void *in,
+_mlx5dv_devx_obj_create(struct ibv_context *context, const void *in/*cmd_in参数*/,
 			size_t inlen, void *out, size_t outlen)
 {
+	/*指明object id*/
 	DECLARE_COMMAND_BUFFER(cmd,
 			       MLX5_IB_OBJECT_DEVX_OBJ,
 			       MLX5_IB_METHOD_DEVX_OBJ_CREATE,
@@ -5623,9 +5624,10 @@ _mlx5dv_devx_obj_create(struct ibv_context *context, const void *in,
 	}
 
 	handle = fill_attr_out_obj(cmd, MLX5_IB_ATTR_DEVX_OBJ_CREATE_HANDLE);
-	fill_attr_in(cmd, MLX5_IB_ATTR_DEVX_OBJ_CREATE_CMD_IN, in, inlen);
+	fill_attr_in(cmd, MLX5_IB_ATTR_DEVX_OBJ_CREATE_CMD_IN, in, inlen);/*指明入参*/
 	fill_attr_out(cmd, MLX5_IB_ATTR_DEVX_OBJ_CREATE_CMD_OUT, out, outlen);
 
+	/*执行ioctl*/
 	ret = execute_ioctl(context, cmd);
 	if (ret)
 		goto err;
@@ -5641,8 +5643,8 @@ err:
 }
 
 struct mlx5dv_devx_obj *
-mlx5dv_devx_obj_create(struct ibv_context *context, const void *in,
-			 size_t inlen, void *out, size_t outlen)
+mlx5dv_devx_obj_create(struct ibv_context *context, const void *in/*cmd_in参数*/,
+			 size_t inlen/*cmd_in参数长度*/, void *out, size_t outlen)
 {
 	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(context);
 
@@ -7416,5 +7418,5 @@ void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 	ops->create_flow = _mlx5dv_create_flow;
 
 	ops->map_ah_to_qp = _mlx5dv_map_ah_to_qp;
-	ops->query_port = __mlx5dv_query_port;
+	ops->query_port = __mlx5dv_query_port;/*查询port信息*/
 }

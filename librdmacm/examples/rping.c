@@ -171,7 +171,9 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 
 	switch (event->event) {
 	case RDMA_CM_EVENT_ADDR_RESOLVED:
+		/*地址解析成功，将状态切ADDR_RESOLVED*/
 		cb->state = ADDR_RESOLVED;
+		/*请求解决路由*/
 		ret = rdma_resolve_route(cma_id, 2000);
 		if (ret) {
 			cb->state = ERROR;
@@ -181,6 +183,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 		break;
 
 	case RDMA_CM_EVENT_ROUTE_RESOLVED:
+		/*路由解决成功，将状态切ROUTE_RESOLVED*/
 		cb->state = ROUTE_RESOLVED;
 		sem_post(&cb->sem);
 		break;
@@ -210,6 +213,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 		sem_post(&cb->sem);
 		break;
 
+		/*错误事件处理*/
 	case RDMA_CM_EVENT_ADDR_ERROR:
 	case RDMA_CM_EVENT_ROUTE_ERROR:
 	case RDMA_CM_EVENT_CONNECT_ERROR:
@@ -222,6 +226,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 		break;
 
 	case RDMA_CM_EVENT_DISCONNECTED:
+		/*连接断开*/
 		fprintf(stderr, "%s DISCONNECT EVENT...\n",
 			cb->server ? "server" : "client");
 		cb->state = DISCONNECTED;
@@ -229,6 +234,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 		break;
 
 	case RDMA_CM_EVENT_DEVICE_REMOVAL:
+		/*设备移除*/
 		fprintf(stderr, "cma detected device removal!!!!\n");
 		cb->state = ERROR;
 		sem_post(&cb->sem);
@@ -236,6 +242,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 		break;
 
 	default:
+		/*不认识的事件*/
 		fprintf(stderr, "unhandled event: %s, ignoring\n",
 			rdma_event_str(event->event));
 		break;
@@ -614,6 +621,7 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 	}
 	DEBUG_LOG("created channel %p\n", cb->channel);
 
+	/*创建cq*/
 	cb->cq = ibv_create_cq(cm_id->verbs, RPING_SQ_DEPTH * 2, cb,
 				cb->channel, 0);
 	if (!cb->cq) {
@@ -647,6 +655,7 @@ err1:
 	return ret;
 }
 
+/*处理cm event*/
 static void *cm_thread(void *arg)
 {
 	struct rping_cb *cb = arg;
@@ -660,9 +669,9 @@ static void *cm_thread(void *arg)
 			perror("rdma_get_cm_event");
 			exit(ret);
 		}
-		/*处理event*/
+		/*rping依据event进行处理*/
 		ret = rping_cma_event_handler(event->id, event);
-		/*event应答*/
+
 		rdma_ack_cm_event(event);
 		if (ret)
 			exit(ret);
@@ -1192,6 +1201,7 @@ static int rping_run_client(struct rping_cb *cb)
 		goto err2;
 	}
 
+	/*创建线程，处理cq事件*/
 	ret = pthread_create(&cb->cqthread, NULL, cq_thread, cb);
 	if (ret) {
 		perror("pthread_create");
@@ -1369,6 +1379,7 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
+	/*创建context*/
 	ret = rdma_create_id(cb->cm_channel, &cb->cm_id, cb, RDMA_PS_TCP);
 	if (ret) {
 		perror("rdma_create_id");
@@ -1376,7 +1387,7 @@ int main(int argc, char *argv[])
 	}
 	DEBUG_LOG("created cm_id %p\n", cb->cm_id);
 
-	//创建cm线程
+	//创建cm线程,用于event处理
 	ret = pthread_create(&cb->cmthread, NULL, cm_thread, cb);
 	if (ret) {
 		perror("pthread_create");

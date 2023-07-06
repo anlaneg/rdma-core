@@ -90,9 +90,10 @@ void *_write_get_resp_ex(struct ibv_command_buffer *link,
 void _write_set_uhw(struct ibv_command_buffer *cmdb, const void *req,
 		    size_t core_req_size, size_t req_size, void *resp,
 		    size_t core_resp_size, size_t resp_size);
-#define DECLARE_CMD_BUFFER_COMPAT(_name, _object_id, _method_id, cmd,          \
+#define DECLARE_CMD_BUFFER_COMPAT(_name/*命令buffer名称*/, _object_id/*obj编号*/, _method_id/*method编号*/, cmd,          \
 				  cmd_size, resp, resp_size)                   \
-	DECLARE_COMMAND_BUFFER(_name, _object_id, _method_id, 2);              \
+	DECLARE_COMMAND_BUFFER(_name, _object_id, _method_id, 2/*要求两个属性*/);              \
+	/*填充in/out index*/\
 	_write_set_uhw(_name, cmd, sizeof(*cmd), cmd_size, resp,               \
 		       sizeof(*resp), resp_size)
 
@@ -105,6 +106,7 @@ void _write_set_uhw(struct ibv_command_buffer *cmdb, const void *req,
  * that is being implemented.
  */
 #define _CMD_BIT(cmd_name)                                                     \
+    /*取cmd_name在结构体verbs_context_ops中占第几个指针偏移*/\
 	(offsetof(struct verbs_context_ops, cmd_name) / sizeof(void *))
 
 enum write_fallback { TRY_WRITE, TRY_WRITE_EX, ERROR, SUCCESS };
@@ -132,8 +134,8 @@ enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
 					    struct ibv_command_buffer *cmdb,
 					    int *ret);
 
-#define execute_ioctl_fallback(ctx, cmd_name, cmdb, ret)                       \
-	_execute_ioctl_fallback(ctx, _CMD_BIT(cmd_name), cmdb, ret)
+#define execute_ioctl_fallback(ctx, cmd_name/*命令名称*/, cmdb/*命令buffer*/, ret)                       \
+	_execute_ioctl_fallback(ctx, _CMD_BIT(cmd_name)/*命令id*/, cmdb, ret)
 
 /*
  * For write() only commands that have fixed core structures and may take uhw

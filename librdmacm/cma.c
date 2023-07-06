@@ -64,7 +64,7 @@
 #define CMA_INIT_CMD(req, req_size, op/*请求命令*/)		\
 do {						\
 	memset(req, 0, req_size);/*清空请求结构体*/		\
-	(req)->cmd = UCMA_CMD_##op;		\
+	(req)->cmd = UCMA_CMD_##op;/*设置cm对应的命令*/		\
 	(req)->in  = req_size - sizeof(struct ucma_abi_cmd_hdr); \
 } while (0)
 
@@ -82,7 +82,7 @@ struct cma_port {
 };
 
 struct cma_device {
-	struct ibv_device  *dev;
+	struct ibv_device  *dev;/*对应的ib设备*/
 	struct list_node    entry;
 	/*cma设备的context*/
 	struct ibv_context *verbs;
@@ -95,7 +95,7 @@ struct cma_device {
 	int		    max_qpsize;
 	uint8_t		    max_initiator_depth;
 	uint8_t		    max_responder_resources;
-	/*设备idx*/
+	/*ib设备idx*/
 	int		    ibv_idx;
 	uint8_t		    is_device_dead : 1;
 };
@@ -139,6 +139,7 @@ struct cma_event {
 	struct cma_multicast	*mc;
 };
 
+/*记录系统中所有cma设备*/
 static LIST_HEAD(cma_dev_list);
 /* sorted based or index or guid, depends on kernel support */
 static struct ibv_device **dev_list;
@@ -170,6 +171,7 @@ static int check_abi_version_nl_cb(struct nl_msg *msg, void *data)
 	dev_cdev = makedev((cdev64 & 0xfff00) >> 8,
 			   (cdev64 & 0xff) | ((cdev64 >> 12) & 0xfff00));
 
+	/*检查设备名称*/
 	if (!check_snprintf(dev_name, sizeof(dev_name), "%s",
 			    nla_get_string(tb[RDMA_NLDEV_ATTR_CHARDEV_NAME])))
 		return NLE_PARSE_ERR;
@@ -178,6 +180,7 @@ static int check_abi_version_nl_cb(struct nl_msg *msg, void *data)
 	 * The top 32 bits of CHARDEV_ABI are reserved for a future use,
 	 * current kernels set them to 0
 	 */
+	/*取abi版本*/
 	abi_ver = (uint32_t)nla_get_u64(tb[RDMA_NLDEV_ATTR_CHARDEV_ABI]);
 
 	return 0;
@@ -191,6 +194,7 @@ static int check_abi_version_nl(void)
 	nl = rdmanl_socket_alloc();
 	if (!nl)
 		return -1;
+	/*获取并设置abi version*/
 	if (rdmanl_get_chardev(nl, -1, "rdma_cm", check_abi_version_nl_cb,
 			       NULL))
 		goto err_socket;
@@ -220,7 +224,7 @@ static void check_abi_version_sysfs(void)
 		 * backports, assume the most recent version of the ABI.  If
 		 * we're wrong, we'll simply fail later when calling the ABI.
 		 */
-		abi_ver = RDMA_USER_CM_MAX_ABI_VERSION;
+		abi_ver = RDMA_USER_CM_MAX_ABI_VERSION;/*未找到abi_version,使用最大值*/
 		return;
 	}
 	abi_ver = strtol(value, NULL, 10);
@@ -230,7 +234,9 @@ static void check_abi_version_sysfs(void)
 static int check_abi_version(void)
 {
 	if (abi_ver == -1) {
+		/*abi version未初始化，先尝试用netlink进行获取*/
 		if (check_abi_version_nl())
+			/*netlink获取失败，尝试sysfs*/
 			check_abi_version_sysfs();
 	}
 
@@ -256,14 +262,20 @@ static void ucma_set_af_ib_support(void)
 	if (ret)
 		return;
 
+	/*指明af_ib地址族*/
 	memset(&sib, 0, sizeof sib);
 	sib.sib_family = AF_IB;
 	sib.sib_sid = htobe64(RDMA_IB_IP_PS_TCP);
 	sib.sib_sid_mask = htobe64(RDMA_IB_IP_PS_MASK);
+
+	/*指明尝试通过af_ib进行绑定*/
 	af_ib_support = 1;
 	ret = rdma_bind_addr(id, (struct sockaddr *) &sib);
+
+	/*如果执行失败，则不再要求af_ib绑定*/
 	af_ib_support = !ret;
 
+	/*销毁此id*/
 	rdma_destroy_id(id);
 }
 
@@ -325,16 +337,20 @@ static int sync_devices_list(void)
 	struct ibv_device **new_list;
 	int i, j, numb_dev;
 
+	/*取系统所有ib设备*/
 	new_list = ibv_get_device_list(&numb_dev);
 	if (!new_list)
 		return ERR(ENODEV);
 
 	if (!numb_dev) {
+		/*没有找到设备，报错*/
 		ibv_free_device_list(new_list);
 		return ERR(ENODEV);
 	}
 
+	/*ib设备按名称进行排序*/
 	qsort(new_list, numb_dev, sizeof(struct ibv_device *), dev_cmp);
+
 	/*生成cma_device,并构造初始化cma_dev_list*/
 	if (unlikely(!dev_list)) {
 		/* first sync */
@@ -382,7 +398,7 @@ static int sync_devices_list(void)
 
 	ibv_free_device_list(dev_list);
 out:
-	dev_list = new_list;
+	dev_list = new_list;/*更新dev_list*/
 	return 0;
 }
 
@@ -396,26 +412,30 @@ int ucma_init(void)
 	 * immediately.
 	 */
 	if (!list_empty(&cma_dev_list))
+		/*链表不为空，已初始化，退出*/
 		return 0;
 
 	pthread_mutex_lock(&mut);
 	if (!list_empty(&cma_dev_list)) {
-	    /*ucma已被初始化，退出*/
+	    /*加锁后重查，ucma已被初始化，退出*/
 		pthread_mutex_unlock(&mut);
 		return 0;
 	}
 
 	fastlock_init(&idm_lock);
+	/*检查abi版本*/
 	ret = check_abi_version();
 	if (ret) {
 		ret = ERR(EPERM);
 		goto err1;
 	}
 
+	/*加载系统中所有ib设备*/
 	ret = sync_devices_list();
 	if (ret)
 		goto err1;
 
+	/*检查af_ib_support是否支持*/
 	ucma_set_af_ib_support();
 	pthread_mutex_unlock(&mut);
 	return 0;
@@ -694,6 +714,7 @@ static struct ibv_xrcd *ucma_get_xrcd(struct cma_device *cma_dev)
 static void ucma_insert_id(struct cma_id_private *id_priv)
 {
 	fastlock_acquire(&idm_lock);
+	/*记录cmd_id_private(支持多线程）*/
 	idm_set(&ucma_idm, id_priv->handle, id_priv);
 	fastlock_release(&idm_lock);
 }
@@ -726,6 +747,7 @@ static void ucma_free_id(struct cma_id_private *id_priv)
 	free(id_priv);
 }
 
+/*创建cma_id_private,打开rdma_cm设备*/
 static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 					    void *context,
 					    enum rdma_port_space ps,
@@ -783,11 +805,11 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 		return ERR(ENOMEM);
 
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, CREATE_ID, &resp, sizeof resp);
-	cmd.uid = (uintptr_t) id_priv;
+	cmd.uid = (uintptr_t) id_priv;/*记录id_priv*/
 	cmd.ps = ps;
 	cmd.qp_type = qp_type;
 
-	/*创建id*/
+	/*通过rdma_cm,创建id*/
 	ret = write(id_priv->id.channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof(cmd)) {
 		ret = (ret >= 0) ? ERR(ENODATA) : -1;
@@ -1087,7 +1109,7 @@ static int rdma_bind_addr2(struct rdma_cm_id *id, struct sockaddr *addr,
 	return ret;
 }
 
-int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr)
+int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr/*指明要绑定的地址*/)
 {
 	struct ucma_abi_bind_ip cmd;
 	struct cma_id_private *id_priv;
@@ -1098,8 +1120,10 @@ int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr)
 		return ERR(EINVAL);
 
 	if (af_ib_support)
+		/*如果此值为真，则走此流程，通过BIND命令来绑定*/
 		return rdma_bind_addr2(id, addr, addrlen);
 
+	/*通过cma执行bond_ip*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, BIND_IP);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
@@ -1245,6 +1269,7 @@ int rdma_resolve_route(struct rdma_cm_id *id, int timeout_ms)
 			goto out;
 	}
 
+	/*请求解决路由*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, RESOLVE_ROUTE);
 	cmd.id = id_priv->handle;
 	cmd.timeout_ms = timeout_ms;
@@ -1797,6 +1822,7 @@ static void ucma_copy_ece_param_to_kern_req(struct cma_id_private *id_priv,
 	dst->attr_mod = id_priv->local_ece.options;
 }
 
+/*执行connect*/
 int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 {
 	uint32_t qp_num = conn_param ? conn_param->qp_num : 0;
@@ -1819,6 +1845,7 @@ int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 	else
 		id_priv->responder_resources = id_priv->cma_dev->max_responder_resources;
 
+	/*向kernel发送connect命令*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, CONNECT);
 	cmd.id = id_priv->handle;
 	if (id->qp) {
@@ -2518,6 +2545,9 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
 		return ERR(ENOMEM);
 
 retry:
+	/*向kernel发送GET_EVENT命令，获取event
+	 * （kernel会从链表上取一个event并在write执行时写到我们cmd的resp上）
+	**/
 	memset(evt, 0, sizeof(*evt));
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT/*请求获取event*/, &resp, sizeof resp);
 	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令*/
@@ -2554,6 +2584,7 @@ retry:
 	evt->event.id = &evt->id_priv->id;
 	evt->event.status = resp.status;
 
+	/*ucma依据event id进行处理*/
 	switch (resp.event) {
 	case RDMA_CM_EVENT_ADDR_RESOLVED:
 		ucma_process_addr_resolved(evt);

@@ -87,7 +87,7 @@ struct ibv_driver {
 /*记录系统中的driver list*/
 static LIST_HEAD(driver_list);
 
-//尝试访问指定设备文件
+//尝试访问指定设备文件,例如/dev/infiniband/uverbs13
 int try_access_device(const struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct stat cdev_stat;
@@ -606,7 +606,7 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	unsigned int num_devices = 0;
 	int ret;
 
-	//列出系统所有可用ib设备
+	//列出系统所有可用ib设备(通过netlink socket)
 	ret = find_sysfs_devs_nl(&sysfs_list);
 	if (ret) {
 	    //通过netlink获取失败，通过sysfs进行获取
@@ -753,6 +753,7 @@ int ibverbs_init(void)
 
 	//？？？？
 	check_memlock_limit();
+
 	/*日志级别及日志文件处理*/
 	verbs_set_log_level();
 	verbs_set_log_file();

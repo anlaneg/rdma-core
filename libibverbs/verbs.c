@@ -163,13 +163,15 @@ LATEST_SYMVER_FUNC(ibv_query_device, 1_1, "IBVERBS_1.1",
 		sizeof(*device_attr));
 }
 
-int __lib_query_port(struct ibv_context *context, uint8_t port_num,
-		     struct ibv_port_attr *port_attr, size_t port_attr_len)
+/*查询给定port的属性*/
+int __lib_query_port(struct ibv_context *context, uint8_t port_num/*port编号*/,
+		     struct ibv_port_attr *port_attr/*出参，port的属性*/, size_t port_attr_len/*属性内存长度*/)
 {
 	/* Don't expose this mess to the provider, provide a large enough
 	 * temporary buffer if the user buffer is too small.
 	 */
 	if (port_attr_len < sizeof(struct ibv_port_attr)) {
+	    /*port_attr_len较短时，执行query_port,但对响应内容进行截断*/
 		struct ibv_port_attr tmp_attr = {};
 		int rc;
 
@@ -183,6 +185,7 @@ int __lib_query_port(struct ibv_context *context, uint8_t port_num,
 	}
 
 	memset(port_attr, 0, port_attr_len);
+	/*取port属性*/
 	return get_ops(context)->query_port(context, port_num, port_attr);
 }
 
@@ -210,6 +213,7 @@ struct _compat_ibv_port_attr {
 	uint8_t flags;
 };
 
+/*获取此port的属性信息*/
 LATEST_SYMVER_FUNC(ibv_query_port, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_context *context, uint8_t port_num,
@@ -220,6 +224,7 @@ LATEST_SYMVER_FUNC(ibv_query_port, 1_1, "IBVERBS_1.1",
 				sizeof(*port_attr));
 }
 
+/*查询gid*/
 LATEST_SYMVER_FUNC(ibv_query_gid, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_context *context, uint8_t port_num,
@@ -238,6 +243,7 @@ LATEST_SYMVER_FUNC(ibv_query_gid, 1_1, "IBVERBS_1.1",
 	if (ret)
 		return -1;
 
+	/*填充gid*/
 	memcpy(gid, &entry.gid, sizeof(entry.gid));
 
 	return 0;
@@ -279,7 +285,7 @@ LATEST_SYMVER_FUNC(ibv_get_pkey_index, 1_5, "IBVERBS_1.5",
 	}
 }
 
-/*创建pd*/
+/*通过context的ops创建pd*/
 LATEST_SYMVER_FUNC(ibv_alloc_pd, 1_1, "IBVERBS_1.1",
 		   struct ibv_pd *,
 		   struct ibv_context *context)
@@ -301,17 +307,17 @@ LATEST_SYMVER_FUNC(ibv_dealloc_pd, 1_1, "IBVERBS_1.1",
 }
 
 struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-				uint64_t iova, unsigned int access)
+				uint64_t iova/*待注册地址*/, unsigned int access/*访问权限*/)
 {
 	struct verbs_device *device = verbs_get_device(pd->context->device);
 	bool odp_mr = access & IBV_ACCESS_ON_DEMAND;
 	struct ibv_mr *mr;
 
 	if (!(device->core_support & IB_UVERBS_CORE_SUPPORT_OPTIONAL_MR_ACCESS))
-	    /*设备不支持option mr访问，清楚相应access*/
+	    /*设备不支持option mr访问，清除相应access*/
 		access &= ~IBV_ACCESS_OPTIONAL_RANGE;
 
-	/*非odp_mr模式下，需要针对此地址范围执行do not fork*/
+	/*如果access没有指明ondemand ，需要针对此地址范围执行do not fork*/
 	if (!odp_mr && ibv_dontfork_range(addr, length))
 		return NULL;
 
@@ -324,6 +330,7 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地�
 		mr->length  = length;
 	} else {
 		if (!odp_mr)
+		    /*申请失败，还原dofork*/
 			ibv_dofork_range(addr, length);
 	}
 
@@ -337,7 +344,7 @@ LATEST_SYMVER_FUNC(ibv_reg_mr, 1_1, "IBVERBS_1.1",
 		   struct ibv_pd *pd, void *addr,
 		   size_t length, int access)
 {
-	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr, access);
+	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr/*待注册地址*/, access/*访问权限*/);
 }
 
 #undef ibv_reg_mr_iova
@@ -541,16 +548,19 @@ out:
 	return ret;
 }
 
+/*创建cq*/
 LATEST_SYMVER_FUNC(ibv_create_cq, 1_1, "IBVERBS_1.1",
 		   struct ibv_cq *,
-		   struct ibv_context *context, int cqe, void *cq_context,
+		   struct ibv_context *context, int cqe/*cqe数目*/, void *cq_context,
 		   struct ibv_comp_channel *channel, int comp_vector)
 {
 	struct ibv_cq *cq;
 
+	/*创建cq*/
 	cq = get_ops(context)->create_cq(context, cqe, channel, comp_vector);
 
 	if (cq)
+	    /*初始化cq*/
 		verbs_init_cq(cq, context, channel, cq_context);
 
 	return cq;
@@ -654,10 +664,11 @@ LATEST_SYMVER_FUNC(ibv_destroy_srq, 1_1, "IBVERBS_1.1",
 	return get_ops(srq->context)->destroy_srq(srq);
 }
 
+/*利用qp_init_attr创建qp*/
 LATEST_SYMVER_FUNC(ibv_create_qp, 1_1, "IBVERBS_1.1",
 		   struct ibv_qp *,
 		   struct ibv_pd *pd,
-		   struct ibv_qp_init_attr *qp_init_attr)
+		   struct ibv_qp_init_attr *qp_init_attr/*qp初始化属性*/)
 {
 	struct ibv_qp *qp = get_ops(pd->context)->create_qp(pd, qp_init_attr);
 
@@ -673,11 +684,12 @@ struct ibv_qp_ex *ibv_qp_to_qp_ex(struct ibv_qp *qp)
 	return NULL;
 }
 
+/*qp属性获取*/
 LATEST_SYMVER_FUNC(ibv_query_qp, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_qp *qp, struct ibv_qp_attr *attr,
 		   int attr_mask,
-		   struct ibv_qp_init_attr *init_attr)
+		   struct ibv_qp_init_attr *init_attr/*出参，qp属性*/)
 {
 	int ret;
 
@@ -685,6 +697,7 @@ LATEST_SYMVER_FUNC(ibv_query_qp, 1_1, "IBVERBS_1.1",
 	if (ret)
 		return ret;
 
+	/*更新qp状态*/
 	if (attr_mask & IBV_QP_STATE)
 		qp->state = attr->qp_state;
 
@@ -704,6 +717,7 @@ int ibv_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 #endif
 }
 
+/*修改qp属性*/
 LATEST_SYMVER_FUNC(ibv_modify_qp, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_qp *qp, struct ibv_qp_attr *attr,
@@ -716,6 +730,7 @@ LATEST_SYMVER_FUNC(ibv_modify_qp, 1_1, "IBVERBS_1.1",
 		return ret;
 
 	if (attr_mask & IBV_QP_STATE)
+	    /*指明了修改qp state,则更新qp状态*/
 		qp->state = attr->qp_state;
 
 	return 0;
@@ -728,6 +743,7 @@ LATEST_SYMVER_FUNC(ibv_destroy_qp, 1_1, "IBVERBS_1.1",
 	return get_ops(qp->context)->destroy_qp(qp);
 }
 
+/*创建ah*/
 LATEST_SYMVER_FUNC(ibv_create_ah, 1_1, "IBVERBS_1.1",
 		   struct ibv_ah *,
 		   struct ibv_pd *pd, struct ibv_ah_attr *attr)
@@ -998,6 +1014,7 @@ struct peer_address {
 	uint32_t size;
 };
 
+/*填充peer_address*/
 static inline int create_peer_from_gid(int family, void *raw_gid,
 				       struct peer_address *peer_address)
 {
@@ -1020,7 +1037,7 @@ static inline int create_peer_from_gid(int family, void *raw_gid,
 #define NEIGH_GET_DEFAULT_TIMEOUT_MS 3000
 int ibv_resolve_eth_l2_from_gid(struct ibv_context *context,
 				struct ibv_ah_attr *attr,
-				uint8_t eth_mac[ETHERNET_LL_SIZE],
+				uint8_t eth_mac[ETHERNET_LL_SIZE]/*出参，gateway对应的mac*/,
 				uint16_t *vid)
 {
 	int dst_family;
@@ -1034,6 +1051,7 @@ int ibv_resolve_eth_l2_from_gid(struct ibv_context *context,
 	int ret = -EINVAL;
 	int err;
 
+	/*查询sgid*/
 	err = ibv_query_gid(context, attr->port_num,
 			    attr->grh.sgid_index, &sgid);
 
@@ -1051,22 +1069,28 @@ int ibv_resolve_eth_l2_from_gid(struct ibv_context *context,
 	src_family = ipv6_addr_v4mapped((struct in6_addr *)sgid.raw) ?
 			AF_INET : AF_INET6;
 
+	/*填充dst地址*/
 	if (create_peer_from_gid(dst_family, attr->grh.dgid.raw, &dst))
 		goto free_resources;
 
+	/*填充sgid地址*/
 	if (create_peer_from_gid(src_family, &sgid.raw, &src))
 		goto free_resources;
 
+	/*填充neigh_handler->dst*/
 	if (neigh_set_dst(&neigh_handler, dst_family, dst.address,
 			  dst.size))
 		goto free_resources;
 
+	/*填充neigh_handle->src*/
 	if (neigh_set_src(&neigh_handler, src_family, src.address,
 			  src.size))
 		goto free_resources;
 
+	/*获取neigh_handle->src对应的output ifindex*/
 	oif = neigh_get_oif_from_src(&neigh_handler);
 
+	/*设置出接口*/
 	if (oif > 0)
 		neigh_set_oif(&neigh_handler, oif);
 	else
@@ -1088,7 +1112,7 @@ int ibv_resolve_eth_l2_from_gid(struct ibv_context *context,
 
 	/* We are using only Ethernet here */
 	ether_len = neigh_get_ll(&neigh_handler,
-				 eth_mac,
+				 eth_mac,/*取ethmac*/
 				 sizeof(uint8_t) * ETHERNET_LL_SIZE);
 
 	if (ether_len <= 0)

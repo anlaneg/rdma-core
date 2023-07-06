@@ -1468,6 +1468,7 @@ int dr_devx_query_gid(struct ibv_context *ctx, uint8_t vhca_port_num,
 
 static inline bool dr_is_root_table(struct mlx5dv_dr_table *tbl)
 {
+	/*确认为root table*/
 	return tbl->level == 0;
 }
 

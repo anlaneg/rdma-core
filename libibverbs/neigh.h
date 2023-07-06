@@ -11,13 +11,13 @@
 
 struct get_neigh_handler {
 	struct nl_sock *sock;
-	struct nl_cache *link_cache;
-	struct nl_cache	*neigh_cache;
-	struct nl_cache *route_cache;
-	int32_t oif;
-	int vid;
-	struct rtnl_neigh *filter_neigh;
-	struct nl_addr *found_ll_addr;
+	struct nl_cache *link_cache;/*link信息*/
+	struct nl_cache	*neigh_cache;/*neigh信息*/
+	struct nl_cache *route_cache;/*route信息*/
+	int32_t oif;/*出接口if*/
+	int vid;/*出接口对应的vlan id*/
+	struct rtnl_neigh *filter_neigh;/*目的neigh*/
+	struct nl_addr *found_ll_addr;/*获取neigh对应的Link local地址*/
 	struct nl_addr *dst;
 	struct nl_addr *src;
 	uint64_t timeout;

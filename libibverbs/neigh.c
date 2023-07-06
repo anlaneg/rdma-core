@@ -94,6 +94,7 @@ static int get_ifindex(const struct sockaddr *s)
 	struct ifaddrs *ifaddr, *ifa;
 	int name2index = -ENODEV;
 
+	/*获取所有ifaddr*/
 	if (-1 == getifaddrs(&ifaddr))
 		return errno;
 
@@ -102,6 +103,7 @@ static int get_ifindex(const struct sockaddr *s)
 			continue;
 
 		if (cmp_address(ifa->ifa_addr, s)) {
+		    /*如果当前遍历的ifa与s相等，返回name2index*/
 			name2index = if_nametoindex(ifa->ifa_name);
 			break;
 		}
@@ -120,12 +122,14 @@ static struct nl_addr *get_neigh_mac(struct get_neigh_handler *neigh_handler)
 	/* future optimization - if link local address - parse address and
 	 * return mac now instead of doing so after the routing CB. This
 	 * is of course referred to GIDs */
+	/*查询neigh*/
 	neigh = rtnl_neigh_get(neigh_handler->neigh_cache,
 			       neigh_handler->oif,
 			       neigh_handler->dst);
 	if (neigh == NULL)
 		return NULL;
 
+	/*取此neigh对应的mac地址*/
 	ll_addr = rtnl_neigh_get_lladdr(neigh);
 	if (NULL != ll_addr)
 		ll_addr = nl_addr_clone(ll_addr);
@@ -292,6 +296,7 @@ static struct nl_addr *process_get_neigh_mac(
 		struct get_neigh_handler *neigh_handler)
 {
 	int err;
+	/*取链路mac*/
 	struct nl_addr *ll_addr = get_neigh_mac(neigh_handler);
 	struct rtnl_neigh *neigh_filter;
 	fd_set fdset;
@@ -305,8 +310,10 @@ static struct nl_addr *process_get_neigh_mac(
 	int retries = 0;
 
 	if (NULL != ll_addr)
+	    /*如果获得link local地址，则返回*/
 		return ll_addr;
 
+	/*未查询，进行创建*/
 	err = nl_socket_add_membership(neigh_handler->sock,
 				       RTNLGRP_NEIGH);
 	if (err < 0)
@@ -601,6 +608,7 @@ found:
 	return neigh_handler->found_ll_addr ? 0 : -1;
 }
 
+/*取neigh_handler对应的源地址的接口ifindex*/
 int neigh_get_oif_from_src(struct get_neigh_handler *neigh_handler)
 {
 	int oif = -ENODEV;
@@ -614,6 +622,7 @@ int neigh_get_oif_from_src(struct get_neigh_handler *neigh_handler)
 		return oif;
 	}
 
+	/*取src_info对应的出接口*/
 	oif = get_ifindex(src_info->ai_addr);
 	if (oif <= 0)
 		goto free;
@@ -627,6 +636,7 @@ int neigh_init_resources(struct get_neigh_handler *neigh_handler, int timeout)
 {
 	int err;
 
+	/*创建netlink socket*/
 	neigh_handler->sock = nl_socket_alloc();
 	if (neigh_handler->sock == NULL) {
 		errno = ENOSYS;
@@ -637,6 +647,7 @@ int neigh_init_resources(struct get_neigh_handler *neigh_handler, int timeout)
 	if (err < 0)
 		goto free_socket;
 
+	/*link 缓存*/
 	err = rtnl_link_alloc_cache(neigh_handler->sock, AF_UNSPEC,
 				    &neigh_handler->link_cache);
 	if (err) {
@@ -647,6 +658,7 @@ int neigh_init_resources(struct get_neigh_handler *neigh_handler, int timeout)
 
 	nl_cache_mngt_provide(neigh_handler->link_cache);
 
+	/*route 缓存*/
 	err = rtnl_route_alloc_cache(neigh_handler->sock, AF_UNSPEC, 0,
 				     &neigh_handler->route_cache);
 	if (err) {
@@ -657,6 +669,7 @@ int neigh_init_resources(struct get_neigh_handler *neigh_handler, int timeout)
 
 	nl_cache_mngt_provide(neigh_handler->route_cache);
 
+	/*neigh 缓存*/
 	err = rtnl_neigh_alloc_cache(neigh_handler->sock,
 				     &neigh_handler->neigh_cache);
 	if (err) {
@@ -691,11 +704,13 @@ free_socket:
 	return err;
 }
 
+/*取neigh出接口设备对应的vlanid*/
 uint16_t neigh_get_vlan_id_from_dev(struct get_neigh_handler *neigh_handler)
 {
 	struct rtnl_link *link;
 	int vid = 0xffff;
 
+	/*取出接口link*/
 	link = rtnl_link_get(neigh_handler->link_cache, neigh_handler->oif);
 	if (link == NULL) {
 		errno = EINVAL;
@@ -703,6 +718,7 @@ uint16_t neigh_get_vlan_id_from_dev(struct get_neigh_handler *neigh_handler)
 	}
 
 	if (rtnl_link_is_vlan(link))
+	    /*link为vlanif,获取link对应的vlan*/
 		vid = rtnl_link_vlan_get_id(link);
 	rtnl_link_put(link);
 	return vid >= 0 && vid <= 0xfff ? vid : 0xffff;
@@ -728,6 +744,7 @@ int neigh_set_src(struct get_neigh_handler *neigh_handler,
 	return neigh_handler->src == NULL;
 }
 
+/*指定对应的出接口*/
 void neigh_set_oif(struct get_neigh_handler *neigh_handler, int oif)
 {
 	neigh_handler->oif = oif;
@@ -737,9 +754,11 @@ int neigh_get_ll(struct get_neigh_handler *neigh_handler, void *addr_buff,
 		 int addr_size) {
 	int neigh_len;
 
+	/*无link local地址，返回失败*/
 	if (neigh_handler->found_ll_addr == NULL)
 		return -EINVAL;
 
+	/*取Link local地址*/
 	 neigh_len = nl_addr_get_len(neigh_handler->found_ll_addr);
 
 	if (neigh_len > addr_size)
@@ -814,8 +833,10 @@ int process_get_neigh(struct get_neigh_handler *neigh_handler)
 
 	nlmsg_append(m, &rmsg, sizeof(rmsg), NLMSG_ALIGNTO);
 
+	/*设置目的地址*/
 	NLA_PUT_ADDR(m, RTA_DST, neigh_handler->dst);
 
+	/*设置对应的出接口*/
 	if (neigh_handler->oif > 0)
 		NLA_PUT_U32(m, RTA_OIF, neigh_handler->oif);
 

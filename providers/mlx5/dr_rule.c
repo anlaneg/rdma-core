@@ -1585,6 +1585,7 @@ dr_rule_create_rule_root(struct mlx5dv_dr_matcher *matcher,
 	if (ret)
 		goto free_attr_aux;
 
+	/*创建规则*/
 	rule->flow = _mlx5dv_create_flow(matcher->dv_matcher,
 					 value,
 					 num_actions,
@@ -1619,6 +1620,7 @@ struct mlx5dv_dr_rule *mlx5dv_dr_rule_create(struct mlx5dv_dr_matcher *matcher,
 	atomic_fetch_add(&matcher->refcount, 1);
 
 	if (dr_is_root_table(matcher->tbl))
+		/*为root table创建规则*/
 		rule = dr_rule_create_rule_root(matcher, value, num_actions, actions);
 	else
 		rule = dr_rule_create_rule(matcher, value, num_actions, actions);

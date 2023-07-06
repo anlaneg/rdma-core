@@ -372,6 +372,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 	memset(ctx->buf, 0, size);
 
+	/*打开指定的ib设备*/
 	ctx->context = ibv_open_device(ib_dev);
 	if (!ctx->context) {
 		fprintf(stderr, "Couldn't get context for %s\n",
@@ -405,18 +406,21 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	} else
 		ctx->channel = NULL;
 
+	/*创建pd*/
 	ctx->pd = ibv_alloc_pd(ctx->context);
 	if (!ctx->pd) {
 		fprintf(stderr, "Couldn't allocate PD\n");
 		goto clean_comp_channel;
 	}
 
+	/*注册mr*/
 	ctx->mr = ibv_reg_mr(ctx->pd, ctx->buf, size, access_flags);
 	if (!ctx->mr) {
 		fprintf(stderr, "Couldn't register MR\n");
 		goto clean_pd;
 	}
 
+	/*创建cq*/
 	ctx->cq = ibv_create_cq(ctx->context, rx_depth + num_qp, NULL,
 				ctx->channel, 0);
 	if (!ctx->cq) {
@@ -424,6 +428,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		goto clean_mr;
 	}
 
+	/*创建srq*/
 	{
 		struct ibv_srq_init_attr attr = {
 			.attr = {
@@ -439,6 +444,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		}
 	}
 
+	/*创建多个qp*/
 	for (i = 0; i < num_qp; ++i) {
 		struct ibv_qp_attr attr;
 		struct ibv_qp_init_attr init_attr = {
@@ -463,6 +469,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		}
 	}
 
+	/*修改qp属性*/
 	for (i = 0; i < num_qp; ++i) {
 		struct ibv_qp_attr attr = {
 			.qp_state        = IBV_QPS_INIT,
@@ -795,12 +802,14 @@ int main(int argc, char *argv[])
 
 	page_size = sysconf(_SC_PAGESIZE);
 
+	/*取系统所有ib设备*/
 	dev_list = ibv_get_device_list(NULL);
 	if (!dev_list) {
 		perror("Failed to get IB devices list");
 		return 1;
 	}
 
+	/*如果未指定，则使用首个ib设备，否则使用指定名称的ib设备*/
 	if (!ib_devname) {
 		ib_dev = *dev_list;
 		if (!ib_dev) {
@@ -822,6 +831,7 @@ int main(int argc, char *argv[])
 	if (!ctx)
 		return 1;
 
+	/*设置接受buffer*/
 	routs = pp_post_recv(ctx, ctx->rx_depth);
 	if (routs < ctx->rx_depth) {
 		fprintf(stderr, "Couldn't post receive (%d)\n", routs);
@@ -836,6 +846,7 @@ int main(int argc, char *argv[])
 
 	memset(my_dest, 0, sizeof my_dest);
 
+	/*取port属性*/
 	if (pp_get_port_info(ctx->context, ib_port, &ctx->portinfo)) {
 		fprintf(stderr, "Couldn't get port info\n");
 		return 1;

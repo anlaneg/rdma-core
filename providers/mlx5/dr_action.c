@@ -2180,6 +2180,7 @@ mlx5dv_dr_action_create_dest_ib_port(struct mlx5dv_dr_domain *dmn,
 
 	if (!dmn->info.supp_sw_steering ||
 	    dmn->type != MLX5DV_DR_DOMAIN_TYPE_FDB) {
+		/*非fdb或者不支持software steering，则返回不支持*/
 		dr_dbg(dmn, "Domain doesn't support ib_port actions\n");
 		errno = EOPNOTSUPP;
 		return NULL;
@@ -2187,6 +2188,7 @@ mlx5dv_dr_action_create_dest_ib_port(struct mlx5dv_dr_domain *dmn,
 
 	vport_cap = dr_vports_table_get_ib_port_cap(&dmn->info.caps, ib_port);
 	if (!vport_cap) {
+		/*未查询到此cap,报错，返回NULL*/
 		dr_dbg(dmn, "Failed to get ib_port %d caps\n", ib_port);
 		errno = EINVAL;
 		return NULL;

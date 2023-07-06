@@ -138,8 +138,11 @@ int open_cdev(const char *devname_hint, dev_t cdev)
 	char *devpath;
 	int fd;
 
+	/*构造设备路径*/
 	if (asprintf(&devpath, RDMA_CDEV_DIR "/%s", devname_hint) < 0)
 		return -1;
+
+	/*打开字符设备，获得fd*/
 	fd = open_cdev_internal(devpath, cdev);
 	free(devpath);
 	if (fd == -1 && cdev != 0)

@@ -2012,6 +2012,7 @@ static int _mlx5dv_init_obj(struct mlx5dv_obj *obj, uint64_t obj_type)
 static struct ibv_context *
 get_context_from_obj(struct mlx5dv_obj *obj, uint64_t obj_type)
 {
+	/*按照obj type获取相应的context,以下type有优先级*/
 	if (obj_type & MLX5DV_OBJ_QP)
 		return obj->qp.in->context;
 	if (obj_type & MLX5DV_OBJ_CQ)
@@ -2662,6 +2663,7 @@ static const struct verbs_device_ops mlx5_dev_ops = {
 
 static bool is_mlx5_dev(struct ibv_device *device)
 {
+	/*检查是否为mlx5设备*/
 	struct verbs_device *verbs_device = verbs_get_device(device);
 
 	return verbs_device->ops == &mlx5_dev_ops;

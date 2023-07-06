@@ -70,12 +70,13 @@ void load_drivers(void);
 #endif
 
 struct verbs_ex_private {
-    /*指明这些命令是否支持ioctl*/
+    /*指明这些命令是否不支持ioctl（执行过程中回调返回unsupport,则打上此标记）*/
 	BITMAP_DECLARE(unsupported_ioctls, VERBS_OPS_NUM);
 	/*driver类型*/
 	uint32_t driver_id;
-	/*是否使用ioctl中的write方法*/
+	/*是否使用ioctl来替代write方法*/
 	bool use_ioctl_write;
+	/*verbs context对应的ops*/
 	struct verbs_context_ops ops;
 	bool imported;
 };

@@ -111,9 +111,11 @@ int main(int argc, char *argv[])
 			break;
 		switch (c) {
 		case 'd':
+		    /*指定使能的设备名称*/
 			ib_devname = strdupa(optarg);
 			break;
 		case 'h':
+		    /*帮助信息*/
 			ret = 0;
 			SWITCH_FALLTHROUGH;
 		default:
@@ -121,11 +123,15 @@ int main(int argc, char *argv[])
 			return ret;
 		}
 	}
+
+	/*获得系统所有ib设备*/
 	dev_list = ibv_get_device_list(NULL);
 	if (!dev_list) {
 		perror("Failed to get IB devices list");
 		return 1;
 	}
+
+	/*查找指定的ib设备*/
 	if (ib_devname) {
 		for (; dev_list[i]; ++i) {
 			if (!strcmp(ibv_get_device_name(dev_list[i]), ib_devname))
@@ -139,6 +145,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	/*找开此ib设备*/
 	context = ibv_open_device(dev_list[i]);
 	if (!context) {
 		fprintf(stderr, "Couldn't get context for %s\n",
@@ -146,6 +153,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	/*显示此ib设备对应的async event fd*/
 	printf("%s: async event FD %d\n",
 	       ibv_get_device_name(dev_list[i]), context->async_fd);
 

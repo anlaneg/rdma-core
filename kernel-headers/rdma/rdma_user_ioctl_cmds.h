@@ -52,7 +52,9 @@ enum {
 };
 
 struct ib_uverbs_attr {
+    /*属性id*/
 	__u16 attr_id;		/* command specific type attribute */
+	/*属性值的长度*/
 	__u16 len;		/* only for pointers and IDRs array */
 	__u16 flags;		/* combination of UVERBS_ATTR_F_XXXX */
 	union {
@@ -67,20 +69,26 @@ struct ib_uverbs_attr {
 		 * ptr to command, inline data, idr/fd or
 		 * ptr to __u32 array of IDRs
 		 */
-		__aligned_u64 data;
+		__aligned_u64 data;/*属性值*/
 		/* Used by FD_IN and FD_OUT */
 		__s64 data_s64;
 	};
 };
 
 struct ib_uverbs_ioctl_hdr {
+    /*buffer长度*/
 	__u16 length;
+	/*消息obj id*/
 	__u16 object_id;
+	/*消息method id*/
 	__u16 method_id;
+	/*记录有多少个属性*/
 	__u16 num_attrs;
 	__aligned_u64 reserved1;
+	/*driver类别*/
 	__u32 driver_id;
 	__u32 reserved2;
+	/*指向attr数组(内存连续）*/
 	struct ib_uverbs_attr  attrs[0];
 };
 

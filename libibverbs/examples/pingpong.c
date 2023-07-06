@@ -48,8 +48,9 @@ enum ibv_mtu pp_mtu_to_enum(int mtu)
 	}
 }
 
+/*查询port信息*/
 int pp_get_port_info(struct ibv_context *context, int port,
-		     struct ibv_port_attr *attr)
+		     struct ibv_port_attr *attr/*出参，port属性*/)
 {
 	return ibv_query_port(context, port, attr);
 }
@@ -71,10 +72,11 @@ void wire_gid_to_gid(const char *wgid, union ibv_gid *gid)
 
 void gid_to_wire_gid(const union ibv_gid *gid, char wgid[])
 {
-	uint32_t tmp_gid[4];
+	uint32_t tmp_gid[4];/*16字节*/
 	int i;
 
 	memcpy(tmp_gid, gid, sizeof(tmp_gid));
 	for (i = 0; i < 4; ++i)
+		/*按u32转大端序，再格式化为字符串，填充到wgid中*/
 		sprintf(&wgid[i * 8], "%08x", htobe32(tmp_gid[i]));
 }

@@ -57,6 +57,7 @@ enum write_fallback _check_legacy(struct ibv_command_buffer *cmdb, int *ret)
 			if (cur->attr_id != UVERBS_ATTR_UHW_IN &&
 			    cur->attr_id != UVERBS_ATTR_UHW_OUT &&
 			    cur->flags & UVERBS_ATTR_F_MANDATORY)
+			    /*遇到不支持的属性，返回失败*/
 				goto not_supp;
 		}
 		fallback_require_ex |= cmdb->fallback_require_ex;
@@ -81,14 +82,14 @@ not_supp:
  * interface.
  */
 enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
-					    unsigned int cmd_bit,
-					    struct ibv_command_buffer *cmdb,
+					    unsigned int cmd_bit/*命令标记*/,
+					    struct ibv_command_buffer *cmdb/*命令buffer*/,
 					    int *ret)
 {
 	struct verbs_ex_private *priv = get_priv(ctx);
 
 	if (bitmap_test_bit(priv->unsupported_ioctls, cmd_bit))
-	    /*此命令不支持ioctl*/
+	    /*如果此命令不支持ioctl，采用legacy方式进行检查*/
 		return _check_legacy(cmdb, ret);
 
 	/*通过ioctl进行调用*/

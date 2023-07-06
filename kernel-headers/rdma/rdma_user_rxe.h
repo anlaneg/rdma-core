@@ -147,6 +147,7 @@ struct rxe_dma_info {
 	union {
 	    /*inline数据*/
 		__DECLARE_FLEX_ARRAY(__u8, inline_data);
+		/*非inline要写的数据*/
 		__DECLARE_FLEX_ARRAY(struct rxe_sge, sge);
 	};
 };

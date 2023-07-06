@@ -97,14 +97,15 @@ int ibv_cmd_open_xrcd(struct ibv_context *context, struct verbs_xrcd *xrcd,
 	return 0;
 }
 
-int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
-		   uint64_t hca_va, int access,
-		   struct verbs_mr *vmr, struct ibv_reg_mr *cmd/*命令变量*/,
+int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
+		   uint64_t hca_va, int access/*访问标记*/,
+		   struct verbs_mr *vmr/*出参，待初始化的变量*/, struct ibv_reg_mr *cmd/*命令变量*/,
 		   size_t cmd_size/*命令变量长度*/,
 		   struct ib_uverbs_reg_mr_resp *resp, size_t resp_size)
 {
 	int ret;
 
+	/*填充cmd*/
 	cmd->start 	  = (uintptr_t) addr;
 	cmd->length 	  = length;
 	/* On demand access and entire address space means implicit.
@@ -112,6 +113,7 @@ int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 	 */
 	if (access & IBV_ACCESS_ON_DEMAND) {
 		if (length == SIZE_MAX && addr) {
+		    /*长度为max时，addr不能非0*/
 			errno = EINVAL;
 			return EINVAL;
 		}
@@ -119,12 +121,14 @@ int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 			cmd->length = UINT64_MAX;
 	}
 
+	/*hca_va地址*/
 	cmd->hca_va 	  = hca_va;
 	/*填充pd_handle*/
 	cmd->pd_handle 	  = pd->handle;
+	/*访问方式*/
 	cmd->access_flags = access;
 
-	/*执行memory region注册*/
+	/*请求执行memory region注册*/
 	ret = execute_cmd_write(pd->context, IB_USER_VERBS_CMD_REG_MR, cmd,
 				cmd_size, resp, resp_size);
 	if (ret)
@@ -395,7 +399,7 @@ int ibv_cmd_open_qp(struct ibv_context *context, struct verbs_qp *qp,
 }
 
 int ibv_cmd_query_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
-		     int attr_mask,
+		     int attr_mask/*属性mask*/,
 		     struct ibv_qp_init_attr *init_attr,
 		     struct ibv_query_qp *cmd, size_t cmd_size)
 {
@@ -409,6 +413,7 @@ int ibv_cmd_query_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (attr_mask & ~(IBV_QP_RATE_LIMIT - 1))
 		return EOPNOTSUPP;
 
+	/*设置qp handle*/
 	cmd->qp_handle = qp->handle;
 	cmd->attr_mask = attr_mask;
 
@@ -490,6 +495,7 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	cmd->qp_handle = qp->handle;
 	cmd->attr_mask = attr_mask;
 
+	/*按属性设置mask设置相应字段*/
 	if (attr_mask & IBV_QP_STATE)
 		cmd->qp_state = attr->qp_state;
 	if (attr_mask & IBV_QP_CUR_STATE)
@@ -505,6 +511,7 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (attr_mask & IBV_QP_QKEY)
 		cmd->qkey = attr->qkey;
 
+	/*如果指定了av*/
 	if (attr_mask & IBV_QP_AV) {
 		memcpy(cmd->dest.dgid, attr->ah_attr.grh.dgid.raw, 16);
 		cmd->dest.flow_label = attr->ah_attr.grh.flow_label;
@@ -533,6 +540,7 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (attr_mask & IBV_QP_MAX_QP_RD_ATOMIC)
 		cmd->max_rd_atomic = attr->max_rd_atomic;
 
+	/*设置alt*/
 	if (attr_mask & IBV_QP_ALT_PATH) {
 		cmd->alt_pkey_index = attr->alt_pkey_index;
 		cmd->alt_port_num = attr->alt_port_num;
@@ -576,10 +584,13 @@ int ibv_cmd_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	 * _ex path.
 	 */
 	if (attr_mask & ~(IBV_QP_RATE_LIMIT - 1))
+	    /*遇到不支持的mask,返回not support*/
 		return EOPNOTSUPP;
 
+	/*设置属性fields*/
 	copy_modify_qp_fields(qp, attr, attr_mask, &cmd->core_payload);
 
+	/*执行qp修改*/
 	return execute_cmd_write_req(qp->context, IB_USER_VERBS_CMD_MODIFY_QP,
 				     cmd, cmd_size);
 }

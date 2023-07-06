@@ -502,17 +502,22 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 	uint32_t port;
 	char buf[256];
 
+	/*找开ib设备，获得ib设备的context*/
 	ctx = ibv_open_device(ib_dev);
 	if (!ctx) {
 		fprintf(stderr, "Failed to open device\n");
 		rc = 1;
 		goto cleanup;
 	}
+
+	/*查询此设备的attribute*/
 	if (ibv_query_device_ex(ctx, NULL, &device_attr)) {
 		fprintf(stderr, "Failed to query device props\n");
 		rc = 2;
 		goto cleanup;
 	}
+
+	/*给定的ib_port必须有效*/
 	if (ib_port && ib_port > device_attr.orig_attr.phys_port_cnt) {
 		fprintf(stderr, "Invalid port requested for device\n");
 		/* rc = 3 is taken by failure to clean up */
@@ -520,6 +525,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 		goto cleanup;
 	}
 
+	/*显示ib设备的属性：包含ib设备名称。。。*/
 	printf("hca_id:\t%s\n", ibv_get_device_name(ib_dev));
 	printf("\ttransport:\t\t\t%s (%d)\n",
 	       transport_str(ib_dev->transport_type), ib_dev->transport_type);
@@ -610,11 +616,13 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 		printf("\tnum_comp_vectors:\t\t%d\n", ctx->num_comp_vectors);
 	}
 
+	/*遍历并查询ib port属性*/
 	for (port = 1; port <= device_attr.orig_attr.phys_port_cnt; ++port) {
 		/* if in the command line the user didn't ask for info about this port */
 		if ((ib_port) && (port != ib_port))
 			continue;
 
+		/*查询给定的ib port属性*/
 		rc = ibv_query_port(ctx, port, &port_attr);
 		if (rc) {
 			fprintf(stderr, "Failed to query port %u props\n", port);
@@ -705,10 +713,12 @@ int main(int argc, char *argv[])
 
 		switch (c) {
 		case 'd':
+		    /*指定设备名称*/
 			ib_devname = strdup(optarg);
 			break;
 
 		case 'i':
+		    /*指定ib port*/
 			ib_port = strtol(optarg, NULL, 0);
 			if (ib_port <= 0) {
 				usage(argv[0]);
@@ -747,6 +757,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/*取系统中所有ib设备*/
 	dev_list = orig_dev_list = ibv_get_device_list(NULL);
 	if (!dev_list) {
 		perror("Failed to get IB devices list");
@@ -754,18 +765,21 @@ int main(int argc, char *argv[])
 	}
 
 	if (ib_devname) {
+	    /*遍历所有系统已知设备，查找给定名称的ib_devname*/
 		while (*dev_list) {
 			if (!strcmp(ibv_get_device_name(*dev_list), ib_devname))
 				break;
 			++dev_list;
 		}
 
+		/*查找设备失败*/
 		if (!*dev_list) {
 			fprintf(stderr, "IB device '%s' wasn't found\n", ib_devname);
 			ret = -1;
 			goto out;
 		}
 
+		/*显示此设备的属性及指定ib_port的属性*/
 		ret |= print_hca_cap(*dev_list, ib_port);
 	} else {
 		if (!*dev_list) {
@@ -774,6 +788,7 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 
+		/*显示所有设备属性及指定ib_port的属性*/
 		while (*dev_list) {
 			ret |= print_hca_cap(*dev_list, ib_port);
 			++dev_list;

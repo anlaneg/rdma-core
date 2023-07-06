@@ -48,6 +48,7 @@
 #define IB_USER_VERBS_MIN_ABI_VERSION	3
 #define IB_USER_VERBS_MAX_ABI_VERSION	6
 
+/*扩展头*/
 struct ex_hdr {
 	struct ib_uverbs_cmd_hdr hdr;
 	struct ib_uverbs_ex_cmd_hdr ex_hdr;
@@ -73,11 +74,11 @@ struct ex_hdr {
  * _STRUCT_xx macro that produces a tagless version of the kernel struct. The
  * tagless struct produces a layout that matches the original code.
  */
-#define DECLARE_CMDX(_enum, _name, _kabi, _kabi_resp)                          \
+#define DECLARE_CMDX(_enum, _name/*cmd结构体名称*/, _kabi, _kabi_resp/*响应结构体*/)                          \
 	struct _name {                                                         \
-		struct ib_uverbs_cmd_hdr hdr;                                  \
+		struct ib_uverbs_cmd_hdr hdr; /*cmd基本头*/                                 \
 		union {                                                        \
-	        /*添加kabi结构体类型，看make_abi_struct.py脚本定义*/\
+	        /*引用宏，添加匿名kabi结构体类型，看make_abi_struct.py脚本定义*/\
 			_STRUCT_##_kabi;                                       \
 			struct _kabi core_payload;                             \
 		};                                                             \
@@ -100,20 +101,26 @@ struct ex_hdr {
 				      sizeof(struct _kabi),                    \
 		      "Bad size")
 
-#define DECLARE_CMD(_enum, _name, _kabi)                                       \
-	DECLARE_CMDX(_enum, _name, _kabi, _kabi##_resp)
+#define DECLARE_CMD(_enum/*cmd结构体名称映射id*/, _name/*cmd结构体名称*/, _kabi/*此命令扩展的结构体名称*/)                                       \
+	DECLARE_CMDX(_enum, _name, _kabi, _kabi##_resp/*此命令扩展的响应结构体名称*/)
 
 #define DECLARE_CMD_EXX(_enum, _name, _kabi, _kabi_resp)                       \
 	struct _name {                                                         \
+	    /*扩展头*/\
 		struct ex_hdr hdr;                                             \
 		union {                                                        \
+	        /*添加kabi结构体类型，看make_abi_struct.py脚本定义*/\
 			_STRUCT_##_kabi;                                       \
 			struct _kabi core_payload;                             \
 		};                                                             \
 	};                                                                     \
+	/*定义_name结构体的别名*/\
 	typedef struct _name IBV_ABI_REQ(_enum);                               \
+	/*定义_kabi结构体的别名*/\
 	typedef struct _kabi IBV_KABI_REQ(_enum);                              \
+	/*定义_kabi_resp结构体的别名*/\
 	typedef struct _kabi_resp IBV_KABI_RESP(_enum);                        \
+	/*定义枚举，此枚举对齐方式为8*/\
 	enum { IBV_ABI_ALIGN(_enum) = 8 };                                     \
 	static_assert(_enum != -1, "Bad enum");                                \
 	static_assert(sizeof(struct _kabi) % 8 == 0, "Bad req alignment");     \
@@ -205,7 +212,7 @@ DECLARE_CMD(IB_USER_VERBS_CMD_OPEN_XRCD, ibv_open_xrcd, ib_uverbs_open_xrcd);
 DECLARE_CMD(IB_USER_VERBS_CMD_POLL_CQ, ibv_poll_cq, ib_uverbs_poll_cq);
 DECLARE_CMD(IB_USER_VERBS_CMD_POST_RECV, ibv_post_recv, ib_uverbs_post_recv);
 DECLARE_CMD(IB_USER_VERBS_CMD_POST_SEND, ibv_post_send, ib_uverbs_post_send);
-DECLARE_CMD(IB_USER_VERBS_CMD_POST_SRQ_RECV, ibv_post_srq_recv, ib_uverbs_post_srq_recv);
+DECLARE_CMD(IB_USER_VERBS_CMD_POST_SRQ_RECV, ibv_post_srq_recv/*cmd结构体名称*/, ib_uverbs_post_srq_recv);
 DECLARE_CMD(IB_USER_VERBS_CMD_QUERY_DEVICE, ibv_query_device, ib_uverbs_query_device);
 DECLARE_CMD(IB_USER_VERBS_CMD_QUERY_PORT, ibv_query_port, ib_uverbs_query_port);
 DECLARE_CMD(IB_USER_VERBS_CMD_QUERY_QP, ibv_query_qp, ib_uverbs_query_qp);

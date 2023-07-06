@@ -32,6 +32,7 @@
 
 #include <infiniband/cmd_write.h>
 
+/*释放pd*/
 int ibv_cmd_dealloc_pd(struct ibv_pd *pd)
 {
 	DECLARE_FBCMD_BUFFER(cmdb, UVERBS_OBJECT_PD, UVERBS_METHOD_PD_DESTROY,

@@ -771,6 +771,7 @@ struct ib_uverbs_sge {
 	__u32 lkey;
 };
 
+/*uverbs提供的opcode*/
 enum ib_uverbs_wr_opcode {
 	IB_UVERBS_WR_RDMA_WRITE = 0,
 	IB_UVERBS_WR_RDMA_WRITE_WITH_IMM = 1,

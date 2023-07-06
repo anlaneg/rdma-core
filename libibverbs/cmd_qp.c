@@ -106,6 +106,7 @@ static int ibv_icmd_create_qp(struct ibv_context *context,
 	case IBV_QPT_RAW_PACKET:
 	case IBV_QPT_XRC_SEND:
 	case IBV_QPT_DRIVER:
+		/*以上类型的qp均要求comp_mask有IBV_QP_INIT_ATTR_PD标记*/
 		if (!(attr_ex->comp_mask & IBV_QP_INIT_ATTR_PD)) {
 			errno = EINVAL;
 			return errno;
@@ -156,6 +157,7 @@ static int ibv_icmd_create_qp(struct ibv_context *context,
 	}
 
 	handle = fill_attr_out_obj(cmdb, UVERBS_ATTR_CREATE_QP_HANDLE);
+	/*填充qp类型*/
 	fill_attr_const_in(cmdb, UVERBS_ATTR_CREATE_QP_TYPE, attr_ex->qp_type);
 	fill_attr_in_uint64(cmdb, UVERBS_ATTR_CREATE_QP_USER_HANDLE, (uintptr_t)qp);
 
@@ -208,6 +210,7 @@ static int ibv_icmd_create_qp(struct ibv_context *context,
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_CREATE_QP_RESP_CAP, &attr_ex->cap);
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_CREATE_QP_RESP_QP_NUM, &qp_num);
 
+	/*创建qp*/
 	switch (execute_ioctl_fallback(context, create_qp, cmdb, &ret)) {
 	case TRY_WRITE: {
 		if (abi_ver > 4) {
@@ -371,10 +374,11 @@ static int ibv_icmd_create_qp(struct ibv_context *context,
 }
 
 int ibv_cmd_create_qp(struct ibv_pd *pd,
-		      struct ibv_qp *qp, struct ibv_qp_init_attr *attr,
+		      struct ibv_qp *qp/*出参，创建的qp*/, struct ibv_qp_init_attr *attr,
 		      struct ibv_create_qp *cmd, size_t cmd_size,
 		      struct ib_uverbs_create_qp_resp *resp, size_t resp_size)
 {
+	/*构造qp创建命令*/
 	DECLARE_CMD_BUFFER_COMPAT(cmdb, UVERBS_OBJECT_QP,
 				  UVERBS_METHOD_QP_CREATE, cmd, cmd_size, resp,
 				  resp_size);
@@ -382,6 +386,7 @@ int ibv_cmd_create_qp(struct ibv_pd *pd,
 	struct ibv_qp_init_attr_ex attr_ex = {};
 	int ret;
 
+	/*利用attr填充attr_ex*/
 	attr_ex.qp_context = attr->qp_context;
 	attr_ex.send_cq = attr->send_cq;
 	attr_ex.recv_cq = attr->recv_cq;

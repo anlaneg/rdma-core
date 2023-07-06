@@ -58,7 +58,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_list, 1_1, "IBVERBS_1.1",
 {
 	struct ibv_device **l = NULL;
 	struct verbs_device *device;
-	static bool initialized;/*是否已初始化*/
+	static bool initialized;/*此函数是否被调用过*/
 	int num_devices;
 	int i = 0;
 
@@ -115,7 +115,7 @@ LATEST_SYMVER_FUNC(ibv_free_device_list, 1_1, "IBVERBS_1.1",
 	free(list);
 }
 
-/*取ibv设备名称*/
+/*取给定的ibv设备名称*/
 LATEST_SYMVER_FUNC(ibv_get_device_name, 1_1, "IBVERBS_1.1",
 		   const char *,
 		   struct ibv_device *device)
@@ -196,10 +196,12 @@ __lib_ibv_create_cq_ex(struct ibv_context *context,
 	struct ibv_cq_ex *cq;
 
 	if (cq_attr->wc_flags & ~IBV_CREATE_CQ_SUP_WC_FLAGS) {
+	    /*wc_flags中包含不认识的flags,返回NULL*/
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
 
+	/*调用provider回调，创建cq*/
 	cq = get_ops(context)->create_cq_ex(context, cq_attr);
 
 	if (cq)
@@ -240,9 +242,9 @@ static bool has_ioctl_write(struct ibv_context *ctx)
  * be released during the matching call to verbs_uninit_contxt or during the
  * failure path of this function.
  */
-int verbs_init_context(struct verbs_context *context_ex,
-		       struct ibv_device *device, int cmd_fd,
-		       uint32_t driver_id)
+int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_context*/,
+		       struct ibv_device *device/*关联的ib设备*/, int cmd_fd/*verbs命令对应的fd*/,
+		       uint32_t driver_id/*驱动类别id*/)
 {
 	struct ibv_context *context = &context_ex->context;
 
@@ -256,6 +258,7 @@ int verbs_init_context(struct verbs_context *context_ex,
 	context_ex->context.abi_compat = __VERBS_ABI_IS_EXTENDED;
 	context_ex->sz = sizeof(*context_ex);
 
+	/*申请私有结构体*/
 	context_ex->priv = calloc(1, sizeof(*context_ex->priv));
 	if (!context_ex->priv) {
 		errno = ENOMEM;
@@ -264,7 +267,7 @@ int verbs_init_context(struct verbs_context *context_ex,
 	}
 
 	context_ex->priv->driver_id = driver_id;
-	//设置dummy式的ops
+	//设置dummy式的ops,用于提供默认实现
 	verbs_set_ops(context_ex, &verbs_dummy_ops);
 	context_ex->priv->use_ioctl_write = has_ioctl_write(context);
 
@@ -276,10 +279,10 @@ int verbs_init_context(struct verbs_context *context_ex,
  * driver wrapper, and context_offset is the number of bytes into the wrapper
  * structure where the verbs_context starts.
  */
-void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd/*字符设备*/,
-				    size_t alloc_size/*context申请的大小*/,
+void *_verbs_init_and_alloc_context(struct ibv_device *device/*关联的ib设备*/, int cmd_fd/*字符设备*/,
+				    size_t alloc_size/*context结构体大小*/,
 				    struct verbs_context *context_offset/*driver context到verbs_context的偏移量*/,
-				    uint32_t driver_id)
+				    uint32_t driver_id/*驱动类型编号*/)
 {
 	void *drv_context;
 	struct verbs_context *context;
@@ -307,8 +310,10 @@ err_free:
 	return NULL;
 }
 
+/*设置lib ops*/
 static void set_lib_ops(struct verbs_context *vctx)
 {
+    /*设置create cq_ex回调*/
 	vctx->create_cq_ex = __lib_ibv_create_cq_ex;
 
 	/*
@@ -338,10 +343,10 @@ static void set_lib_ops(struct verbs_context *vctx)
 		(void (*)(void))vctx->ibv_destroy_flow;
 }
 
-//打开ib device，获取其对应的ibv_context
-struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_data)
+//打开ib device，创建并获取其对应的ibv_context
+struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_data/*用户传入的私有数据*/)
 {
-    /*取此设备对应的verbs_device*/
+    /*转对应的verbs_device*/
 	struct verbs_device *verbs_device = verbs_get_device(device);
 	int cmd_fd = -1;
 	struct verbs_context *context_ex;
@@ -352,7 +357,7 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 		 * We'll only be doing writes, but we need O_RDWR in case the
 		 * provider needs to mmap() the file.
 		 */
-		//打开/dev/infiniband/下对应的verbs字符设备
+		//打开/dev/infiniband/下对应的verbs字符设备,例如/dev/infiniband/uverbs0
 		cmd_fd = open_cdev(verbs_device->sysfs->sysfs_name,
 				   verbs_device->sysfs->sysfs_cdev);
 		if (cmd_fd < 0)
@@ -363,7 +368,8 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	 * cmd_fd ownership is transferred into alloc_context, if it fails
 	 * then it closes cmd_fd and returns NULL
 	 */
-	//由此verbs设备的provider负责创建context
+	//由此verbs设备的provider负责创建context,例如:
+	//verbs_device->ops == mlx5_dev_ops/rxe_dev_ops
 	context_ex = verbs_device->ops->alloc_context(device, cmd_fd/*device对应的字符设备fd*/, private_data);
 	if (!context_ex)
 		return NULL;
@@ -371,6 +377,7 @@ struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_d
 	set_lib_ops(context_ex);
 	if (verbs_device->sysfs) {
 		if (context_ex->context.async_fd == -1) {
+		    /*打开异步fd*/
 			ret = ibv_cmd_alloc_async_fd(&context_ex->context);
 			if (ret) {
 				ibv_close_device(&context_ex->context);
@@ -387,7 +394,7 @@ LATEST_SYMVER_FUNC(ibv_open_device, 1_1, "IBVERBS_1.1",
 		   struct ibv_context *,
 		   struct ibv_device *device)
 {
-	return verbs_open_device(device, NULL/*私有数据为空*/);
+	return verbs_open_device(device/*要打开的ib device*/, NULL/*私有数据为空*/);
 }
 
 struct ibv_context *ibv_import_device(int cmd_fd)

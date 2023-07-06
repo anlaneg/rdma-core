@@ -90,6 +90,7 @@ static int rxe_query_device(struct ibv_context *context,
 	return 0;
 }
 
+/*查询port属性*/
 static int rxe_query_port(struct ibv_context *context, uint8_t port,
 			  struct ibv_port_attr *attr)
 {
@@ -98,6 +99,7 @@ static int rxe_query_port(struct ibv_context *context, uint8_t port,
 	return ibv_cmd_query_port(context, port, attr, &cmd, sizeof(cmd));
 }
 
+/*申请pd结构体*/
 static struct ibv_pd *rxe_alloc_pd(struct ibv_context *context)
 {
 	struct ibv_alloc_pd cmd;
@@ -218,8 +220,8 @@ err:
 }
 
 /*注册memory region*/
-static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
-				 uint64_t hca_va, int access)
+static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
+				 uint64_t hca_va, int access/*访问权限*/)
 {
 	struct verbs_mr *vmr;
 	struct ibv_reg_mr cmd;
@@ -231,7 +233,7 @@ static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 	if (!vmr)
 		return NULL;
 
-	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va, access, vmr/*verbs_mr对象*/, &cmd,
+	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va, access, vmr/*出参，verbs_mr对象*/, &cmd,
 			     sizeof(cmd), &resp, sizeof(resp));
 	if (ret) {
 		free(vmr);
@@ -377,7 +379,7 @@ static uint8_t cq_read_dlid_path_bits(struct ibv_cq_ex *current)
 static int rxe_destroy_cq(struct ibv_cq *ibcq);
 
 /*创建cq*/
-static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
+static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe/*cqe数目*/,
 				    struct ibv_comp_channel *channel,
 				    int comp_vector)
 {
@@ -390,6 +392,7 @@ static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
 	if (!cq)
 		return NULL;
 
+	/*向kernel请求创建cq*/
 	ret = ibv_cmd_create_cq(context, cqe, channel, comp_vector,
 				&cq->vcq.cq, NULL, 0,
 				&resp.ibv_resp, sizeof(resp));
@@ -398,7 +401,8 @@ static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
 		return NULL;
 	}
 
-	cq->queue = mmap(NULL, resp.mi.size, PROT_READ | PROT_WRITE, MAP_SHARED,
+	/*映射kernel创建的cq*/
+	cq->queue = mmap(NULL, resp.mi.size/*cq队列内存大小*/, PROT_READ | PROT_WRITE, MAP_SHARED,
 			 context->cmd_fd, resp.mi.offset);
 	if ((void *)cq->queue == MAP_FAILED) {
 		ibv_cmd_destroy_cq(&cq->vcq.cq);
@@ -408,6 +412,7 @@ static struct ibv_cq *rxe_create_cq(struct ibv_context *context, int cqe,
 
 	cq->wc_size = 1ULL << cq->queue->log2_elem_size;
 
+	/*检查cqe大小*/
 	if (cq->wc_size < sizeof(struct ib_uverbs_wc)) {
 		rxe_destroy_cq(&cq->vcq.cq);
 		return NULL;
@@ -567,7 +572,7 @@ static int rxe_destroy_cq(struct ibv_cq *ibcq)
 	return 0;
 }
 
-/*自ibcq->queue中提取最多ne个元素*/
+/*自cq队列中提取最多ne个元素*/
 static int rxe_poll_cq(struct ibv_cq *ibcq, int ne/*期待出队数目*/, struct ibv_wc *wc/*出队内容填充*/)
 {
 	struct rxe_cq *cq = to_rcq(ibcq);
@@ -699,10 +704,12 @@ static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 {
 	int i;
 	struct rxe_recv_wqe *wqe;
+	/*填写recv queue*/
 	struct rxe_queue_buf *q = rq->queue;
 	int length = 0;
 	int rc = 0;
 
+	/*检查队列是否已满*/
 	if (queue_full(q)) {
 		rc  = -ENOMEM;
 		goto out;
@@ -713,8 +720,10 @@ static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 		goto out;
 	}
 
+	/*取生产者指针*/
 	wqe = (struct rxe_recv_wqe *)producer_addr(q);
 
+	/*利用recv_wr填充wqe*/
 	wqe->wr_id = recv_wr->wr_id;
 	wqe->num_sge = recv_wr->num_sge;
 
@@ -730,6 +739,7 @@ static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 	wqe->dma.num_sge = wqe->num_sge;
 	wqe->dma.sge_offset = 0;
 
+	/*更新生产者指针*/
 	advance_producer(q);
 
 out:
@@ -1141,6 +1151,7 @@ static int map_queue_pair(int cmd_fd, struct rxe_qp *qp,
 		qp->rq.queue = NULL;
 		qp->rq_mmap_info.size = 0;
 	} else {
+		/*映射rq*/
 		qp->rq.max_sge = attr->cap.max_recv_sge;
 		qp->rq.queue = mmap(NULL, resp->rq_mi.size, PROT_READ | PROT_WRITE,
 				    MAP_SHARED,
@@ -1148,10 +1159,12 @@ static int map_queue_pair(int cmd_fd, struct rxe_qp *qp,
 		if ((void *)qp->rq.queue == MAP_FAILED)
 			return errno;
 
+		/*保存rq映射信息*/
 		qp->rq_mmap_info = resp->rq_mi;
 		pthread_spin_init(&qp->rq.lock, PTHREAD_PROCESS_PRIVATE);
 	}
 
+	/*映射sq*/
 	qp->sq.max_sge = attr->cap.max_send_sge;
 	qp->sq.max_inline = attr->cap.max_inline_data;
 	qp->sq.queue = mmap(NULL, resp->sq_mi.size, PROT_READ | PROT_WRITE,
@@ -1163,12 +1176,14 @@ static int map_queue_pair(int cmd_fd, struct rxe_qp *qp,
 		return errno;
 	}
 
+	/*保存sq映射信息*/
 	qp->sq_mmap_info = resp->sq_mi;
 	pthread_spin_init(&qp->sq.lock, PTHREAD_PROCESS_PRIVATE);
 
 	return 0;
 }
 
+/*负责rxe的qp创建*/
 static struct ibv_qp *rxe_create_qp(struct ibv_pd *ibpd,
 				    struct ibv_qp_init_attr *attr)
 {
@@ -1181,16 +1196,19 @@ static struct ibv_qp *rxe_create_qp(struct ibv_pd *ibpd,
 	if (!qp)
 		goto err;
 
+	/*请求kernel创建qp,qp包含两个队列sq,rq*/
 	ret = ibv_cmd_create_qp(ibpd, &qp->vqp.qp, attr, &cmd, sizeof(cmd),
 				&resp.ibv_resp, sizeof(resp));
 	if (ret)
 		goto err_free;
 
+	/*将kernel创建sq,rq映射到用户态*/
 	ret = map_queue_pair(ibpd->context->cmd_fd, qp, attr,
 			     &resp.drv_payload);
 	if (ret)
 		goto err_destroy;
 
+	/*不必要的赋值，在map_queue_pair中已设置*/
 	qp->sq_mmap_info = resp.sq_mi;
 	pthread_spin_init(&qp->sq.lock, PTHREAD_PROCESS_PRIVATE);
 
@@ -1348,8 +1366,9 @@ err:
 	return NULL;
 }
 
+/*查询qp属性*/
 static int rxe_query_qp(struct ibv_qp *ibqp, struct ibv_qp_attr *attr,
-			int attr_mask, struct ibv_qp_init_attr *init_attr)
+			int attr_mask, struct ibv_qp_init_attr *init_attr/*出参，qp属性*/)
 {
 	struct ibv_query_qp cmd = {};
 
@@ -1385,12 +1404,13 @@ static int rxe_destroy_qp(struct ibv_qp *ibqp)
 
 /* basic sanity checks for send work request */
 static int validate_send_wr(struct rxe_qp *qp, struct ibv_send_wr *ibwr,
-			    unsigned int length)
+			    unsigned int length/*待发送的报文长度*/)
 {
 	struct rxe_wq *sq = &qp->sq;
 	enum ibv_wr_opcode opcode = ibwr->opcode;
 
 	if (ibwr->num_sge > sq->max_sge)
+		/*sge过大，不容许发送*/
 		return -EINVAL;
 
 	if ((opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
@@ -1399,6 +1419,7 @@ static int validate_send_wr(struct rxe_qp *qp, struct ibv_send_wr *ibwr,
 			return -EINVAL;
 
 	if ((ibwr->send_flags & IBV_SEND_INLINE) && (length > sq->max_inline))
+		/*要求inline发送，但要求发送的长度超过max_inline*/
 		return -EINVAL;
 
 	if (ibwr->opcode == IBV_WR_BIND_MW) {
@@ -1467,14 +1488,15 @@ static void convert_send_wr(struct rxe_send_wr *kwr, struct ibv_send_wr *uwr)
 	}
 }
 
-static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq,
-		  struct ibv_send_wr *ibwr, unsigned int length,
-		  struct rxe_send_wqe *wqe)
+static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq/*发送队列*/,
+		  struct ibv_send_wr *ibwr/*要发送的wr*/, unsigned int length/*要发送的内容总长度*/,
+		  struct rxe_send_wqe *wqe/*待填充的wqe*/)
 {
-	int num_sge = ibwr->num_sge;
+	int num_sge = ibwr->num_sge;/*取要发送的wr数目*/
 	int i;
 	unsigned int opcode = ibwr->opcode;
 
+	/*ibwr转kernel认识的wr*/
 	convert_send_wr(&wqe->wr, ibwr);
 
 	if (qp_type(qp) == IBV_QPT_UD)
@@ -1566,7 +1588,7 @@ static int post_send_db(struct ibv_qp *ibqp)
 	cmd.sge_count	= 0;
 	cmd.wqe_size	= sizeof(struct ibv_send_wr);
 
-	/*通过cmd_fd向kernel发送此cmd,知会send结束*/
+	/*通过cmd_fd向kernel发送此cmd,知会数据准备完成，response不处理。*/
 	if (write(ibqp->context->cmd_fd, &cmd, sizeof(cmd)) != sizeof(cmd))
 		return errno;
 
@@ -1578,12 +1600,12 @@ static int post_send_db(struct ibv_qp *ibqp)
  */
 static int rxe_post_send(struct ibv_qp *ibqp,
 			 struct ibv_send_wr *wr_list,
-			 struct ibv_send_wr **bad_wr)
+			 struct ibv_send_wr **bad_wr/*出参，处理失败的wr，其后的wr也均未处理*/)
 {
 	int rc = 0;
 	int err;
 	struct rxe_qp *qp = to_rqp(ibqp);
-	struct rxe_wq *sq = &qp->sq;
+	struct rxe_wq *sq = &qp->sq;/*使用sq*/
 
 	if (!bad_wr)
 		return EINVAL;
@@ -1621,7 +1643,7 @@ static int rxe_post_recv(struct ibv_qp *ibqp,
 {
 	int rc = 0;
 	struct rxe_qp *qp = to_rqp(ibqp);
-	struct rxe_wq *rq = &qp->rq;
+	struct rxe_wq *rq = &qp->rq;/*使用接收队列*/
 
 	if (!bad_wr)
 		return EINVAL;
@@ -1668,6 +1690,7 @@ static inline int rdma_gid2ip(sockaddr_union_t *out, union ibv_gid *gid)
 	return 0;
 }
 
+/*创建ah*/
 static struct ibv_ah *rxe_create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr)
 {
 	int err;
@@ -1676,6 +1699,7 @@ static struct ibv_ah *rxe_create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr)
 	union ibv_gid sgid;
 	struct ib_uverbs_create_ah_resp resp;
 
+	/*查询当前gid,做为源地址*/
 	err = ibv_query_gid(pd->context, attr->port_num, attr->grh.sgid_index,
 			    &sgid);
 	if (err) {
@@ -1692,15 +1716,16 @@ static struct ibv_ah *rxe_create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr)
 	memcpy(&av->grh, &attr->grh, sizeof(attr->grh));
 	av->network_type =
 		ipv6_addr_v4mapped((struct in6_addr *)attr->grh.dgid.raw) ?
-		RXE_NETWORK_TYPE_IPV4 : RXE_NETWORK_TYPE_IPV6;
+		RXE_NETWORK_TYPE_IPV4 : RXE_NETWORK_TYPE_IPV6;/*确定底层网络类型*/
 
-	rdma_gid2ip(&av->sgid_addr, &sgid);
-	rdma_gid2ip(&av->dgid_addr, &attr->grh.dgid);
-	if (ibv_resolve_eth_l2_from_gid(pd->context, attr, av->dmac, NULL)) {
+	rdma_gid2ip(&av->sgid_addr, &sgid);/*填充源地址*/
+	rdma_gid2ip(&av->dgid_addr, &attr->grh.dgid);/*填充目的地址*/
+	if (ibv_resolve_eth_l2_from_gid(pd->context, attr, av->dmac/*取目的mac*/, NULL)) {
 		free(ah);
 		return NULL;
 	}
 
+	/*依据以上信息，创建ah*/
 	memset(&resp, 0, sizeof(resp));
 	if (ibv_cmd_create_ah(pd, &ah->ibv_ah, attr, &resp, sizeof(resp))) {
 		free(ah);
@@ -1727,16 +1752,16 @@ static int rxe_destroy_ah(struct ibv_ah *ibah)
 static const struct verbs_context_ops rxe_ctx_ops = {
 	.query_device_ex = rxe_query_device,
 	.query_port = rxe_query_port,
-	.alloc_pd = rxe_alloc_pd,
+	.alloc_pd = rxe_alloc_pd,/*注册pd*/
 	.dealloc_pd = rxe_dealloc_pd,
-	.reg_mr = rxe_reg_mr,
+	.reg_mr = rxe_reg_mr,/*注册mr*/
 	.dereg_mr = rxe_dereg_mr,
 	.alloc_mw = rxe_alloc_mw,
 	.dealloc_mw = rxe_dealloc_mw,
 	.bind_mw = rxe_bind_mw,
-	.create_cq = rxe_create_cq,
+	.create_cq = rxe_create_cq,/*创建cq*/
 	.create_cq_ex = rxe_create_cq_ex,
-	.poll_cq = rxe_poll_cq,
+	.poll_cq = rxe_poll_cq,/*轮询cq队列*/
 	.req_notify_cq = ibv_cmd_req_notify_cq,
 	.resize_cq = rxe_resize_cq,
 	.destroy_cq = rxe_destroy_cq,
@@ -1745,29 +1770,30 @@ static const struct verbs_context_ops rxe_ctx_ops = {
 	.query_srq = rxe_query_srq,
 	.destroy_srq = rxe_destroy_srq,
 	.post_srq_recv = rxe_post_srq_recv,
-	.create_qp = rxe_create_qp,
+	.create_qp = rxe_create_qp,/*处理qp的创建*/
 	.create_qp_ex = rxe_create_qp_ex,
 	.query_qp = rxe_query_qp,
-	.modify_qp = rxe_modify_qp,
+	.modify_qp = rxe_modify_qp,/*变更qp*/
 	.destroy_qp = rxe_destroy_qp,
-	.post_send = rxe_post_send,
+	.post_send = rxe_post_send,/*向外发送报文*/
 	.post_recv = rxe_post_recv,
-	.create_ah = rxe_create_ah,
+	.create_ah = rxe_create_ah,/*创建ah*/
 	.destroy_ah = rxe_destroy_ah,
 	.attach_mcast = ibv_cmd_attach_mcast,
 	.detach_mcast = ibv_cmd_detach_mcast,
 	.free_context = rxe_free_context,
 };
 
+/*负责申请verbs_context*/
 static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev/*对应的ib设备*/,
 					       int cmd_fd/*此设备关联的verbs字符设备*/,
-					       void *private_data/*私有数据*/)
+					       void *private_data/*私有数据,未使用*/)
 {
 	struct rxe_context *context;
 	struct ibv_get_context cmd;
 	struct ib_uverbs_get_context_resp resp;
 
-	/*申请并初始化一个通用的context*/
+	/*申请并初始化一个driver context*/
 	context = verbs_init_and_alloc_context(ibdev, cmd_fd, context, ibv_ctx,
 					       RDMA_DRIVER_RXE);
 	if (!context)
@@ -1778,10 +1804,10 @@ static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev/*对应�
 				&resp, sizeof(resp)))
 		goto out;
 
-	/*设置context对应的ops*/
+	/*设置rxe context对应的ops*/
 	verbs_set_ops(&context->ibv_ctx, &rxe_ctx_ops);
 
-	return &context->ibv_ctx;
+	return &context->ibv_ctx;/*返回ibv_ctx*/
 
 out:
 	verbs_uninit_context(&context->ibv_ctx);
@@ -1831,6 +1857,7 @@ static const struct verbs_device_ops rxe_dev_ops = {
 	.match_table = hca_table,
 	.alloc_device = rxe_device_alloc,
 	.uninit_device = rxe_uninit_device,
+	/*verbs context申请*/
 	.alloc_context = rxe_alloc_context,
 };
 
