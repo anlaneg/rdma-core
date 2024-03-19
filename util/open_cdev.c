@@ -132,7 +132,7 @@ err_mem:
 	return res;
 }
 
-//打开/dev/infiniband/下的字符设备
+//打开/dev/infiniband/下的字符设备（uverbs）
 int open_cdev(const char *devname_hint, dev_t cdev)
 {
 	char *devpath;

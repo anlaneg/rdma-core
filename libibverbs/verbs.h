@@ -180,7 +180,7 @@ struct ibv_dm {
 };
 
 struct ibv_device_attr {
-	char			fw_ver[64];
+	char			fw_ver[64];/*设备fw版本*/
 	__be64			node_guid;
 	__be64			sys_image_guid;
 	uint64_t		max_mr_size;
@@ -188,7 +188,7 @@ struct ibv_device_attr {
 	uint32_t		vendor_id;
 	uint32_t		vendor_part_id;
 	uint32_t		hw_ver;
-	int			max_qp;
+	int			max_qp;/*支持的最大qp数目*/
 	int			max_qp_wr;
 	unsigned int		device_cap_flags;
 	int			max_sge;
@@ -343,6 +343,7 @@ struct ibv_pci_atomic_caps {
 };
 
 struct ibv_device_attr_ex {
+	/*基本的属性，看ibv_cmd_query_device_any，如果attr_size等待orig_attr，则为legacy查询*/
 	struct ibv_device_attr	orig_attr;
 	uint32_t		comp_mask;
 	struct ibv_odp_caps	odp_caps;
@@ -2018,11 +2019,11 @@ struct ibv_context_ops {
 };
 
 struct ibv_context {
-    /*对应的ibv设备*/
+    /*对应的ib设备*/
 	struct ibv_device      *device;
-	/*context操作集*/
+	/*ib context对应的操作集*/
 	struct ibv_context_ops	ops;
-	/*用于cmd操作的fd（字符设备）*/
+	/*用于cmd操作的fd（verbs字符设备）*/
 	int			cmd_fd;
 	/*异步fd*/
 	int			async_fd;
@@ -3147,20 +3148,22 @@ ibv_query_device_ex(struct ibv_context *context/*ib设备context*/,
 	if (input && input->comp_mask)
 		return EINVAL;
 
+	/*获取ibv context*/
 	vctx = verbs_get_ctx_op(context, query_device_ex);
 	if (!vctx)
 		goto legacy;
 
-	/*查询设备属性*/
+	/*调用provider api查询设备属性*/
 	ret = vctx->query_device_ex(context, input, attr, sizeof(*attr));
 	if (ret == EOPNOTSUPP || ret == ENOSYS)
+		/*失败，走老的查询方式，仍会调用此接口，但input会为置为NULL*/
 		goto legacy;
 
 	return ret;
 
 legacy:
 	memset(attr, 0, sizeof(*attr));
-	ret = ibv_query_device(context, &attr->orig_attr);
+	ret = ibv_query_device(context, &attr->orig_attr/*legacy时只传入base属性大小*/);
 
 	return ret;
 }

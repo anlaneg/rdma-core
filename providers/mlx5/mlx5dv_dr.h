@@ -1543,7 +1543,7 @@ struct dr_cq {
 	int				ncqe;
 	struct dr_qp			*qp; /* Assume CQ per QP */
 	__be32				*db;
-	struct ibv_cq			*ibv_cq;
+	struct ibv_cq			*ibv_cq;/*创建的ibv的cq*/
 	uint32_t			cqn;
 	uint32_t			cqe_sz;
 };

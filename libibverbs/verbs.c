@@ -152,6 +152,7 @@ enum ibv_rate __attribute__((const)) mbps_to_ibv_rate(int mbps)
 	}
 }
 
+/*查询指定设备的属性*/
 LATEST_SYMVER_FUNC(ibv_query_device, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_context *context,
@@ -224,7 +225,7 @@ LATEST_SYMVER_FUNC(ibv_query_port, 1_1, "IBVERBS_1.1",
 				sizeof(*port_attr));
 }
 
-/*查询gid*/
+/*查询指定port的gid*/
 LATEST_SYMVER_FUNC(ibv_query_gid, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_context *context, uint8_t port_num,
@@ -307,8 +308,9 @@ LATEST_SYMVER_FUNC(ibv_dealloc_pd, 1_1, "IBVERBS_1.1",
 }
 
 struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-				uint64_t iova/*待注册地址*/, unsigned int access/*访问权限*/)
+				uint64_t iova/*待注册的地址*/, unsigned int access/*访问权限*/)
 {
+	/*由pd获得其对应的device*/
 	struct verbs_device *device = verbs_get_device(pd->context->device);
 	bool odp_mr = access & IBV_ACCESS_ON_DEMAND;
 	struct ibv_mr *mr;
@@ -344,7 +346,7 @@ LATEST_SYMVER_FUNC(ibv_reg_mr, 1_1, "IBVERBS_1.1",
 		   struct ibv_pd *pd, void *addr,
 		   size_t length, int access)
 {
-	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr/*待注册地址*/, access/*访问权限*/);
+	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr/*待注册的起始地址（iova)*/, access/*访问权限*/);
 }
 
 #undef ibv_reg_mr_iova

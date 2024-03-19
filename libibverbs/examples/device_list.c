@@ -38,6 +38,7 @@
 
 #include <infiniband/verbs.h>
 
+/*ibv_devices程序入口*/
 int main(int argc, char *argv[])
 {
 	struct ibv_device **dev_list;

@@ -624,8 +624,9 @@ static void dr_fill_data_segs(struct dr_send_ring *send_ring,
 
 static int dr_postsend_icm_data(struct mlx5dv_dr_domain *dmn,
 				struct postsend_info *send_info,
-				int ring_idx)
+				int ring_idx/*映射dr_send_ring*/)
 {
+	/*取ring_idx对应的dr_send_ring结构*/
 	struct dr_send_ring *send_ring =
 		dmn->send_ring[ring_idx % DR_MAX_SEND_RINGS];
 	uint32_t buff_offset;
@@ -648,8 +649,8 @@ static int dr_postsend_icm_data(struct mlx5dv_dr_domain *dmn,
 	}
 
 	send_ring->tx_head++;
-	dr_fill_data_segs(send_ring, send_info);
-	dr_post_send(send_ring->qp, send_info);
+	dr_fill_data_segs(send_ring, send_info);/*send_info写入到send_ring*/
+	dr_post_send(send_ring->qp, send_info);/*向网卡发送*/
 
 out_unlock:
 	pthread_spin_unlock(&send_ring->lock);
@@ -963,6 +964,7 @@ static int dr_send_ring_alloc_one(struct mlx5dv_dr_domain *dmn,
 			   IBV_ACCESS_REMOTE_READ;
 	int ret;
 
+	/*申请send_ring结构*/
 	send_ring = calloc(1, sizeof(*send_ring));
 	if (!send_ring) {
 		dr_dbg(dmn, "Couldn't allocate send-ring\n");
@@ -970,24 +972,28 @@ static int dr_send_ring_alloc_one(struct mlx5dv_dr_domain *dmn,
 		return errno;
 	}
 
+	/*初始化spinlock*/
 	ret = pthread_spin_init(&send_ring->lock, PTHREAD_PROCESS_PRIVATE);
 	if (ret) {
 		errno = ret;
 		goto free_send_ring;
 	}
 
+	/*创建cq*/
 	cq_size = QUEUE_SIZE + 1;
 	send_ring->cq.ibv_cq = ibv_create_cq(dmn->ctx, cq_size, NULL, NULL, 0);
 	if (!send_ring->cq.ibv_cq) {
+		/*创建cq失败*/
 		dr_dbg(dmn, "Failed to create CQ with %u entries\n", cq_size);
 		ret = ENODEV;
 		errno = ENODEV;
 		goto free_send_ring;
 	}
 
-	obj.cq.in = send_ring->cq.ibv_cq;
+	obj.cq.in = send_ring->cq.ibv_cq;/*指明cq指针*/
 	obj.cq.out = &mlx5_cq;
 
+	/*初始化cq obj*/
 	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ);
 	if (ret)
 		goto clean_cq;
@@ -1000,6 +1006,7 @@ static int dr_send_ring_alloc_one(struct mlx5dv_dr_domain *dmn,
 	obj.pd.in = dmn->pd;
 	obj.pd.out = &mlx5_pd;
 
+	/*初始化pd*/
 	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_PD);
 	if (ret)
 		goto clean_cq;
@@ -1018,6 +1025,7 @@ static int dr_send_ring_alloc_one(struct mlx5dv_dr_domain *dmn,
 	if (dr_send_allow_fl(&dmn->info.caps))
 		init_attr.isolate_vl_tc = dmn->info.caps.isolate_vl_tc;
 
+	/*创建qp*/
 	send_ring->qp = dr_create_rc_qp(dmn->ctx, &init_attr);
 	if (!send_ring->qp)  {
 		dr_dbg(dmn, "Couldn't create QP\n");
@@ -1103,11 +1111,12 @@ int dr_send_ring_alloc(struct mlx5dv_dr_domain *dmn)
 		dr_icm_pool_chunk_size_to_byte(DR_CHUNK_SIZE_1K,
 					       DR_ICM_TYPE_STE);
 
+	/*创建DR_MAX_SEND_RINGS个send-ring*/
 	for (i = 0; i < DR_MAX_SEND_RINGS; i++) {
 		ret = dr_send_ring_alloc_one(dmn, &dmn->send_ring[i]);
 		if (ret) {
 			dr_dbg(dmn, "Couldn't allocate send-rings id[%d]\n", i);
-			goto free_send_ring;
+			goto free_send_ring;/*创建失败，回退已创建好的send_ring*/
 		}
 	}
 

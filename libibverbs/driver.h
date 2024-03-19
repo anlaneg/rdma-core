@@ -254,16 +254,23 @@ struct verbs_sysfs_dev {
 	unsigned int flags;
 	/*对应字符设备的设备名称*/
 	char sysfs_name[IBV_SYSFS_NAME_MAX];
-	/*对应字符设备的设备号*/
+	/*对应的uverbs字符设备的设备号*/
 	dev_t sysfs_cdev;
-	char ibdev_name[IBV_SYSFS_NAME_MAX];/*ib设备名称*/
-	char ibdev_path[IBV_SYSFS_PATH_MAX];/*ib设备路径,例如/sys/class/infiniband/mlx5_0*/
+	/*ib设备名称（kernel提供）*/
+	char ibdev_name[IBV_SYSFS_NAME_MAX];
+	/*ib设备路径,例如/sys/class/infiniband/mlx5_0*/
+	char ibdev_path[IBV_SYSFS_PATH_MAX];
 	char modalias[512];
 	uint64_t node_guid;
+	/*ib设备的驱动driver_id*/
 	uint32_t driver_id;
+	/*ib设备类型*/
 	enum ibv_node_type node_type;
-	int ibdev_idx;/*ib设备索引号*/
+	/*ib设备在kernel中的索引号*/
+	int ibdev_idx;
+	/*此ib设备的port总数*/
 	uint32_t num_ports;
+	/*uverbs api版本号*/
 	uint32_t abi_ver;
 	struct timespec time_created;
 };
@@ -281,7 +288,7 @@ struct verbs_device_ops {
 	//通过此回调，检查此驱动是否可匹配指定的sysfs_dev设备
 	bool (*match_device)(struct verbs_sysfs_dev *sysfs_dev);
 
-	/*用于context空间申请*/
+	/*用于verbs_context空间申请并初始化（主要是ops初始化）*/
 	struct verbs_context *(*alloc_context)(struct ibv_device *device,
 					       int cmd_fd/*verbs命令用fd*/,
 					       void *private_data/*用户传入的私有数据*/);
@@ -425,12 +432,13 @@ struct verbs_context_ops {
 			    struct ibv_ops_wr **bad_op);
 	int (*post_srq_recv)(struct ibv_srq *srq, struct ibv_recv_wr *recv_wr,
 			     struct ibv_recv_wr **bad_recv_wr);
+	/*用于查询ib设备的属性*/
 	int (*query_device_ex)(struct ibv_context *context,
 			       const struct ibv_query_device_ex_input *input,
 			       struct ibv_device_attr_ex *attr,
 			       size_t attr_size);
 	int (*query_ece)(struct ibv_qp *qp, struct ibv_ece *ece);
-	/*获取port属性*/
+	/*用于查询指定ib设备的port属性*/
 	int (*query_port)(struct ibv_context *context, uint8_t port_num/*port编号*/,
 			  struct ibv_port_attr *port_attr/*取port属性*/);
 	int (*query_qp)(struct ibv_qp *qp, struct ibv_qp_attr *attr,
@@ -503,11 +511,11 @@ void *_verbs_init_and_alloc_context(struct ibv_device *device, int cmd_fd,
 				    struct verbs_context *context_offset,
 				    uint32_t driver_id);
 
-#define verbs_init_and_alloc_context(ibdev/*关联的ib设备*/, cmd_fd/*verbs命令对应的fd*/, drv_ctx_ptr/*ctx指针*/, ctx_memb/*ibv ctx对应的member*/,     \
+#define verbs_init_and_alloc_context(ibdev/*关联的ib设备*/, cmd_fd/*verbs命令对应的fd*/, drv_ctx_ptr/*要申请的ctx结构体指针*/, ctx_memb/*verbs_context在drv_ctx结构体中对应的成员名称*/,     \
 				     driver_id/*driver驱动编号*/)				       \
 	((typeof(drv_ctx_ptr))_verbs_init_and_alloc_context(                   \
-		ibdev, cmd_fd, sizeof(*drv_ctx_ptr)/*ctx结构大小*/,                           \
-		&((typeof(drv_ctx_ptr))NULL)->ctx_memb/*到ibv_ctx成员offset*/, (driver_id)))
+		ibdev, cmd_fd, sizeof(*drv_ctx_ptr)/*获得driver ctx结构大小*/,                           \
+		&((typeof(drv_ctx_ptr))NULL)->ctx_memb/*获得verbs_context成员在driver ctx结构体中的offset*/, (driver_id)))
 
 int verbs_init_context(struct verbs_context *context_ex,
 		       struct ibv_device *device, int cmd_fd,
@@ -735,6 +743,7 @@ int ibv_read_ibdev_sysfs_file(char *buf, size_t size,
 
 static inline bool check_comp_mask(uint64_t input, uint64_t supported)
 {
+	/*input包含有supported之外的bit位，则返回0*/
 	return (input & ~supported) == 0;
 }
 

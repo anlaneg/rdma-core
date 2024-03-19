@@ -1679,6 +1679,7 @@ dr_action_modify_sw_to_hw(struct mlx5dv_dr_domain *dmn,
 
 	switch (action) {
 	case MLX5_ACTION_TYPE_SET:
+		/*转换set action*/
 		ret = dr_action_modify_sw_to_hw_set(dmn,
 						    sw_action,
 						    hw_action,
@@ -1958,6 +1959,7 @@ static int dr_action_create_modify_action(struct mlx5dv_dr_domain *dmn,
 
 	num_sw_actions = actions_sz / DR_MODIFY_ACTION_SIZE;
 	if (num_sw_actions == 0) {
+		/*actions_sz过小，报错*/
 		dr_dbg(dmn, "Invalid number of actions %u\n", num_sw_actions);
 		errno = EINVAL;
 		return errno;
@@ -1965,6 +1967,7 @@ static int dr_action_create_modify_action(struct mlx5dv_dr_domain *dmn,
 
 	hw_actions = calloc(1, 2 * num_sw_actions  * DR_MODIFY_ACTION_SIZE);
 	if (!hw_actions) {
+		/*申请hw_actions失败*/
 		errno = ENOMEM;
 		return errno;
 	}
@@ -2008,6 +2011,7 @@ free_hw_actions:
 	return errno;
 }
 
+/*创建modify header*/
 struct mlx5dv_dr_action *
 mlx5dv_dr_action_create_modify_header(struct mlx5dv_dr_domain *dmn,
 				      uint32_t flags,
@@ -2020,11 +2024,13 @@ mlx5dv_dr_action_create_modify_header(struct mlx5dv_dr_domain *dmn,
 	atomic_fetch_add(&dmn->refcount, 1);
 
 	if (!check_comp_mask(flags, MLX5DV_DR_ACTION_FLAGS_ROOT_LEVEL)) {
+		/*掩码不匹配，设置errno并返回*/
 		errno = EINVAL;
 		goto dec_ref;
 	}
 
 	if (actions_sz % DR_MODIFY_ACTION_SIZE) {
+		/*action size不对齐*/
 		dr_dbg(dmn, "Invalid modify actions size provided\n");
 		errno = EINVAL;
 		goto dec_ref;

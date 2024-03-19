@@ -158,15 +158,16 @@ out:
 	return ret;
 }
 
-int dr_rule_send_update_list(struct list_head *send_ste_list,
+int dr_rule_send_update_list(struct list_head *send_ste_list/*要发送的ste列表*/,
 			     struct mlx5dv_dr_domain *dmn,
-			     bool is_reverse,
-			     uint8_t send_ring_idx)
+			     bool is_reverse/*是否逆序遍历*/,
+			     uint8_t send_ring_idx/*通过哪个send_ring发送*/)
 {
 	struct dr_ste_send_info *ste_info, *tmp_ste_info;
 	int ret;
 
 	if (is_reverse) {
+		/*反向遍历并发送*/
 		list_for_each_rev_safe(send_ste_list, ste_info, tmp_ste_info,
 				       send_list) {
 			ret = dr_rule_handle_one_ste_in_update_list(ste_info,
@@ -176,6 +177,7 @@ int dr_rule_send_update_list(struct list_head *send_ste_list,
 				return ret;
 		}
 	} else {
+		/*正向遍历并发送*/
 		list_for_each_safe(send_ste_list, ste_info, tmp_ste_info,
 				   send_list) {
 			ret = dr_rule_handle_one_ste_in_update_list(ste_info,
@@ -1508,11 +1510,13 @@ dr_rule_create_rule(struct mlx5dv_dr_matcher *matcher,
 
 	switch (dmn->type) {
 	case MLX5DV_DR_DOMAIN_TYPE_NIC_RX:
+		/*下发到nic rx方向*/
 		rule->rx.nic_matcher = &matcher->rx;
 		ret = dr_rule_create_rule_nic(rule, &rule->rx, &param,
 					      num_actions, actions);
 		break;
 	case MLX5DV_DR_DOMAIN_TYPE_NIC_TX:
+		/*下发到nic tx方向*/
 		rule->tx.nic_matcher = &matcher->tx;
 		ret = dr_rule_create_rule_nic(rule, &rule->tx, &param,
 					      num_actions, actions);
@@ -1533,6 +1537,7 @@ dr_rule_create_rule(struct mlx5dv_dr_matcher *matcher,
 		goto remove_action_members;
 
 	pthread_spin_lock(&dmn->debug_lock);
+	/*将rule加入到matcher->rule_list上*/
 	list_add_tail(&matcher->rule_list, &rule->rule_list);
 	pthread_spin_unlock(&dmn->debug_lock);
 

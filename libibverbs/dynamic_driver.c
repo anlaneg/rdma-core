@@ -104,6 +104,7 @@ static void read_config_file(const char *path)
 				continue;
 			}
 
+			/*增加driver_name到driver_name_list中*/
 			list_add(&driver_name_list, &driver_name->entry);
 		} else
 			fprintf(stderr,

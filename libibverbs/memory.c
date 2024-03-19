@@ -642,7 +642,7 @@ static int do_madvise(void *addr, size_t length, int advice,
 	return 0;
 }
 
-static int ibv_madvise_range(void *base, size_t size, int advice)
+static int ibv_madvise_range(void *base/*内存起始地址*/, size_t size, int advice)
 {
 	uintptr_t start, end;
 	struct ibv_mem_node *node, *tmp;
@@ -662,13 +662,14 @@ static int ibv_madvise_range(void *base, size_t size, int advice)
 	    /*使用默认页大小*/
 		range_page_size = page_size;
 
-	/*使base，base+size按页对齐*/
+	/*使base，base+size按页对齐（将指定内存按页进行对齐）*/
 	start = (uintptr_t) base & ~(range_page_size - 1);
 	end   = ((uintptr_t) (base + size + range_page_size - 1) &
 		 ~(range_page_size - 1)) - 1;
 
 	pthread_mutex_lock(&mm_mutex);
 again:
+	/*检查是增加还是减少*/
 	inc = advice == MADV_DONTFORK ? 1 : -1;
 
 	node = get_start_node(start, end, inc);
@@ -744,6 +745,7 @@ out:
 int ibv_dontfork_range(void *base, size_t size)
 {
 	if (mm_root)
+		/*mm_root存在，说明系统支持do not fork,继续处理*/
 		return ibv_madvise_range(base, size, MADV_DONTFORK);
 	else {
 		too_late = 1;

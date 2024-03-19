@@ -636,12 +636,13 @@ void verbs_set_ops(struct verbs_context *vctx,
 		}                                                              \
 	} while (0)
 
-	/*以下成员将被填充到priv->ops.$name = ops->name;vctx->$name = ops->name*/
+	/*以下成员verbs context ops将被填充（vctx->priv->ops.$name = ops->name;），
+	 * 其外层的函数也会被设置（vctx->$name = ops->name）*/
 	SET_OP(vctx, advise_mr);
 	SET_OP(vctx, alloc_dm);
 	SET_OP(ctx, alloc_mw);
 	SET_OP(vctx, alloc_null_mr);
-	SET_PRIV_OP(ctx, alloc_pd);
+	SET_PRIV_OP(ctx, alloc_pd);/*priv标记的是特例：其在设置外层时，函数名称会有附加前缀的变化*/
 	SET_OP(vctx, alloc_parent_domain);
 	SET_OP(vctx, alloc_td);
 	SET_OP(vctx, attach_counters_point_flow);
@@ -653,8 +654,8 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_PRIV_OP(ctx, cq_event);
 	SET_PRIV_OP(ctx, create_ah);
 	SET_PRIV_OP(ctx, create_cq);
-	SET_PRIV_OP_IC(vctx, create_cq_ex);
-	SET_OP2(vctx, ibv_create_flow, create_flow);
+	SET_PRIV_OP_IC(vctx, create_cq_ex);/*有priv_op_ic标记的也是特例：其外层没有对应的函数*/
+	SET_OP2(vctx, ibv_create_flow, create_flow);/*op2标记的也是特例：其在设置外层时，函数名称会有不同*/
 	SET_OP(vctx, create_flow_action_esp);
 	SET_PRIV_OP(ctx, create_qp);
 	SET_OP(vctx, create_qp_ex);

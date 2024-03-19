@@ -96,7 +96,7 @@
 #define COMPAT_SYMVER_FUNC(_public_sym, _uniq, _ver_str, _ret, ...)            \
 	static inline __attribute__((unused))                                  \
 		_ret __##_public_sym##_##_uniq(__VA_ARGS__)
-#define LATEST_SYMVER_FUNC(_public_sym, _uniq, _ver_str, _ret, ...)            \
+#define LATEST_SYMVER_FUNC(_public_sym/*符号名*/, _uniq/*一部分函数名*/, _ver_str, _ret/*返回值类型*/, ...)            \
 	static __attribute__((unused))                                         \
 		_ret __##_public_sym##_##_uniq(__VA_ARGS__)                    \
 			__attribute__((alias(stringify(_public_sym))));        \

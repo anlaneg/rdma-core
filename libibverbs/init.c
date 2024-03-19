@@ -87,7 +87,7 @@ struct ibv_driver {
 /*记录系统中的driver list*/
 static LIST_HEAD(driver_list);
 
-//尝试访问指定设备文件,例如/dev/infiniband/uverbs13
+//尝试访问指定设备文件，设备必须存在,例如/dev/infiniband/uverbs13
 int try_access_device(const struct verbs_sysfs_dev *sysfs_dev)
 {
 	struct stat cdev_stat;
@@ -441,9 +441,11 @@ static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 	case IBV_NODE_CA:
 	case IBV_NODE_SWITCH:
 	case IBV_NODE_ROUTER:
+		/*协议为ib*/
 		dev->transport_type = IBV_TRANSPORT_IB;
 		break;
 	case IBV_NODE_RNIC:
+		/*协议为iwarp*/
 		dev->transport_type = IBV_TRANSPORT_IWARP;
 		break;
 	case IBV_NODE_USNIC:
@@ -460,6 +462,7 @@ static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 		break;
 	}
 
+	/*填充设备名称*/
 	strcpy(dev->dev_name,   sysfs_dev->sysfs_name);
 	if (!check_snprintf(dev->dev_path, sizeof(dev->dev_path),
 			    "%s/class/infiniband_verbs/%s",
@@ -487,7 +490,7 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 	 * first.
 	 */
 	if (sysfs_dev->driver_id != RDMA_DRIVER_UNKNOWN) {
-	    /*设备指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
+	    /*kernel为设备指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
 		list_for_each (&driver_list, driver, entry) {
 			if (match_driver_id(driver->ops, sysfs_dev)) {
 				dev = try_driver(driver->ops, sysfs_dev);
@@ -574,7 +577,7 @@ static int same_sysfs_dev(struct verbs_sysfs_dev *sysfs1,
  * to device_list. Once matched to a driver the entry in sysfs_list is
  * removed.
  */
-static void try_all_drivers(struct list_head *sysfs_list,
+static void try_all_drivers(struct list_head *sysfs_list/*待创建verbs_device的设备列表*/,
 			    struct list_head *device_list/*出参，sysfs_dev对应的verbs_device*/,
 			    unsigned int *num_devices/*出参，verbs_device设备数目*/)
 {
@@ -582,11 +585,12 @@ static void try_all_drivers(struct list_head *sysfs_list,
 	struct verbs_sysfs_dev *tmp;
 	struct verbs_device *vdev;
 
-	//遍历sysfs_list,针对自sysfs中获得的每个dev,尝试创建其对应的verbs_device
+	//遍历sysfs_list,针对自sysfs中获得的每个dev
 	list_for_each_safe(sysfs_list, sysfs_dev, tmp, entry) {
+		//尝试创建其对应的verbs_device
 		vdev = try_drivers(sysfs_dev);
 		if (vdev) {
-		    /*自sysfs_list中移除*/
+		    /*创建成功，自sysfs_list中移除*/
 			list_del(&sysfs_dev->entry);
 			/* Ownership of sysfs_dev moves into vdev->sysfs */
 			//将其加入到识别的device_list中
@@ -657,7 +661,7 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	if (list_empty(&sysfs_list) || drivers_loaded)
 		goto out;
 
-	//由于存在未识别的sysfs_list,故加载驱动，重新尝试一次,并构造device_list
+	//由于存在未被识别的sysfs_list,故加载驱动，重新尝试一次,并构造device_list
 	load_drivers();
 	drivers_loaded = 1;
 

@@ -83,6 +83,7 @@ static int find_uverbs_sysfs(struct verbs_sysfs_dev *sysfs_dev)
 	return ret;
 }
 
+/*设置sysfs设备对应的uverbs client信息*/
 static int find_uverbs_nl_cb(struct nl_msg *msg, void *data)
 {
 	struct verbs_sysfs_dev *sysfs_dev = data;
@@ -111,6 +112,7 @@ static int find_uverbs_nl_cb(struct nl_msg *msg, void *data)
 	 */
 	sysfs_dev->abi_ver = nla_get_u64(tb[RDMA_NLDEV_ATTR_CHARDEV_ABI]);
 	if (tb[RDMA_NLDEV_ATTR_UVERBS_DRIVER_ID])
+		/*设置driver_id*/
 		sysfs_dev->driver_id =
 			nla_get_u32(tb[RDMA_NLDEV_ATTR_UVERBS_DRIVER_ID]);
 	else
@@ -118,10 +120,12 @@ static int find_uverbs_nl_cb(struct nl_msg *msg, void *data)
 
 	/* Convert from huge_encode_dev to whatever glibc uses */
 	cdev64 = nla_get_u64(tb[RDMA_NLDEV_ATTR_CHARDEV]);
+	/*设置cdev*/
 	sysfs_dev->sysfs_cdev =
 		makedev((cdev64 & 0xfff00) >> 8,
 			(cdev64 & 0xff) | ((cdev64 >> 12) & 0xfff00));
 
+	/*设置sysfs_name*/
 	if (!check_snprintf(sysfs_dev->sysfs_name,
 			    sizeof(sysfs_dev->sysfs_name), "%s",
 			    nla_get_string(tb[RDMA_NLDEV_ATTR_CHARDEV_NAME])))
@@ -137,11 +141,13 @@ static int find_uverbs_nl(struct nl_sock *nl, struct verbs_sysfs_dev *sysfs_dev)
 				  find_uverbs_nl_cb, sysfs_dev))
 		return -1;
 	if (!sysfs_dev->sysfs_name[0])
+		/*请求获取uverbs client信息失败*/
 		return -1;
 	return 0;
 }
 
 //解析netlink消息，收集消息中给定ib设备信息，串连在data指定的verbs_sysfs_dev上
+//kernel fill_dev_info函数负责填充单个ib设备的信息
 static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 {
 	struct nlattr *tb[RDMA_NLDEV_ATTR_MAX];
@@ -149,7 +155,7 @@ static int find_sysfs_devs_nl_cb(struct nl_msg *msg, void *data)
 	struct verbs_sysfs_dev *sysfs_dev;
 	int ret;
 
-	//解析netlink消息
+	//解析netlink消息(kernel提供了很多，这里只提取有限几个）
 	ret = nlmsg_parse(nlmsg_hdr(msg), 0, tb, RDMA_NLDEV_ATTR_MAX - 1,
 			  rdmanl_policy);
 	if (ret < 0)

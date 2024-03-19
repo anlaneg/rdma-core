@@ -551,6 +551,7 @@ int ibv_cmd_query_device_any(struct ibv_context *context,
 	memset(attr, 0, attr_size);
 
 	if (attr_size > sizeof(attr->orig_attr)) {
+		/*属性size大于orig_attr,则执行扩展查询*/
 		struct ibv_query_device_ex cmd = {};
 
 		err = execute_cmd_write_ex(context,
@@ -566,7 +567,7 @@ int ibv_cmd_query_device_any(struct ibv_context *context,
 	if (attr_size == sizeof(attr->orig_attr)) {
 		struct ibv_query_device cmd = {};
 
-		/*执行query device命令*/
+		/*属性size == orig_attr,则执行query device命令*/
 		err = execute_cmd_write(context, IB_USER_VERBS_CMD_QUERY_DEVICE,
 					&cmd, sizeof(cmd), &resp->base,
 					sizeof(resp->base));
@@ -575,6 +576,7 @@ int ibv_cmd_query_device_any(struct ibv_context *context,
 		resp->response_length = sizeof(resp->base);
 	}
 
+	/*依据响应，执行属性设置*/
 	*resp_size = resp->response_length;
 	attr->orig_attr.node_guid = resp->base.node_guid;
 	attr->orig_attr.sys_image_guid = resp->base.sys_image_guid;

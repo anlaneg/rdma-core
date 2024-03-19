@@ -206,6 +206,7 @@ static int print_all_port_gids(struct ibv_context *ctx,
 	int rc = 0;
 	int i;
 
+	/*显示各port对应的gid*/
 	tbl_len = port_attr->gid_tbl_len;
 	for (i = 0; i < tbl_len; i++) {
 		rc = ibv_query_gid(ctx, port_num, i, &gid);
@@ -493,6 +494,7 @@ static void print_raw_packet_caps(uint32_t raw_packet_caps)
 		printf("\t\t\t\t\tDelay drop\n");
 }
 
+/*显示指定ib设备的ib_port号port的信息*/
 static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 {
 	struct ibv_context *ctx;
@@ -502,7 +504,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 	uint32_t port;
 	char buf[256];
 
-	/*找开ib设备，获得ib设备的context*/
+	/*打开ib设备，获得此ib设备的context*/
 	ctx = ibv_open_device(ib_dev);
 	if (!ctx) {
 		fprintf(stderr, "Failed to open device\n");
@@ -510,7 +512,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 		goto cleanup;
 	}
 
-	/*查询此设备的attribute*/
+	/*利用ctx,查询此设备的attribute（含扩展信息）*/
 	if (ibv_query_device_ex(ctx, NULL, &device_attr)) {
 		fprintf(stderr, "Failed to query device props\n");
 		rc = 2;
@@ -530,7 +532,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 	printf("\ttransport:\t\t\t%s (%d)\n",
 	       transport_str(ib_dev->transport_type), ib_dev->transport_type);
 	if (strlen(device_attr.orig_attr.fw_ver))
-		printf("\tfw_ver:\t\t\t\t%s\n", device_attr.orig_attr.fw_ver);
+		printf("\tfw_ver:\t\t\t\t%s\n", device_attr.orig_attr.fw_ver);/*fw版本*/
 	printf("\tnode_guid:\t\t\t%s\n", guid_str(device_attr.orig_attr.node_guid, buf));
 	printf("\tsys_image_guid:\t\t\t%s\n", guid_str(device_attr.orig_attr.sys_image_guid, buf));
 	printf("\tvendor_id:\t\t\t0x%04x\n", device_attr.orig_attr.vendor_id);
@@ -540,8 +542,10 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 	if (ibv_read_sysfs_file(ib_dev->ibdev_path, "board_id", buf, sizeof buf) > 0)
 		printf("\tboard_id:\t\t\t%s\n", buf);
 
+	/*物理总端口数*/
 	printf("\tphys_port_cnt:\t\t\t%d\n", device_attr.orig_attr.phys_port_cnt);
 
+	/*hca更多信息显示*/
 	if (verbose) {
 		printf("\tmax_mr_size:\t\t\t0x%llx\n",
 		       (unsigned long long) device_attr.orig_attr.max_mr_size);
@@ -620,6 +624,7 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 	for (port = 1; port <= device_attr.orig_attr.phys_port_cnt; ++port) {
 		/* if in the command line the user didn't ask for info about this port */
 		if ((ib_port) && (port != ib_port))
+			/*如果指定了port，则仅显示约定的port*/
 			continue;
 
 		/*查询给定的ib port属性*/
@@ -639,8 +644,9 @@ static int print_hca_cap(struct ibv_device *ib_dev, uint8_t ib_port)
 		printf("\t\t\tport_lid:\t\t%d\n", port_attr.lid);
 		printf("\t\t\tport_lmc:\t\t0x%02x\n", port_attr.lmc);
 		printf("\t\t\tlink_layer:\t\t%s\n",
-					link_layer_str(port_attr.link_layer));
+					link_layer_str(port_attr.link_layer));/*显示link层类型*/
 
+		/*显示port更多信息*/
 		if (verbose) {
 			printf("\t\t\tmax_msg_sz:\t\t0x%x\n", port_attr.max_msg_sz);
 			printf("\t\t\tport_cap_flags:\t\t0x%08x\n", port_attr.port_cap_flags);
@@ -688,13 +694,14 @@ static void usage(const char *argv0)
 	printf("  -v, --verbose          print all the attributes of the IB device(s)\n");
 }
 
+/*ibv_devinfo程序入口*/
 int main(int argc, char *argv[])
 {
 	char *ib_devname = NULL;
 	int ret = 0;
 	struct ibv_device **dev_list, **orig_dev_list;
 	int num_of_hcas;
-	int ib_port = 0;
+	int ib_port = 0;/*默认port为0*/
 
 	/* parse command line options */
 	while (1) {
@@ -713,12 +720,12 @@ int main(int argc, char *argv[])
 
 		switch (c) {
 		case 'd':
-		    /*指定设备名称*/
+		    /*指定ib设备名称*/
 			ib_devname = strdup(optarg);
 			break;
 
 		case 'i':
-		    /*指定ib port*/
+		    /*指定ib 具体的一个port*/
 			ib_port = strtol(optarg, NULL, 0);
 			if (ib_port <= 0) {
 				usage(argv[0]);
@@ -727,19 +734,23 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'v':
+			/*显示详细信息*/
 			verbose = 1;
 			break;
 
 		case 'l':
+			/*通过ibv接口获取device列表*/
 			dev_list = orig_dev_list = ibv_get_device_list(&num_of_hcas);
 			if (!dev_list) {
 				perror("Failed to get IB devices list");
 				return -1;
 			}
 
+			/*显示找到的device总数*/
 			printf("%d HCA%s found:\n", num_of_hcas,
 			       num_of_hcas != 1 ? "s" : "");
 
+			/*逐行显示devcie（仅显示name)*/
 			while (*dev_list) {
 				printf("\t%s\n", ibv_get_device_name(*dev_list));
 				++dev_list;

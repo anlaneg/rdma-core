@@ -2031,6 +2031,7 @@ get_context_from_obj(struct mlx5dv_obj *obj, uint64_t obj_type)
 	return NULL;
 }
 
+/*按照obj_type初始化mlx5dv_obj结构*/
 LATEST_SYMVER_FUNC(mlx5dv_init_obj, 1_2, "MLX5_1.2",
 		   int,
 		   struct mlx5dv_obj *obj, uint64_t obj_type)

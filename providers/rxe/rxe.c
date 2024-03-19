@@ -64,6 +64,7 @@ static const struct verbs_match_ent hca_table[] = {
 	{},
 };
 
+/*rxe设备属性查询*/
 static int rxe_query_device(struct ibv_context *context,
 			    const struct ibv_query_device_ex_input *input,
 			    struct ibv_device_attr_ex *attr, size_t attr_size)
@@ -74,6 +75,7 @@ static int rxe_query_device(struct ibv_context *context,
 	unsigned int major, minor, sub_minor;
 	int ret;
 
+	/*查询设备属性*/
 	ret = ibv_cmd_query_device_any(context, input, attr, attr_size, &resp,
 				       &resp_size);
 	if (ret)
@@ -221,7 +223,7 @@ err:
 
 /*注册memory region*/
 static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-				 uint64_t hca_va, int access/*访问权限*/)
+				 uint64_t hca_va/*待注册的地址*/, int access/*访问权限*/)
 {
 	struct verbs_mr *vmr;
 	struct ibv_reg_mr cmd;
@@ -233,7 +235,7 @@ static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地�
 	if (!vmr)
 		return NULL;
 
-	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va, access, vmr/*出参，verbs_mr对象*/, &cmd,
+	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va/*待注册的地址*/, access/*权限*/, vmr/*出参，verbs_mr对象*/, &cmd,
 			     sizeof(cmd), &resp, sizeof(resp));
 	if (ret) {
 		free(vmr);
@@ -1750,9 +1752,9 @@ static int rxe_destroy_ah(struct ibv_ah *ibah)
 
 /*rxe支持的context_ops*/
 static const struct verbs_context_ops rxe_ctx_ops = {
-	.query_device_ex = rxe_query_device,
-	.query_port = rxe_query_port,
-	.alloc_pd = rxe_alloc_pd,/*注册pd*/
+	.query_device_ex = rxe_query_device,/*rxe设备属性查询*/
+	.query_port = rxe_query_port,/*rxe port属性查询*/
+	.alloc_pd = rxe_alloc_pd,/*申请pd*/
 	.dealloc_pd = rxe_dealloc_pd,
 	.reg_mr = rxe_reg_mr,/*注册mr*/
 	.dereg_mr = rxe_dereg_mr,
@@ -1804,7 +1806,7 @@ static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev/*对应�
 				&resp, sizeof(resp)))
 		goto out;
 
-	/*设置rxe context对应的ops*/
+	/*为ibv_ctx设置rxe context对应的ops*/
 	verbs_set_ops(&context->ibv_ctx, &rxe_ctx_ops);
 
 	return &context->ibv_ctx;/*返回ibv_ctx*/
@@ -1855,9 +1857,10 @@ static const struct verbs_device_ops rxe_dev_ops = {
 	.match_min_abi_version = sizeof(void *) == 8?1:2,
 	.match_max_abi_version = 2,
 	.match_table = hca_table,
+	/*申请verbs_device空间*/
 	.alloc_device = rxe_device_alloc,
 	.uninit_device = rxe_uninit_device,
-	/*verbs context申请*/
+	/*verbs context申请并初始化（主要是ops初始化）*/
 	.alloc_context = rxe_alloc_context,
 };
 

@@ -123,7 +123,7 @@ LATEST_SYMVER_FUNC(ibv_get_device_name, 1_1, "IBVERBS_1.1",
 	return device->name;
 }
 
-/*取sysfs_dev的node_guid,如果没有缓存，则读取设备对应的node_guid文件*/
+/*取ibv设备的node_guid,如果没有缓存，则读取设备对应的node_guid文件*/
 LATEST_SYMVER_FUNC(ibv_get_device_guid, 1_1, "IBVERBS_1.1",
 		   __be64,
 		   struct ibv_device *device)
@@ -246,17 +246,19 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
 		       struct ibv_device *device/*关联的ib设备*/, int cmd_fd/*verbs命令对应的fd*/,
 		       uint32_t driver_id/*驱动类别id*/)
 {
+	/*verbs context中有ibv_context*/
 	struct ibv_context *context = &context_ex->context;
 
 	ibverbs_device_hold(device);
 
+	/*初始化ib context*/
 	context->device = device;
 	context->cmd_fd = cmd_fd;
 	context->async_fd = -1;
 	pthread_mutex_init(&context->mutex, NULL);
 
 	context_ex->context.abi_compat = __VERBS_ABI_IS_EXTENDED;
-	context_ex->sz = sizeof(*context_ex);
+	context_ex->sz = sizeof(*context_ex);/*这个值本身总等于verbs_context,增加它的意义在哪？*/
 
 	/*申请私有结构体*/
 	context_ex->priv = calloc(1, sizeof(*context_ex->priv));
@@ -267,7 +269,7 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
 	}
 
 	context_ex->priv->driver_id = driver_id;
-	//设置dummy式的ops,用于提供默认实现
+	//设置dummy式的ops,用于提供默认实现（上层调用需要变更这一ops)
 	verbs_set_ops(context_ex, &verbs_dummy_ops);
 	context_ex->priv->use_ioctl_write = has_ioctl_write(context);
 
@@ -280,8 +282,8 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
  * structure where the verbs_context starts.
  */
 void *_verbs_init_and_alloc_context(struct ibv_device *device/*关联的ib设备*/, int cmd_fd/*字符设备*/,
-				    size_t alloc_size/*context结构体大小*/,
-				    struct verbs_context *context_offset/*driver context到verbs_context的偏移量*/,
+				    size_t alloc_size/*driver context结构体大小*/,
+				    struct verbs_context *context_offset/*driver context中到verbs_context成员的偏移量*/,
 				    uint32_t driver_id/*驱动类型编号*/)
 {
 	void *drv_context;
@@ -295,10 +297,10 @@ void *_verbs_init_and_alloc_context(struct ibv_device *device/*关联的ib设备
 		return NULL;
 	}
 
-	/*dirver-context的后半部分为verbs_context*/
+	/*依据offset自dirver context中拿到verbs_context的起始地址*/
 	context = drv_context + (uintptr_t)context_offset;
 
-	/*初始化context*/
+	/*初始化verbs_context*/
 	if (verbs_init_context(context, device, cmd_fd, driver_id))
 		goto err_free;
 
@@ -310,10 +312,10 @@ err_free:
 	return NULL;
 }
 
-/*设置lib ops*/
+/*设置lib ops（这些回调不能直接调用provider提供的，而需要被代理一层之后再调用）*/
 static void set_lib_ops(struct verbs_context *vctx)
 {
-    /*设置create cq_ex回调*/
+    /*设置create cq_ex回调(verbs_set_ops函数不设置此回调)*/
 	vctx->create_cq_ex = __lib_ibv_create_cq_ex;
 
 	/*
@@ -343,7 +345,7 @@ static void set_lib_ops(struct verbs_context *vctx)
 		(void (*)(void))vctx->ibv_destroy_flow;
 }
 
-//打开ib device，创建并获取其对应的ibv_context
+//打开ib device，创建并初始化其对应的ibv_context
 struct ibv_context *verbs_open_device(struct ibv_device *device, void *private_data/*用户传入的私有数据*/)
 {
     /*转对应的verbs_device*/
