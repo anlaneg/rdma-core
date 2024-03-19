@@ -23,44 +23,30 @@ import struct
 
 MAX_MATCH_PARAM_SIZE = 0x180
 
-MLX5_CMD_OP_QUERY_HCA_CAP = 0x100
-MLX5_CMD_MOD_NIC_FLOW_TABLE_CAP = 0x7
-MLX5_CMD_OP_QUERY_HCA_CAP_OUT_LEN = 0x1010
-
 
 @u.skip_unsupported
 def requires_reformat_support(func):
     def func_wrapper(instance):
-        try:
-            ctx = Mlx5Context(Mlx5DVContextAttr(), instance.dev_name)
-        except PyverbsUserError as ex:
-            raise unittest.SkipTest(f'Could not open mlx5 context ({ex})')
-        except PyverbsRDMAError:
-            raise unittest.SkipTest('Opening mlx5 context is not supported')
-        # Query NIC Flow Table capabilities
-        cmd_in = struct.pack('!HIH8s', MLX5_CMD_OP_QUERY_HCA_CAP, 0,
-                             MLX5_CMD_MOD_NIC_FLOW_TABLE_CAP << 1 | 0x1,
-                             bytes(8))
-        try:
-            cmd_out = Mlx5Context.devx_general_cmd(ctx, cmd_in,
-                                                   MLX5_CMD_OP_QUERY_HCA_CAP_OUT_LEN)
-        except PyverbsRDMAError as ex:
-            if ex.error_code in [errno.EOPNOTSUPP, errno.EPROTONOSUPPORT]:
-                raise unittest.SkipTest('DevX general command is not supported')
-            raise ex
-        cmd_view = memoryview(cmd_out)
-        status = cmd_view[0]
-        if status:
-            raise PyverbsRDMAError('Query NIC Flow Table CAPs failed with status'
-                                   f' ({status})')
+        nic_tbl_caps = u.query_nic_flow_table_caps(instance)
         # Verify that both NIC RX and TX support reformat actions by checking
         # the following PRM fields: encap_general_header,
         # log_max_packet_reformat, and reformat (for both RX and TX).
-        if not (cmd_view[20] & 0x80 and cmd_view[21] & 0x1f and
-                cmd_view[80] & 0x1 and cmd_view[272] & 0x1):
+        if not(nic_tbl_caps.encap_general_header and
+               nic_tbl_caps.log_max_packet_reformat_context and
+               nic_tbl_caps.flow_table_properties_nic_receive.reformat and
+               nic_tbl_caps.flow_table_properties_nic_transmit.reformat):
             raise unittest.SkipTest('NIC flow table does not support reformat')
         return func(instance)
     return func_wrapper
+
+
+def gen_vxlan_l2_tunnel_encap_header(msg_size):
+    vxlan_header = u.gen_vxlan_header()
+    udp_header = u.gen_udp_header(packet_len=msg_size + len(vxlan_header),
+                                  dst_port=PacketConsts.VXLAN_PORT)
+    ip_header = u.gen_ipv4_header(packet_len=msg_size + len(vxlan_header) + len(udp_header))
+    mac_header = u.gen_ethernet_header()
+    return mac_header + ip_header + udp_header + vxlan_header
 
 
 class Mlx5FlowResources(RawResources):
@@ -101,17 +87,6 @@ class Mlx5MatcherTest(Mlx5RDMATestCase):
         self.server = None
         self.client = None
 
-    def create_players(self, resource, **resource_arg):
-        """
-        Init Flow tests resources.
-        :param resource: The RDMA resources to use.
-        :param resource_arg: Dict of args that specify the resource specific
-                             attributes.
-        :return: None
-        """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-
     @u.skip_unsupported
     def test_create_empty_matcher(self):
         """
@@ -149,13 +124,14 @@ class Mlx5MatcherTest(Mlx5RDMATestCase):
         u.raw_traffic(self.client, self.server, self.iters)
 
     @requires_reformat_support
+    @u.requires_encap_disabled_if_eswitch_on
     def test_tx_packet_reformat(self):
         """
         Creates packet reformat (encap) action on TX and with QP action on RX
         verifies that the packet was encapsulated as expected.
         """
         self.client = Mlx5FlowResources(**self.dev_info)
-        outer = u.gen_outer_headers(self.client.msg_size)
+        outer = gen_vxlan_l2_tunnel_encap_header(self.client.msg_size)
         # Due to encapsulation action Ipv4 and UDP checksum of the outer header
         # will be recalculated, need to skip them during packet validation.
         ipv4_id_idx = [18, 19]

@@ -1,5 +1,6 @@
 /* GPLv2 or OpenIB.org BSD (MIT) See COPYING file */
 #include <stdlib.h>
+#include <string.h>
 #include <sys/random.h>
 #include <sys/types.h>
 #include <time.h>
@@ -44,4 +45,23 @@ unsigned int get_random(void)
 	}
 
 	return rand_r(&seed);
+}
+
+bool check_env(const char *var)
+{
+	const char *env_value = getenv(var);
+
+	return env_value && (strcmp(env_value, "0") != 0);
+}
+
+/* Xorshift random number generator */
+uint32_t xorshift32(struct xorshift32_state *state)
+{
+	/* Algorithm "xor" from p. 4 of Marsaglia, "Xorshift RNGs" */
+	uint32_t x = state->seed;;
+
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	return state->seed = x;
 }

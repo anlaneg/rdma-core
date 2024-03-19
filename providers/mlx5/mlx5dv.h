@@ -86,6 +86,8 @@ enum mlx5dv_context_comp_mask {
 	MLX5DV_CONTEXT_MASK_DCI_STREAMS		= 1 << 11,
 	MLX5DV_CONTEXT_MASK_WR_MEMCPY_LENGTH	= 1 << 12,
 	MLX5DV_CONTEXT_MASK_CRYPTO_OFFLOAD	= 1 << 13,
+	MLX5DV_CONTEXT_MASK_MAX_DC_RD_ATOM	= 1 << 14,
+	MLX5DV_CONTEXT_MASK_REG_C0		= 1 << 15,
 };
 
 struct mlx5dv_cqe_comp_caps {
@@ -184,6 +186,8 @@ struct mlx5dv_sig_caps {
 
 enum mlx5dv_crypto_engines_caps {
 	MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS = 1 << 0,
+	MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK = 1 << 1,
+	MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK = 1 << 2,
 };
 
 enum mlx5dv_crypto_wrapped_import_method_caps {
@@ -230,6 +234,9 @@ struct mlx5dv_context {
 	struct mlx5dv_dci_streams_caps dci_streams_caps;
 	size_t max_wr_memcpy_length;
 	struct mlx5dv_crypto_caps crypto_caps;
+	uint64_t max_dc_rd_atom;
+	uint64_t max_dc_init_rd_atom;
+	struct mlx5dv_reg reg_c0;
 };
 
 enum mlx5dv_context_flags {
@@ -282,6 +289,8 @@ enum mlx5dv_mkey_init_attr_flags {
 	MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT = 1 << 0,
 	MLX5DV_MKEY_INIT_ATTR_FLAGS_BLOCK_SIGNATURE = 1 << 1,
 	MLX5DV_MKEY_INIT_ATTR_FLAGS_CRYPTO = 1 << 2,
+	MLX5DV_MKEY_INIT_ATTR_FLAGS_UPDATE_TAG = 1 << 3,
+	MLX5DV_MKEY_INIT_ATTR_FLAGS_REMOTE_INVALIDATE = 1 << 4,
 };
 
 struct mlx5dv_mkey_init_attr {
@@ -612,6 +621,8 @@ static inline void mlx5dv_wr_raw_wqe(struct mlx5dv_qp_ex *mqp, const void *wqe)
 	mqp->wr_raw_wqe(mqp, wqe);
 }
 
+struct mlx5dv_crypto_login_obj;
+
 struct mlx5dv_crypto_login_attr {
 	uint32_t credential_id;
 	uint32_t import_kek_id;
@@ -619,10 +630,22 @@ struct mlx5dv_crypto_login_attr {
 	uint64_t comp_mask;
 };
 
+struct mlx5dv_crypto_login_attr_ex {
+	uint32_t credential_id;
+	uint32_t import_kek_id;
+	const void *credential;
+	size_t credential_len;
+	uint64_t comp_mask;
+};
 enum mlx5dv_crypto_login_state {
 	MLX5DV_CRYPTO_LOGIN_STATE_VALID,
 	MLX5DV_CRYPTO_LOGIN_STATE_NO_LOGIN,
 	MLX5DV_CRYPTO_LOGIN_STATE_INVALID,
+};
+
+struct mlx5dv_crypto_login_query_attr {
+	enum mlx5dv_crypto_login_state state;
+	uint64_t comp_mask;
 };
 
 int mlx5dv_crypto_login(struct ibv_context *context,
@@ -632,6 +655,15 @@ int mlx5dv_crypto_login_query_state(struct ibv_context *context,
 				    enum mlx5dv_crypto_login_state *state);
 
 int mlx5dv_crypto_logout(struct ibv_context *context);
+
+struct mlx5dv_crypto_login_obj *
+mlx5dv_crypto_login_create(struct ibv_context *context,
+			   struct mlx5dv_crypto_login_attr_ex *login_attr);
+
+int mlx5dv_crypto_login_query(struct mlx5dv_crypto_login_obj *crypto_login,
+			      struct mlx5dv_crypto_login_query_attr *query_attr);
+
+int mlx5dv_crypto_login_destroy(struct mlx5dv_crypto_login_obj *crypto_login);
 
 enum mlx5dv_crypto_key_size {
 	MLX5DV_CRYPTO_KEY_SIZE_128,
@@ -647,6 +679,10 @@ enum mlx5dv_dek_state {
 	MLX5DV_DEK_STATE_ERROR,
 };
 
+enum mlx5dv_dek_init_attr_mask {
+	MLX5DV_DEK_INIT_ATTR_CRYPTO_LOGIN = 1 << 0,
+};
+
 struct mlx5dv_dek_init_attr {
 	enum mlx5dv_crypto_key_size key_size;
 	bool has_keytag;
@@ -655,6 +691,7 @@ struct mlx5dv_dek_init_attr {
 	char opaque[8];
 	char key[128];
 	uint64_t comp_mask;
+	struct mlx5dv_crypto_login_obj *crypto_login;
 };
 
 struct mlx5dv_dek_attr {
@@ -707,6 +744,21 @@ mlx5dv_create_flow_matcher(struct ibv_context *context,
 			   struct mlx5dv_flow_matcher_attr *matcher_attr);
 
 int mlx5dv_destroy_flow_matcher(struct mlx5dv_flow_matcher *matcher);
+
+struct mlx5dv_steering_anchor_attr {
+	enum mlx5dv_flow_table_type ft_type;
+	uint16_t priority;
+	uint64_t comp_mask;
+};
+
+struct mlx5dv_steering_anchor {
+	uint32_t id;
+};
+
+struct mlx5dv_steering_anchor *
+mlx5dv_create_steering_anchor(struct ibv_context *context,
+			      struct mlx5dv_steering_anchor_attr *attr);
+int mlx5dv_destroy_steering_anchor(struct mlx5dv_steering_anchor *sa);
 
 enum mlx5dv_flow_action_type {
 	MLX5DV_FLOW_ACTION_DEST_IBV_QP,
@@ -990,6 +1042,7 @@ enum {
 	MLX5_OPCODE_SET_PSV		= 0x20,
 	MLX5_OPCODE_UMR			= 0x25,
 	MLX5_OPCODE_TAG_MATCHING	= 0x28,
+	MLX5_OPCODE_FLOW_TBL_ACCESS     = 0x2c,
 	MLX5_OPCODE_MMO			= 0x2F,
 };
 
@@ -1697,12 +1750,17 @@ struct mlx5dv_devx_umem {
 struct mlx5dv_devx_umem *
 mlx5dv_devx_umem_reg(struct ibv_context *ctx, void *addr, size_t size, uint32_t access);
 
+enum  mlx5dv_devx_umem_in_mask {
+	MLX5DV_UMEM_MASK_DMABUF = 1 << 0,
+};
+
 struct mlx5dv_devx_umem_in {
 	void *addr;
 	size_t size;
 	uint32_t access;
 	uint64_t pgsz_bitmap;
 	uint64_t comp_mask;
+	int dmabuf_fd;
 };
 
 struct mlx5dv_devx_umem *
@@ -2059,6 +2117,10 @@ struct mlx5dv_dr_action *
 mlx5dv_dr_action_create_push_vlan(struct mlx5dv_dr_domain *domain,
 				  __be32 vlan_hdr);
 
+struct mlx5dv_dr_action *
+mlx5dv_dr_action_create_dest_root_table(struct mlx5dv_dr_table *table,
+					uint16_t priority);
+
 int mlx5dv_dr_action_destroy(struct mlx5dv_dr_action *action);
 
 int mlx5dv_dump_dr_domain(FILE *fout, struct mlx5dv_dr_domain *domain);
@@ -2135,6 +2197,25 @@ int mlx5dv_dr_aso_other_domain_link(struct mlx5dv_devx_obj *devx_obj,
 int mlx5dv_dr_aso_other_domain_unlink(struct mlx5dv_devx_obj *devx_obj,
 				      struct mlx5dv_dr_domain *dmn);
 
+struct mlx5dv_devx_msi_vector {
+	int vector;
+	int fd;
+};
+
+struct mlx5dv_devx_msi_vector *
+mlx5dv_devx_alloc_msi_vector(struct ibv_context *ibctx);
+
+int mlx5dv_devx_free_msi_vector(struct mlx5dv_devx_msi_vector *msi);
+
+struct mlx5dv_devx_eq {
+	void *vaddr;
+};
+
+struct mlx5dv_devx_eq *
+mlx5dv_devx_create_eq(struct ibv_context *ibctx, const void *in, size_t inlen,
+		      void *out, size_t outlen);
+
+int mlx5dv_devx_destroy_eq(struct mlx5dv_devx_eq *eq);
 
 #ifdef __cplusplus
 }

@@ -33,7 +33,6 @@
 #include "mlx5dv_dr.h"
 
 #define DR_ICM_MODIFY_HDR_ALIGN_BASE	64
-#define DR_ICM_SYNC_THRESHOLD_POOL (64 * 1024 * 1024)
 
 struct dr_icm_pool {
 	enum dr_icm_type	icm_type;
@@ -44,6 +43,7 @@ struct dr_icm_pool {
 	struct list_head	buddy_mem_list;
 	uint64_t		hot_memory_size;
 	bool			syncing;
+	size_t			th;
 };
 
 struct dr_icm_mr {
@@ -68,14 +68,30 @@ dr_icm_allocate_aligned_dm(struct dr_icm_pool *pool,
 	size = dr_icm_pool_chunk_size_to_byte(pool->max_log_chunk_sz,
 					      pool->icm_type);
 
-	if (pool->icm_type == DR_ICM_TYPE_STE) {
+	switch (pool->icm_type) {
+	case DR_ICM_TYPE_STE:
 		mlx5_dm_attr.type = MLX5_IB_UAPI_DM_TYPE_STEERING_SW_ICM;
 		/* Align base is the biggest chunk size */
 		log_align_base = ilog32(size - 1);
-	} else if (pool->icm_type == DR_ICM_TYPE_MODIFY_ACTION) {
+		break;
+	case DR_ICM_TYPE_MODIFY_ACTION:
 		mlx5_dm_attr.type = MLX5_IB_UAPI_DM_TYPE_HEADER_MODIFY_SW_ICM;
 		/* Align base is 64B */
 		log_align_base = ilog32(DR_ICM_MODIFY_HDR_ALIGN_BASE - 1);
+		break;
+	case DR_ICM_TYPE_MODIFY_HDR_PTRN:
+		mlx5_dm_attr.type = MLX5DV_DM_TYPE_HEADER_MODIFY_PATTERN_SW_ICM;
+		/* Align base is 64B */
+		log_align_base = ilog32(DR_ICM_MODIFY_HDR_ALIGN_BASE - 1);
+		break;
+	case DR_ICM_TYPE_ENCAP:
+		mlx5_dm_attr.type = MLX5_IB_UAPI_DM_TYPE_ENCAP_SW_ICM;
+		log_align_base = DR_SW_ENCAP_ENTRY_LOG_SIZE;
+		break;
+	default:
+		assert(false);
+		errno = EINVAL;
+		return errno;
 	}
 
 	dm_attr->length = size;
@@ -170,44 +186,21 @@ get_chunk_icm_type(struct dr_icm_chunk *chunk)
 	return chunk->buddy_mem->pool->icm_type;
 }
 
-static int
-dr_icm_chunk_ste_init(struct dr_icm_chunk *chunk)
+static void dr_icm_chunk_ste_init(struct dr_icm_chunk *chunk, int offset)
 {
 	struct dr_icm_buddy_mem *buddy = chunk->buddy_mem;
+	int index = offset / DR_STE_SIZE;
 
-	chunk->ste_arr = calloc(chunk->num_of_entries, sizeof(struct dr_ste));
-	if (!chunk->ste_arr) {
-		errno = ENOMEM;
-		return errno;
-	}
-
-	chunk->hw_ste_arr = calloc(chunk->num_of_entries, buddy->hw_ste_sz);
-	if (!chunk->hw_ste_arr) {
-		errno = ENOMEM;
-		goto out_free_ste_arr;
-	}
-
-	chunk->miss_list = malloc(chunk->num_of_entries *
-				  sizeof(struct list_head));
-	if (!chunk->miss_list) {
-		errno = ENOMEM;
-		goto out_free_hw_ste_arr;
-	}
-
-	return 0;
-
-out_free_hw_ste_arr:
-	free(chunk->hw_ste_arr);
-out_free_ste_arr:
-	free(chunk->ste_arr);
-	return errno;
+	chunk->ste_arr = &buddy->ste_arr[index];
+	chunk->miss_list = &buddy->miss_list[index];
+	chunk->hw_ste_arr = buddy->hw_ste_arr + index * buddy->hw_ste_sz;
 }
 
 static void dr_icm_chunk_ste_cleanup(struct dr_icm_chunk *chunk)
 {
-	free(chunk->miss_list);
-	free(chunk->hw_ste_arr);
-	free(chunk->ste_arr);
+	struct dr_icm_buddy_mem *buddy = chunk->buddy_mem;
+
+	memset(chunk->hw_ste_arr, 0, chunk->num_of_entries * buddy->hw_ste_sz);
 }
 
 static void dr_icm_chunk_destroy(struct dr_icm_chunk *chunk)
@@ -222,9 +215,51 @@ static void dr_icm_chunk_destroy(struct dr_icm_chunk *chunk)
 	free(chunk);
 }
 
+static int dr_icm_buddy_init_ste_cache(struct dr_icm_buddy_mem *buddy)
+{
+	struct dr_devx_caps *caps = &buddy->pool->dmn->info.caps;
+	int num_of_entries =
+		dr_icm_pool_chunk_size_to_entries(buddy->pool->max_log_chunk_sz);
+
+	buddy->hw_ste_sz = caps->sw_format_ver == MLX5_HW_CONNECTX_5 ?
+		DR_STE_SIZE_REDUCED : DR_STE_SIZE;
+
+	buddy->ste_arr = calloc(num_of_entries, sizeof(struct dr_ste));
+	if (!buddy->ste_arr) {
+		errno = ENOMEM;
+		return ENOMEM;
+	}
+
+	buddy->hw_ste_arr = calloc(num_of_entries, buddy->hw_ste_sz);
+	if (!buddy->hw_ste_arr) {
+		errno = ENOMEM;
+		goto free_ste_arr;
+	}
+
+	buddy->miss_list = malloc(num_of_entries * sizeof(struct list_head));
+	if (!buddy->miss_list) {
+		errno = ENOMEM;
+		goto free_hw_ste_arr;
+	}
+
+	return 0;
+
+free_hw_ste_arr:
+	free(buddy->hw_ste_arr);
+free_ste_arr:
+	free(buddy->ste_arr);
+	return errno;
+}
+
+static void dr_icm_buddy_cleanup_ste_cache(struct dr_icm_buddy_mem *buddy)
+{
+	free(buddy->ste_arr);
+	free(buddy->hw_ste_arr);
+	free(buddy->miss_list);
+}
+
 static int dr_icm_buddy_create(struct dr_icm_pool *pool)
 {
-	struct dr_devx_caps *caps = &pool->dmn->info.caps;
 	struct dr_icm_buddy_mem *buddy;
 	struct dr_icm_mr *icm_mr;
 
@@ -238,22 +273,26 @@ static int dr_icm_buddy_create(struct dr_icm_pool *pool)
 		goto free_mr;
 	}
 
+	buddy->pool = pool;
+	buddy->icm_mr = icm_mr;
+
 	if (dr_buddy_init(buddy, pool->max_log_chunk_sz))
 		goto err_free_buddy;
 
-	buddy->icm_mr = icm_mr;
-	buddy->pool = pool;
-
-	/* Set single entry HW STE cache size */
-	if (pool->icm_type == DR_ICM_TYPE_STE)
-		buddy->hw_ste_sz = caps->sw_format_ver == MLX5_HW_CONNECTX_5 ?
-			DR_STE_SIZE_REDUCED : DR_STE_SIZE;
+	/* Reduce allocations by preallocating and reusing the STE structures */
+	if (pool->icm_type == DR_ICM_TYPE_STE &&
+	    dr_icm_buddy_init_ste_cache(buddy))
+		goto err_cleanup_buddy;
 
 	/* add it to the -start- of the list in order to search in it first */
 	list_add(&pool->buddy_mem_list, &buddy->list_node);
 
+	pool->dmn->num_buddies[pool->icm_type]++;
+
 	return 0;
 
+err_cleanup_buddy:
+	dr_buddy_cleanup(buddy);
 err_free_buddy:
 	free(buddy);
 free_mr:
@@ -274,6 +313,11 @@ static void dr_icm_buddy_destroy(struct dr_icm_buddy_mem *buddy)
 	dr_icm_pool_mr_destroy(buddy->icm_mr);
 
 	dr_buddy_cleanup(buddy);
+
+	buddy->pool->dmn->num_buddies[buddy->pool->icm_type]--;
+
+	if (buddy->pool->icm_type == DR_ICM_TYPE_STE)
+		dr_icm_buddy_cleanup_ste_cache(buddy);
 
 	free(buddy);
 }
@@ -296,18 +340,12 @@ dr_icm_chunk_create(struct dr_icm_pool *pool,
 	offset = dr_icm_pool_dm_type_to_entry_size(pool->icm_type) * seg;
 
 	chunk->buddy_mem = buddy_mem_pool;
-	chunk->rkey = buddy_mem_pool->icm_mr->mr->rkey;
-	chunk->mr_addr = (uintptr_t)buddy_mem_pool->icm_mr->mr->addr + offset;
-	chunk->icm_addr = (uintptr_t)buddy_mem_pool->icm_mr->icm_start_addr + offset;
 	chunk->num_of_entries = dr_icm_pool_chunk_size_to_entries(chunk_size);
 	chunk->byte_size = dr_icm_pool_chunk_size_to_byte(chunk_size, pool->icm_type);
 	chunk->seg = seg;
 
-	if (pool->icm_type == DR_ICM_TYPE_STE && dr_icm_chunk_ste_init(chunk)) {
-		dr_dbg(pool->dmn, "Failed init ste arrays: order: %d\n",
-		       chunk_size)
-		goto out_free_chunk;
-	}
+	if (pool->icm_type == DR_ICM_TYPE_STE)
+		dr_icm_chunk_ste_init(chunk, offset);
 
 	buddy_mem_pool->used_memory += chunk->byte_size;
 	list_node_init(&chunk->chunk_list);
@@ -316,15 +354,11 @@ dr_icm_chunk_create(struct dr_icm_pool *pool,
 	list_add_tail(&buddy_mem_pool->used_list, &chunk->chunk_list);
 
 	return chunk;
-
-out_free_chunk:
-	free(chunk);
-	return NULL;
 }
 
 static bool dr_icm_pool_is_sync_required(struct dr_icm_pool *pool)
 {
-	if (pool->hot_memory_size > DR_ICM_SYNC_THRESHOLD_POOL)
+	if (pool->hot_memory_size >= pool->th)
 		return true;
 
 	return false;
@@ -494,17 +528,32 @@ void dr_icm_pool_set_pool_max_log_chunk_sz(struct dr_icm_pool *pool,
 	pthread_spin_unlock(&pool->lock);
 }
 
+uint64_t dr_icm_pool_get_chunk_icm_addr(struct dr_icm_chunk *chunk)
+{
+	enum dr_icm_type icm_type = chunk->buddy_mem->pool->icm_type;
+	int offset = dr_icm_pool_dm_type_to_entry_size(icm_type) * chunk->seg;
+
+	return (uintptr_t)chunk->buddy_mem->icm_mr->icm_start_addr + offset;
+}
+
+uint64_t dr_icm_pool_get_chunk_mr_addr(struct dr_icm_chunk *chunk)
+{
+	enum dr_icm_type icm_type = chunk->buddy_mem->pool->icm_type;
+	int offset = dr_icm_pool_dm_type_to_entry_size(icm_type) * chunk->seg;
+
+	return (uintptr_t)chunk->buddy_mem->icm_mr->mr->addr + offset;
+}
+
+uint32_t dr_icm_pool_get_chunk_rkey(struct dr_icm_chunk *chunk)
+{
+	return chunk->buddy_mem->icm_mr->mr->rkey;
+}
+
 struct dr_icm_pool *dr_icm_pool_create(struct mlx5dv_dr_domain *dmn,
 				       enum dr_icm_type icm_type)
 {
-	enum dr_icm_chunk_size max_log_chunk_sz;
 	struct dr_icm_pool *pool;
 	int ret;
-
-	if (icm_type == DR_ICM_TYPE_STE)
-		max_log_chunk_sz = dmn->info.max_log_sw_icm_sz;
-	else
-		max_log_chunk_sz = dmn->info.max_log_action_icm_sz;
 
 	pool = calloc(1, sizeof(struct dr_icm_pool));
 	if (!pool) {
@@ -514,7 +563,32 @@ struct dr_icm_pool *dr_icm_pool_create(struct mlx5dv_dr_domain *dmn,
 
 	pool->dmn = dmn;
 	pool->icm_type = icm_type;
-	pool->max_log_chunk_sz = max_log_chunk_sz;
+
+	switch (icm_type) {
+	case DR_ICM_TYPE_STE:
+		pool->max_log_chunk_sz = dmn->info.max_log_sw_icm_sz;
+		pool->th = dr_icm_pool_chunk_size_to_byte(pool->max_log_chunk_sz,
+							  pool->icm_type) / 2;
+		break;
+	case DR_ICM_TYPE_MODIFY_ACTION:
+		pool->max_log_chunk_sz = dmn->info.max_log_action_icm_sz;
+		/* Use larger (0.9 instead of 0.5) TH to reduce sync on high rate insertion */
+		pool->th = dr_icm_pool_chunk_size_to_byte(pool->max_log_chunk_sz,
+							  pool->icm_type) * 0.9;
+		break;
+	case DR_ICM_TYPE_MODIFY_HDR_PTRN:
+		pool->max_log_chunk_sz = dmn->info.max_log_modify_hdr_pattern_icm_sz;
+		pool->th = dr_icm_pool_chunk_size_to_byte(pool->max_log_chunk_sz,
+							  pool->icm_type) / 2;
+		break;
+	case DR_ICM_TYPE_ENCAP:
+		pool->max_log_chunk_sz = dmn->info.max_log_sw_encap_icm_sz;
+		pool->th = dr_icm_pool_chunk_size_to_byte(pool->max_log_chunk_sz,
+							  pool->icm_type) / 2;
+		break;
+	default:
+		assert(false);
+	}
 
 	list_head_init(&pool->buddy_mem_list);
 

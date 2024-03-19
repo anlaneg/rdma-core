@@ -33,7 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <ccan/bitmap.h>
+#include <util/bitmap.h>
 #include "hns_roce_u.h"
 #include "hns_roce_u_db.h"
 
@@ -41,6 +41,7 @@
 static const unsigned int db_size[] = {
 	[HNS_ROCE_QP_TYPE_DB] = 4,
 	[HNS_ROCE_CQ_TYPE_DB] = 4,
+	[HNS_ROCE_SRQ_TYPE_DB] = 4,
 };
 
 static struct hns_roce_db_page *hns_roce_add_db_page(
@@ -109,7 +110,7 @@ void *hns_roce_alloc_db(struct hns_roce_context *ctx,
 found:
 	++page->use_cnt;
 
-	npos = bitmap_ffs(page->bitmap, 0, page->num_db);
+	npos = bitmap_find_first_bit(page->bitmap, 0, page->num_db);
 	bitmap_clear_bit(page->bitmap, npos);
 	db = page->buf.buf + npos * db_size[type];
 

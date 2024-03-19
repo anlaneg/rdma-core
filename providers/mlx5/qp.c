@@ -42,6 +42,7 @@
 
 #include "mlx5.h"
 #include "mlx5_ifc.h"
+#include "mlx5_trace.h"
 #include "wqe.h"
 
 #define MLX5_ATOMIC_SIZE 8
@@ -633,7 +634,7 @@ static inline int set_bind_wr(struct mlx5_qp *qp, enum ibv_mw_type type,
 	if (!bind_info->length)
 		return 0;
 
-	if (unlikely((seg == qend)))
+	if (unlikely((*seg == qend)))
 		*seg = mlx5_get_send_wqe(qp, 0);
 
 	set_umr_data_seg(qp, type, rkey, bind_info, qpn, seg, size);
@@ -846,7 +847,7 @@ static inline int _mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 			goto out;
 		}
 
-		if (unlikely(wr->num_sge > qp->sq.max_gs)) {
+		if (unlikely(wr->num_sge > qp->sq.qp_state_max_gs)) {
 			mlx5_dbg(fp, MLX5_DBG_QP_SEND, "max gs exceeded %d (max = %d)\n",
 				 wr->num_sge, qp->sq.max_gs);
 			err = ENOMEM;
@@ -871,6 +872,7 @@ static inline int _mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 
 		seg += sizeof *ctrl;
 		size = sizeof *ctrl / 16;
+		qp->sq.wr_data[idx] = 0;
 
 		//按qp类型不同处理
 		switch (ibqp->qp_type) {
@@ -1137,6 +1139,12 @@ static inline int _mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 		if (mlx5_debug_mask & MLX5_DBG_QP_SEND)
 			dump_wqe(to_mctx(ibqp->context), idx, size, qp);
 #endif
+
+		rdma_tracepoint(rdma_core_mlx5, post_send,
+				ibqp->context->device->name,
+				ibqp->qp_num,
+				(char *)ibv_wr_opcode_str(wr->opcode),
+				wr->num_sge);
 	}
 
 out:
@@ -1184,6 +1192,17 @@ static void mlx5_send_wr_start(struct ibv_qp_ex *ibqp)
 	mqp->err = 0;
 	mqp->nreq = 0;
 	mqp->inl_wqe = 0;
+}
+
+static int mlx5_send_wr_complete_error(struct ibv_qp_ex *ibqp)
+{
+	struct mlx5_qp *mqp = to_mqp((struct ibv_qp *)ibqp);
+
+	/* Rolling back */
+	mqp->sq.cur_post = mqp->cur_post_rb;
+	mqp->fm_cache = mqp->fm_cache_rb;
+	mlx5_spin_unlock(&mqp->sq.lock);
+	return EINVAL;
 }
 
 static int mlx5_send_wr_complete(struct ibv_qp_ex *ibqp)
@@ -1252,6 +1271,8 @@ static inline void _common_wqe_init_op(struct ibv_qp_ex *ibqp, int ib_op,
 		mqp->sq.wr_data[idx] = IBV_WC_DRIVER1;
 	else if (mlx5_op == MLX5_OPCODE_MMO)
 		mqp->sq.wr_data[idx] = IBV_WC_DRIVER3;
+	else
+		mqp->sq.wr_data[idx] = 0;
 
 	ctrl = mlx5_get_send_wqe(mqp, idx);
 	*(uint32_t *)((void *)ctrl + 8) = 0;
@@ -2393,7 +2414,8 @@ static int get_crypto_order(bool encrypt_on_tx,
 	return order;
 }
 
-static int mlx5_umr_fill_crypto_bsf(struct mlx5_crypto_bsf *crypto_bsf,
+static int mlx5_umr_fill_crypto_bsf(struct mlx5_context *ctx,
+				    struct mlx5_crypto_bsf *crypto_bsf,
 				    struct mlx5_crypto_attr *attr,
 				    struct mlx5_sig_block *block)
 {
@@ -2401,7 +2423,8 @@ static int mlx5_umr_fill_crypto_bsf(struct mlx5_crypto_bsf *crypto_bsf,
 
 	memset(crypto_bsf, 0, sizeof(*crypto_bsf));
 
-	crypto_bsf->bsf_size_type |= MLX5_BSF_SIZE_WITH_INLINE
+	crypto_bsf->bsf_size_type |= (block ? MLX5_BSF_SIZE_SIG_AND_CRYPTO :
+					      MLX5_BSF_SIZE_WITH_INLINE)
 				     << MLX5_BSF_SIZE_SHIFT;
 	crypto_bsf->bsf_size_type |= MLX5_BSF_TYPE_CRYPTO;
 	order = get_crypto_order(attr->encrypt_on_tx,
@@ -2412,8 +2435,23 @@ static int mlx5_umr_fill_crypto_bsf(struct mlx5_crypto_bsf *crypto_bsf,
 	crypto_bsf->enc_standard = MLX5_ENCRYPTION_STANDARD_AES_XTS;
 	crypto_bsf->raw_data_size = htobe32(UINT32_MAX);
 	crypto_bsf->bs_pointer = bs_to_bs_selector(attr->data_unit_size);
-	memcpy(crypto_bsf->xts_init_tweak, attr->initial_tweak,
-	       sizeof(crypto_bsf->xts_init_tweak));
+
+	/*
+	 * Multi-block encryption requires big endian tweak. Thus,
+	 * convert the tweak accordingly.
+	 */
+	if (ctx->crypto_caps.crypto_engines &
+	    MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK) {
+		int len = sizeof(attr->initial_tweak);
+
+		for (int i = 0; i < len; i++)
+			crypto_bsf->xts_init_tweak[i] =
+				attr->initial_tweak[len - i - 1];
+	} else {
+		memcpy(crypto_bsf->xts_init_tweak, attr->initial_tweak,
+		       sizeof(crypto_bsf->xts_init_tweak));
+	}
+
 	crypto_bsf->rsvd_dek_ptr =
 		htobe32(attr->dek->devx_obj->object_id & 0x00FFFFFF);
 	memcpy(crypto_bsf->keytag, attr->keytag, sizeof(crypto_bsf->keytag));
@@ -2566,8 +2604,27 @@ static inline void umr_finalize_and_set_psvs(struct mlx5_qp *mqp,
 	}
 }
 
+static inline int block_size_to_bytes(enum mlx5dv_block_size data_unit_size)
+{
+	switch (data_unit_size) {
+	case MLX5DV_BLOCK_SIZE_512:
+		return 512;
+	case MLX5DV_BLOCK_SIZE_520:
+		return 520;
+	case MLX5DV_BLOCK_SIZE_4048:
+		return 4048;
+	case MLX5DV_BLOCK_SIZE_4096:
+		return 4096;
+	case MLX5DV_BLOCK_SIZE_4160:
+		return 4160;
+	default:
+		return -1;
+	}
+}
+
 static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 {
+	struct mlx5_context *ctx = to_mctx(mqp->ibv_qp->context);
 	struct mlx5_mkey *mkey = mqp->cur_mkey;
 	void *seg;
 	void *qend = mqp->sq.qend;
@@ -2590,6 +2647,21 @@ static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 	if (mkey->sig && upd_mkc_sig_err_cnt(mkey, umr_ctrl, mk) &&
 	    mkey->sig->block.state == MLX5_MKEY_BSF_STATE_SET)
 		set_psv = true;
+
+	/* Length must fit block size in single block encryption. */
+	if ((mkey->crypto->state == MLX5_MKEY_BSF_STATE_UPDATED ||
+	     mkey->crypto->state == MLX5_MKEY_BSF_STATE_SET) &&
+	    (ctx->crypto_caps.crypto_engines &
+		    MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK) &&
+	    !(ctx->crypto_caps.crypto_engines &
+		    MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK)) {
+		int block_size =
+			block_size_to_bytes(mkey->crypto->data_unit_size);
+		if (block_size < 0 || mkey->length > block_size) {
+			mqp->err = EINVAL;
+			return;
+		}
+	}
 
 	if (!(mkey->sig &&
 	      mkey->sig->block.state == MLX5_MKEY_BSF_STATE_UPDATED) &&
@@ -2624,9 +2696,14 @@ static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 		return;
 	}
 
+	/*
+	 * Handle the case when the size of the previously written data segment
+	 * was bigger than MLX5_SEND_WQE_BB and it overlapped the end of the SQ.
+	 * The BSF segment needs to come just after it for this UMR WQE.
+	 */
 	seg = mqp->cur_data + cur_data_size;
 	if (unlikely(seg >= qend))
-		seg = qend - seg + mlx5_get_send_wqe(mqp, 0);
+		seg = seg - qend + mlx5_get_send_wqe(mqp, 0);
 
 	if (mkey->sig) {
 		/* If sig and crypto are enabled, sig BSF must be set */
@@ -2643,7 +2720,7 @@ static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 	}
 
 	if (set_crypto_bsf) {
-		ret = mlx5_umr_fill_crypto_bsf(seg, mkey->crypto,
+		ret = mlx5_umr_fill_crypto_bsf(ctx, seg, mkey->crypto,
 					       mkey->sig ? &mkey->sig->block :
 							   NULL);
 		if (ret) {
@@ -2730,9 +2807,14 @@ static void umr_wqe_finalize(struct mlx5_qp *mqp)
 		return;
 	}
 
+	/*
+	 * Handle the case when the size of the previously written data segment
+	 * was bigger than MLX5_SEND_WQE_BB and it overlapped the end of the SQ.
+	 * The BSF segment needs to come just after it for this UMR WQE.
+	 */
 	seg = mqp->cur_data + cur_data_size;
 	if (unlikely(seg >= qend))
-		seg = qend - seg + mlx5_get_send_wqe(mqp, 0);
+		seg = seg - qend + mlx5_get_send_wqe(mqp, 0);
 
 	ret = mlx5_umr_fill_sig_bsf(seg, &mkey->sig->block, false);
 	if (ret) {
@@ -2750,6 +2832,7 @@ static void mlx5_send_wr_mkey_configure(struct mlx5dv_qp_ex *dv_qp,
 					struct mlx5dv_mkey_conf_attr *attr)
 {
 	struct mlx5_qp *mqp = mqp_from_mlx5dv_qp_ex(dv_qp);
+	struct mlx5_context *mctx = to_mctx(mqp->ibv_qp->context);
 	struct ibv_qp_ex *ibqp = &mqp->verbs_qp.qp_ex;
 	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
 	struct mlx5_wqe_mkey_context_seg *mk;
@@ -2792,7 +2875,14 @@ static void mlx5_send_wr_mkey_configure(struct mlx5dv_qp_ex *dv_qp,
 
 	mk = seg;
 	memset(mk, 0, sizeof(*mk));
+	if (unlikely(dv_mkey->lkey & 0xff &&
+		     !(mctx->flags &
+		       MLX5_CTX_FLAGS_MKEY_UPDATE_TAG_SUPPORTED))) {
+		mqp->err = EOPNOTSUPP;
+		return;
+	}
 	mk->qpn_mkey = htobe32(0xffffff00 | (dv_mkey->lkey & 0xff));
+	mkey_mask |= MLX5_WQE_UMR_CTRL_MKEY_MASK_MKEY;
 
 	seg += sizeof(*mk);
 	mqp->cur_size += (sizeof(*mk) / 16);
@@ -3451,6 +3541,22 @@ static void fill_wr_setters_eth(struct ibv_qp_ex *ibqp)
 	ibqp->wr_set_inline_data_list = mlx5_send_wr_set_inline_data_list_eth;
 }
 
+void mlx5_qp_fill_wr_complete_error(struct mlx5_qp *mqp)
+{
+	struct ibv_qp_ex *ibqp = &mqp->verbs_qp.qp_ex;
+
+	if (ibqp->wr_complete)
+		ibqp->wr_complete = mlx5_send_wr_complete_error;
+}
+
+void mlx5_qp_fill_wr_complete_real(struct mlx5_qp *mqp)
+{
+	struct ibv_qp_ex *ibqp = &mqp->verbs_qp.qp_ex;
+
+	if (ibqp->wr_complete)
+		ibqp->wr_complete = mlx5_send_wr_complete;
+}
+
 int mlx5_qp_fill_wr_pfns(struct mlx5_qp *mqp,
 			 const struct ibv_qp_init_attr_ex *attr,
 			 const struct mlx5dv_qp_init_attr *mlx5_attr)
@@ -3586,11 +3692,6 @@ int mlx5_bind_mw(struct ibv_qp *qp, struct ibv_mw *mw,
 	struct ibv_send_wr *bad_wr = NULL;
 	int ret;
 
-	if (!bind_info->mr && (bind_info->addr || bind_info->length)) {
-		errno = EINVAL;
-		return errno;
-	}
-
 	if (bind_info->mw_access_flags & IBV_ACCESS_ZERO_BASED) {
 		errno = EINVAL;
 		return errno;
@@ -3607,10 +3708,6 @@ int mlx5_bind_mw(struct ibv_qp *qp, struct ibv_mw *mw,
 			return errno;
 		}
 
-		if (mw->pd != bind_info->mr->pd) {
-			errno = EPERM;
-			return errno;
-		}
 	}
 
 	wr.opcode = IBV_WR_BIND_MW;
@@ -3750,7 +3847,7 @@ int mlx5_post_recv(struct ibv_qp *ibqp, struct ibv_recv_wr *wr,
 			goto out;
 		}
 
-		if (unlikely(wr->num_sge > qp->rq.max_gs)) {
+		if (unlikely(wr->num_sge > qp->rq.qp_state_max_gs)) {
 			err = EINVAL;
 			*bad_wr = wr;
 			goto out;
@@ -4051,8 +4148,10 @@ static int mlx5_qp_query_sqd(struct mlx5_qp *mqp, unsigned int *cur_idx)
 	DEVX_SET(query_qp_in, in, qpn, ibqp->qp_num);
 
 	err = mlx5dv_devx_qp_query(ibqp, in, sizeof(in), out, sizeof(out));
-	if (err)
-		return -errno;
+	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
+		return -err;
+	}
 
 	qpc = DEVX_ADDR_OF(query_qp_out, out, qpc);
 	if (DEVX_GET(qpc, qpc, state) != MLX5_QPC_STATE_SQDRAINED)

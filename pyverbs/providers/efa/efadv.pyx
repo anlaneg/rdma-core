@@ -1,19 +1,25 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
-# Copyright 2020 Amazon.com, Inc. or its affiliates. All rights reserved.
+# Copyright 2020-2024 Amazon.com, Inc. or its affiliates. All rights reserved.
 
-cimport pyverbs.providers.efa.efadv_enums as dve
+cimport pyverbs.providers.efa.efa_enums as dve
 cimport pyverbs.providers.efa.libefa as dv
 
+from pyverbs.addr cimport GID
 from pyverbs.base import PyverbsRDMAErrno, PyverbsRDMAError
+from pyverbs.cq cimport CQEX, CqInitAttrEx
 import pyverbs.enums as e
+cimport pyverbs.libibverbs as v
 from pyverbs.pd cimport PD
 from pyverbs.qp cimport QP, QPEx, QPInitAttr, QPInitAttrEx
+from pyverbs.mr cimport MR
 
 
 def dev_cap_to_str(flags):
     l = {
             dve.EFADV_DEVICE_ATTR_CAPS_RDMA_READ: 'RDMA Read',
             dve.EFADV_DEVICE_ATTR_CAPS_RNR_RETRY: 'RNR Retry',
+            dve.EFADV_DEVICE_ATTR_CAPS_CQ_WITH_SGID: 'CQ entries with source GID',
+            dve.EFADV_DEVICE_ATTR_CAPS_RDMA_WRITE: 'RDMA Write',
     }
     return bitmask_to_str(flags, l)
 
@@ -193,3 +199,106 @@ cdef class SRDQPEx(QPEx):
                     'RTR': 0,
                     'RTS': e.IBV_QP_SQ_PSN}
         return srd_mask [dst] | e.IBV_QP_STATE
+
+
+cdef class EfaDVCQInitAttr(PyverbsObject):
+    """
+    Represents efadv_cq_init_attr struct.
+    """
+    def __init__(self, wc_flags=0):
+        super().__init__()
+        self.cq_init_attr.wc_flags = wc_flags
+
+    @property
+    def comp_mask(self):
+        return self.cq_init_attr.comp_mask
+
+    @property
+    def wc_flags(self):
+        return self.cq_init_attr.wc_flags
+
+    @wc_flags.setter
+    def wc_flags(self, val):
+        self.cq_init_attr.wc_flags = val
+
+
+cdef class EfaCQ(CQEX):
+    """
+    Initializes an Efa CQ according to the user-provided data.
+    :param ctx: Context object
+    :param attr_ex: CQInitAttrEx object
+    :param efa_init_attr: EfaDVCQInitAttr object
+    :return: An initialized EfaCQ
+    """
+    def __init__(self, Context ctx not None, CqInitAttrEx attr_ex not None, EfaDVCQInitAttr efa_init_attr):
+        if efa_init_attr is None:
+            efa_init_attr = EfaDVCQInitAttr()
+        self.cq = dv.efadv_create_cq(ctx.context, &attr_ex.attr, &efa_init_attr.cq_init_attr, sizeof(efa_init_attr.cq_init_attr))
+        if self.cq == NULL:
+            raise PyverbsRDMAErrno('Failed to create EFA CQ')
+        self.ibv_cq = v.ibv_cq_ex_to_cq(self.cq)
+        self.dv_cq = dv.efadv_cq_from_ibv_cq_ex(self.cq)
+        self.context = ctx
+        ctx.add_ref(self)
+        super().__init__(ctx, attr_ex)
+
+    def read_sgid(self):
+        """
+        Read SGID from last work completion, if AH is unknown.
+        """
+        sgid = GID()
+        err = dv.efadv_wc_read_sgid(self.dv_cq, &sgid.gid)
+        if err:
+            return None
+        return sgid
+
+
+cdef class EfaDVMRAttr(PyverbsObject):
+    """
+    Represents efadv_mr_attr struct, which exposes efa-specific MR attributes,
+    reported by efadv_query_mr.
+    """
+    @property
+    def comp_mask(self):
+        return self.mr_attr.comp_mask
+
+    @property
+    def ic_id_validity(self):
+        return self.mr_attr.ic_id_validity
+
+    @property
+    def recv_ic_id(self):
+        return self.mr_attr.recv_ic_id
+
+    @property
+    def rdma_read_ic_id(self):
+        return self.mr_attr.rdma_read_ic_id
+
+    @property
+    def rdma_recv_ic_id(self):
+        return self.mr_attr.rdma_recv_ic_id
+
+    def __str__(self):
+        print_format = '{:28}: {:<20}\n'
+        return print_format.format('comp_mask', self.mr_attr.comp_mask) + \
+            print_format.format('Interconnect id validity', self.mr_attr.ic_id_validity) + \
+            print_format.format('Receive interconnect id', self.mr_attr.recv_ic_id) + \
+            print_format.format('RDMA read interconnect id', self.mr_attr.rdma_read_ic_id) + \
+            print_format.format('RDMA receive interconnect id', self.mr_attr.rdma_recv_ic_id)
+
+
+cdef class EfaMR(MR):
+    """
+    Represents an MR with EFA specific properties
+    """
+    def query(self):
+        """
+        Queries the MR for device-specific attributes.
+        :return: An EfaDVMRAttr containing the attributes.
+        """
+        mr_attr = EfaDVMRAttr()
+        rc = dv.efadv_query_mr(self.mr, &mr_attr.mr_attr, sizeof(mr_attr.mr_attr))
+        if rc:
+            raise PyverbsRDMAError(f'Failed to query EFA MR', rc)
+
+        return mr_attr

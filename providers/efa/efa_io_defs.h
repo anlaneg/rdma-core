@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause */
 /*
- * Copyright 2018-2020 Amazon.com, Inc. or its affiliates. All rights reserved.
+ * Copyright 2018-2023 Amazon.com, Inc. or its affiliates. All rights reserved.
  */
 
 #ifndef _EFA_IO_H_
@@ -23,6 +23,8 @@ enum efa_io_send_op_type {
 	EFA_IO_SEND                                 = 0,
 	/* RDMA read */
 	EFA_IO_RDMA_READ                            = 1,
+	/* RDMA write */
+	EFA_IO_RDMA_WRITE                           = 2,
 };
 
 enum efa_io_comp_status {
@@ -52,6 +54,8 @@ enum efa_io_comp_status {
 	EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_LENGTH  = 11,
 	/* Unexpected status returned by responder */
 	EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_STATUS  = 12,
+	/* Unresponsive remote - detected locally */
+	EFA_IO_COMP_STATUS_LOCAL_ERROR_UNRESP_REMOTE = 13,
 };
 
 struct efa_io_tx_meta_desc {
@@ -60,8 +64,7 @@ struct efa_io_tx_meta_desc {
 
 	/*
 	 * control flags
-	 * 3:0 : op_type - operation type: send/rdma/fast mem
-	 *    ops/etc
+	 * 3:0 : op_type - enum efa_io_send_op_type
 	 * 4 : has_imm - immediate_data field carries valid
 	 *    data.
 	 * 5 : inline_msg - inline mode - inline message data
@@ -217,29 +220,31 @@ struct efa_io_cdesc_common {
 	 * 2:1 : q_type - enum efa_io_queue_type: send/recv
 	 * 3 : has_imm - indicates that immediate data is
 	 *    present - for RX completions only
-	 * 4 : wide_completion - indicates that wide
-	 *    completion format is used
-	 * 7:5 : reserved29
+	 * 6:4 : op_type - enum efa_io_send_op_type
+	 * 7 : reserved31 - MBZ
 	 */
 	uint8_t flags;
 
 	/* local QP number */
 	uint16_t qp_num;
-
-	/* Transferred length */
-	uint16_t length;
 };
 
 /* Tx completion descriptor */
 struct efa_io_tx_cdesc {
 	/* Common completion info */
 	struct efa_io_cdesc_common common;
+
+	/* MBZ */
+	uint16_t reserved16;
 };
 
 /* Rx Completion Descriptor */
 struct efa_io_rx_cdesc {
 	/* Common completion info */
 	struct efa_io_cdesc_common common;
+
+	/* Transferred length bits[15:0] */
+	uint16_t length;
 
 	/* Remote Address Handle FW index, 0xFFFF indicates invalid ah */
 	uint16_t ah;
@@ -250,34 +255,26 @@ struct efa_io_rx_cdesc {
 	uint32_t imm;
 };
 
+/* Rx Completion Descriptor RDMA write info */
+struct efa_io_rx_cdesc_rdma_write {
+	/* Transferred length bits[31:16] */
+	uint16_t length_hi;
+};
+
 /* Extended Rx Completion Descriptor */
-struct efa_io_rx_cdesc_wide {
+struct efa_io_rx_cdesc_ex {
 	/* Base RX completion info */
-	struct efa_io_rx_cdesc rx_cdesc_base;
+	struct efa_io_rx_cdesc base;
 
-	/*
-	 * Word 0 of remote (source) address, needed only for in-band
-	 * ad-hoc AH support
-	 */
-	uint32_t src_addr_0;
+	union {
+		struct efa_io_rx_cdesc_rdma_write rdma_write;
 
-	/*
-	 * Word 1 of remote (source) address, needed only for in-band
-	 * ad-hoc AH support
-	 */
-	uint32_t src_addr_1;
-
-	/*
-	 * Word 2 of remote (source) address, needed only for in-band
-	 * ad-hoc AH support
-	 */
-	uint32_t src_addr_2;
-
-	/*
-	 * Word 3 of remote (source) address, needed only for in-band
-	 * ad-hoc AH support
-	 */
-	uint32_t src_addr_3;
+		/*
+		 * Valid only in case of unknown AH (0xFFFF) and CQ
+		 * set_src_addr is enabled.
+		 */
+		uint8_t src_addr[16];
+	} u;
 };
 
 /* tx_meta_desc */
@@ -303,6 +300,6 @@ struct efa_io_rx_cdesc_wide {
 #define EFA_IO_CDESC_COMMON_PHASE_MASK                      BIT(0)
 #define EFA_IO_CDESC_COMMON_Q_TYPE_MASK                     GENMASK(2, 1)
 #define EFA_IO_CDESC_COMMON_HAS_IMM_MASK                    BIT(3)
-#define EFA_IO_CDESC_COMMON_WIDE_COMPLETION_MASK            BIT(4)
+#define EFA_IO_CDESC_COMMON_OP_TYPE_MASK                    GENMASK(6, 4)
 
 #endif /* _EFA_IO_H_ */

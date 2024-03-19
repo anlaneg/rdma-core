@@ -1,5 +1,5 @@
 Name: rdma-core
-Version: 39.0
+Version: 51.0
 Release: 1%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
@@ -9,7 +9,7 @@ Summary: RDMA core userspace libraries and daemons
 #  providers/hfi1verbs Uses the 3 Clause BSD license
 License: GPLv2 or BSD
 Url: https://github.com/linux-rdma/rdma-core
-Source: rdma-core-%{version}.tgz
+Source: rdma-core-%{version}.tar.gz
 # Do not build static libs by default.
 %define with_static %{?_with_static: 1} %{?!_with_static: 0}
 
@@ -25,7 +25,9 @@ BuildRequires: pkgconfig(libnl-3.0)
 BuildRequires: pkgconfig(libnl-route-3.0)
 BuildRequires: /usr/bin/rst2man
 BuildRequires: valgrind-devel
+%if 0%{?fedora} < 37
 BuildRequires: systemd
+%endif
 BuildRequires: systemd-devel
 %if 0%{?fedora} >= 32 || 0%{?rhel} >= 8
 %define with_pyverbs %{?_with_pyverbs: 1} %{?!_with_pyverbs: %{?!_without_pyverbs: 1} %{?_without_pyverbs: 0}}
@@ -66,7 +68,7 @@ Conflicts: infiniband-diags <= 1.6.7
 # Ninja was introduced in FC23
 BuildRequires: ninja-build
 %define CMAKE_FLAGS -GNinja
-%if 0%{?fedora} >= 33
+%if 0%{?fedora} >= 33 || 0%{?rhel} >= 9
 %define make_jobs ninja-build -C %{_vpath_builddir} -v %{?_smp_mflags}
 %define cmake_install DESTDIR=%{buildroot} ninja-build -C %{_vpath_builddir} install
 %else
@@ -80,7 +82,7 @@ BuildRequires: make
 %define cmake_install DESTDIR=%{buildroot} make install
 %endif
 
-%if 0%{?fedora} >= 25 || 0%{?rhel} >= 8
+%if 0%{?fedora} >= 25 || 0%{?rhel} == 8
 # pandoc was introduced in FC25, Centos8
 BuildRequires: pandoc
 %endif
@@ -119,6 +121,10 @@ BuildRequires: pkgconfig(libnl-route-3.0)
 %description devel
 RDMA core development libraries and headers.
 
+%changelog
+* Tue May 9 2023 Leon Romanovsky <leonro@nvidia.com> - 44
+- Fix epoch warning
+
 %package -n infiniband-diags
 Summary: InfiniBand Diagnostic Tools
 Provides: perl(IBswcountlimits)
@@ -148,12 +154,18 @@ Provides: libcxgb4 = %{version}-%{release}
 Obsoletes: libcxgb4 < %{version}-%{release}
 Provides: libefa = %{version}-%{release}
 Obsoletes: libefa < %{version}-%{release}
+Provides: liberdma = %{version}-%{release}
+Obsoletes: liberdma < %{version}-%{release}
 Provides: libhfi1 = %{version}-%{release}
 Obsoletes: libhfi1 < %{version}-%{release}
+Provides: libhns = %{version}-%{release}
+Obsoletes: libhns < %{version}-%{release}
 Provides: libipathverbs = %{version}-%{release}
 Obsoletes: libipathverbs < %{version}-%{release}
 Provides: libirdma = %{version}-%{release}
 Obsoletes: libirdma < %{version}-%{release}
+Provides: libmana = %{version}-%{release}
+Obsoletes: libmana < %{version}-%{release}
 Provides: libmlx4 = %{version}-%{release}
 Obsoletes: libmlx4 < %{version}-%{release}
 Provides: libmlx5 = %{version}-%{release}
@@ -176,10 +188,12 @@ Device-specific plug-in ibverbs userspace drivers are included:
 
 - libcxgb4: Chelsio T4 iWARP HCA
 - libefa: Amazon Elastic Fabric Adapter
+- liberdma: Alibaba Elastic RDMA (iWarp) Adapter
 - libhfi1: Intel Omni-Path HFI
-- libhns: HiSilicon Hip06 SoC
+- libhns: HiSilicon Hip08+ SoC
 - libipathverbs: QLogic InfiniPath HCA
 - libirdma: Intel Ethernet Connection RDMA
+- libmana: Microsoft Azure Network Adapter
 - libmlx4: Mellanox ConnectX-3 InfiniBand HCA
 - libmlx5: Mellanox Connect-IB/X-4+ InfiniBand HCA
 - libmthca: Mellanox InfiniBand HCA
@@ -285,11 +299,11 @@ easy, object-oriented access to IB verbs.
          -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_INSTALL_BINDIR:PATH=%{_bindir} \
          -DCMAKE_INSTALL_SBINDIR:PATH=%{_sbindir} \
-         -DCMAKE_INSTALL_LIBDIR:PATH=%{_libdir} \
+         -DCMAKE_INSTALL_LIBDIR:PATH=%{_lib} \
          -DCMAKE_INSTALL_LIBEXECDIR:PATH=%{_libexecdir} \
          -DCMAKE_INSTALL_LOCALSTATEDIR:PATH=%{_localstatedir} \
          -DCMAKE_INSTALL_SHAREDSTATEDIR:PATH=%{_sharedstatedir} \
-         -DCMAKE_INSTALL_INCLUDEDIR:PATH=%{_includedir} \
+         -DCMAKE_INSTALL_INCLUDEDIR:PATH=include \
          -DCMAKE_INSTALL_INFODIR:PATH=%{_infodir} \
          -DCMAKE_INSTALL_MANDIR:PATH=%{_mandir} \
          -DCMAKE_INSTALL_SYSCONFDIR:PATH=%{_sysconfdir} \
@@ -323,7 +337,6 @@ mkdir -p %{buildroot}/%{_sysconfdir}/rdma
 # Red Hat specific glue
 %global dracutlibdir %{_prefix}/lib/dracut
 %global sysmodprobedir %{_prefix}/lib/modprobe.d
-mkdir -p %{buildroot}%{_sysconfdir}/udev/rules.d
 mkdir -p %{buildroot}%{_libexecdir}
 mkdir -p %{buildroot}%{_udevrulesdir}
 mkdir -p %{buildroot}%{dracutlibdir}/modules.d/05rdma
@@ -387,6 +400,7 @@ fi
 %files
 %dir %{_sysconfdir}/rdma
 %dir %{_docdir}/%{name}
+%doc %{_docdir}/%{name}/70-persistent-ipoib.rules
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/rxe.md
 %doc %{_docdir}/%{name}/udev.md
@@ -397,7 +411,6 @@ fi
 %config(noreplace) %{_sysconfdir}/rdma/modules/opa.conf
 %config(noreplace) %{_sysconfdir}/rdma/modules/rdma.conf
 %config(noreplace) %{_sysconfdir}/rdma/modules/roce.conf
-%config(noreplace) %{_sysconfdir}/udev/rules.d/*
 %dir %{_sysconfdir}/modprobe.d
 %config(noreplace) %{_sysconfdir}/modprobe.d/mlx4.conf
 %config(noreplace) %{_sysconfdir}/modprobe.d/truescale.conf
@@ -437,14 +450,18 @@ fi
 %{_libdir}/lib*.so
 %{_libdir}/pkgconfig/*.pc
 %{_mandir}/man3/efadv*
+%{_mandir}/man3/hnsdv*
 %{_mandir}/man3/ibv_*
 %{_mandir}/man3/rdma*
 %{_mandir}/man3/umad*
 %{_mandir}/man3/*_to_ibv_rate.*
 %{_mandir}/man7/rdma_cm.*
+%{_mandir}/man3/manadv*
 %{_mandir}/man3/mlx5dv*
 %{_mandir}/man3/mlx4dv*
 %{_mandir}/man7/efadv*
+%{_mandir}/man7/hnsdv*
+%{_mandir}/man7/manadv*
 %{_mandir}/man7/mlx5dv*
 %{_mandir}/man7/mlx4dv*
 %{_mandir}/man3/ibnd_*
@@ -562,8 +579,10 @@ fi
 %dir %{_sysconfdir}/libibverbs.d
 %dir %{_libdir}/libibverbs
 %{_libdir}/libefa.so.*
+%{_libdir}/libhns.so.*
 %{_libdir}/libibverbs*.so.*
 %{_libdir}/libibverbs/*.so
+%{_libdir}/libmana.so.*
 %{_libdir}/libmlx5.so.*
 %{_libdir}/libmlx4.so.*
 %config(noreplace) %{_sysconfdir}/libibverbs.d/*.driver

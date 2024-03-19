@@ -273,39 +273,48 @@ err:
 static void mlx5_insert_dyn_uuars(struct mlx5_context *ctx,
 				 struct mlx5_bf *bf_uar)
 {
+	int num_db_bf_per_uar = MLX5_NUM_NON_FP_BFREGS_PER_UAR;
+	int db_bf_reg_size = ctx->bf_reg_size;
 	int index_in_uar, index_uar_in_page;
-	int num_bfregs_per_page;
+	int num_db_bf_per_page;
 	struct list_head *head;
 	struct mlx5_bf *bf = bf_uar;
 	int j;
 
-	num_bfregs_per_page = ctx->num_uars_per_page * MLX5_NUM_NON_FP_BFREGS_PER_UAR;
+	if (bf_uar->nc_mode) {
+		/* DBs are not limited to the odd/even BF's usage */
+		num_db_bf_per_uar *= 2;
+		db_bf_reg_size = MLX5_DB_BLUEFLAME_BUFFER_SIZE;
+	}
+
+	num_db_bf_per_page = ctx->num_uars_per_page * num_db_bf_per_uar;
 	if (bf_uar->qp_dedicated)
 		head = &ctx->dyn_uar_qp_dedicated_list;
 	else if (bf_uar->qp_shared)
 		head = &ctx->dyn_uar_qp_shared_list;
+	else if (bf_uar->nc_mode)
+		head = &ctx->dyn_uar_db_list;
 	else
 		head = &ctx->dyn_uar_bf_list;
 
-	for (j = 0; j < num_bfregs_per_page; j++) {
+	for (j = 0; j < num_db_bf_per_page; j++) {
 		if (j != 0) {
 			bf = calloc(1, sizeof(*bf));
 			if (!bf)
 				return;
 		}
 
-		index_uar_in_page = (j % num_bfregs_per_page) /
-				    MLX5_NUM_NON_FP_BFREGS_PER_UAR;
-		index_in_uar = j % MLX5_NUM_NON_FP_BFREGS_PER_UAR;
+		index_uar_in_page = j / num_db_bf_per_uar;
+		index_in_uar = j % num_db_bf_per_uar;
 		bf->reg = bf_uar->uar + (index_uar_in_page * MLX5_ADAPTER_PAGE_SIZE) +
-					 MLX5_BF_OFFSET + (index_in_uar * ctx->bf_reg_size);
+					 MLX5_BF_OFFSET + (index_in_uar * db_bf_reg_size);
 		bf->buf_size = bf_uar->nc_mode ? 0 : ctx->bf_reg_size / 2;
 		/* set to non zero is BF entry, will be detected as part of post_send */
 		bf->uuarn = bf_uar->nc_mode ? 0 : 1;
 		list_node_init(&bf->uar_entry);
 		list_add_tail(head, &bf->uar_entry);
 		if (!bf_uar->dyn_alloc_uar)
-			bf->bfreg_dyn_index = (ctx->curr_legacy_dyn_sys_uar_page - 1) * num_bfregs_per_page + j;
+			bf->bfreg_dyn_index = (ctx->curr_legacy_dyn_sys_uar_page - 1) * num_db_bf_per_page + j;
 		bf->dyn_alloc_uar = bf_uar->dyn_alloc_uar;
 		bf->need_lock = bf_uar->qp_shared && !mlx5_single_threaded;
 		mlx5_spinlock_init(&bf->lock, bf->need_lock);
@@ -409,7 +418,8 @@ static struct mlx5_bf *mlx5_attach_dedicated_uar(struct ibv_context *context,
 	struct list_head *head;
 
 	pthread_mutex_lock(&ctx->dyn_bfregs_mutex);
-	head = &ctx->dyn_uar_bf_list;
+	head = (flags == MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC) ?
+		&ctx->dyn_uar_db_list : &ctx->dyn_uar_bf_list;
 	bf = list_pop(head, struct mlx5_bf, uar_entry);
 	if (!bf) {
 		bf = mlx5_alloc_dyn_uar(context, flags);
@@ -427,10 +437,11 @@ end:
 static void mlx5_detach_dedicated_uar(struct ibv_context *context, struct mlx5_bf *bf)
 {
 	struct mlx5_context *ctx = to_mctx(context);
+	struct list_head *head;
 
 	pthread_mutex_lock(&ctx->dyn_bfregs_mutex);
-	list_add_tail(&ctx->dyn_uar_bf_list,
-		      &bf->uar_entry);
+	head = bf->nc_mode ? &ctx->dyn_uar_db_list : &ctx->dyn_uar_bf_list;
+	list_add_tail(head, &bf->uar_entry);
 	pthread_mutex_unlock(&ctx->dyn_bfregs_mutex);
 	return;
 }
@@ -497,6 +508,7 @@ void mlx5_set_singleton_nc_uar(struct ibv_context *context)
 	devx_uar->dv_devx_uar.page_id = ctx->nc_uar->page_id;
 	devx_uar->dv_devx_uar.mmap_off = ctx->nc_uar->uar_mmap_offset;
 	devx_uar->dv_devx_uar.comp_mask = 0;
+	ctx->nc_uar->singleton = true;
 	devx_uar->context = context;
 }
 
@@ -1404,6 +1416,7 @@ err_db:
 err_free:
 	free(srq->wrid);
 	mlx5_free_actual_buf(ctx, &srq->buf);
+	free(srq->free_wqe_bitmap);
 
 err:
 	free(srq);
@@ -1455,6 +1468,7 @@ int mlx5_destroy_srq(struct ibv_srq *srq)
 	free(msrq->tm_list);
 	free(msrq->wrid);
 	free(msrq->op);
+	free(msrq->free_wqe_bitmap);
 	free(msrq);
 
 	return 0;
@@ -1485,7 +1499,8 @@ static int _sq_overhead(struct mlx5_qp *qp,
 
 	if (ops & (IBV_QP_EX_WITH_BIND_MW | IBV_QP_EX_WITH_LOCAL_INV) ||
 	    (mlx5_ops & (MLX5DV_QP_EX_WITH_MR_INTERLEAVED |
-			 MLX5DV_QP_EX_WITH_MR_LIST)))
+			 MLX5DV_QP_EX_WITH_MR_LIST |
+			 MLX5DV_QP_EX_WITH_MKEY_CONFIGURE)))
 		mw_size = sizeof(struct mlx5_wqe_ctrl_seg) +
 			  sizeof(struct mlx5_wqe_umr_ctrl_seg) +
 			  sizeof(struct mlx5_wqe_mkey_context_seg) +
@@ -1893,7 +1908,7 @@ static int mlx5_alloc_qp_buf(struct ibv_context *context,
 	}
 
 	/* compatibility support */
-	qp_huge_key  = qptype2key(qp->ibv_qp->qp_type);
+	qp_huge_key = qptype2key(attr->qp_type);
 	if (mlx5_use_huge(qp_huge_key))
 		default_alloc_type = MLX5_ALLOC_TYPE_HUGE;
 
@@ -2245,6 +2260,27 @@ static int qp_init_wr_memcpy(struct mlx5_qp *mqp,
 		mqp->need_mmo_enable = 1;
 
 	return reg_opaque_mr(attr->pd);
+}
+
+static void set_qp_operational_state(struct mlx5_qp *qp,
+				     enum ibv_qp_state state)
+{
+	switch (state) {
+	case IBV_QPS_RESET:
+		mlx5_qp_fill_wr_complete_error(qp);
+		qp->rq.qp_state_max_gs = -1;
+		qp->sq.qp_state_max_gs = -1;
+		break;
+	case IBV_QPS_INIT:
+		qp->rq.qp_state_max_gs = qp->rq.max_gs;
+		break;
+	case IBV_QPS_RTS:
+		qp->sq.qp_state_max_gs = qp->sq.max_gs;
+		mlx5_qp_fill_wr_complete_real(qp);
+		break;
+	default:
+		break;
+	}
 }
 
 static struct ibv_qp *create_qp(struct ibv_context *context,
@@ -2628,6 +2664,8 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 	if (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS)
 		qp->verbs_qp.comp_mask |= VERBS_QP_EX;
 
+	set_qp_operational_state(qp, IBV_QPS_RESET);
+
 	return ibqp;
 
 err_destroy:
@@ -2803,11 +2841,12 @@ int mlx5_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 	struct mlx5_qp *mqp = to_mqp(qp);
 	int ret;
 
-	if (flags || !mctx->qp_data_in_order_cap)
+	if (!mctx->qp_data_in_order_cap)
 		return 0;
 
 	if (mqp->dc_type == MLX5DV_DCTYPE_DCT)
-		return query_dct_in_order(qp);
+		return query_dct_in_order(qp) ?
+		       IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG : 0;
 
 	if (qp->state != IBV_QPS_RTS)
 		return 0;
@@ -2819,7 +2858,8 @@ int mlx5_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 	if (ret)
 		return 0;
 
-	return DEVX_GET(query_qp_out, out_qp, qpc.data_in_order);
+	return DEVX_GET(query_qp_out, out_qp, qpc.data_in_order) ?
+	       IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG : 0;
 }
 
 int mlx5_query_qp(struct ibv_qp *ibqp, struct ibv_qp_attr *attr,
@@ -2912,6 +2952,7 @@ static int qp_enable_mmo(struct ibv_qp *qp)
 	uint32_t in[DEVX_ST_SZ_DW(init2init_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(init2init_qp_out)] = {};
 	void *qpce = DEVX_ADDR_OF(init2init_qp_in, in, qpc_data_ext);
+	int ret;
 
 	DEVX_SET(init2init_qp_in, in, opcode, MLX5_CMD_OP_INIT2INIT_QP);
 	DEVX_SET(init2init_qp_in, in, qpc_ext, 1);
@@ -2921,7 +2962,8 @@ static int qp_enable_mmo(struct ibv_qp *qp)
 
 	DEVX_SET(qpc_ext, qpce, mmo, 1);
 
-	return mlx5dv_devx_qp_modify(qp, in, sizeof(in), out, sizeof(out));
+	ret = mlx5dv_devx_qp_modify(qp, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
@@ -3034,6 +3076,9 @@ int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (!ret && (attr_mask & IBV_QP_STATE) &&
 	    (attr->qp_state == IBV_QPS_INIT) && mqp->need_mmo_enable)
 		ret = qp_enable_mmo(qp);
+
+	if (!ret && (attr_mask & IBV_QP_STATE))
+		set_qp_operational_state(mqp, attr->qp_state);
 
 	return ret;
 }
@@ -3269,7 +3314,7 @@ static int _mlx5dv_map_ah_to_qp(struct ibv_ah *ah, uint32_t qp_num)
 		mah->ah_qp_mapping = mlx5dv_devx_obj_create(
 			ah->context, in, sizeof(in), out, sizeof(out));
 		if (!mah->ah_qp_mapping)
-			ret = errno;
+			ret = mlx5_get_cmd_status_err(errno, out);
 	}
 	pthread_mutex_unlock(&mah->mutex);
 
@@ -3664,6 +3709,7 @@ err_free_db:
 err_free:
 	free(msrq->wrid);
 	mlx5_free_actual_buf(ctx, &msrq->buf);
+	free(msrq->free_wqe_bitmap);
 
 err:
 	free(msrq);
@@ -3694,6 +3740,13 @@ static void get_pci_atomic_caps(struct ibv_context *context,
 		attr->pci_atomic_caps.compare_swap =
 			DEVX_GET(query_hca_cap_out, out,
 			capability.atomic_caps.compare_swap_pci_atomic);
+
+		if (attr->orig_attr.atomic_cap == IBV_ATOMIC_HCA &&
+		    (attr->pci_atomic_caps.fetch_add  &
+		     IBV_PCI_ATOMIC_OPERATION_8_BYTE_SIZE_SUP) &&
+		    (attr->pci_atomic_caps.compare_swap &
+		     IBV_PCI_ATOMIC_OPERATION_8_BYTE_SIZE_SUP))
+			attr->orig_attr.atomic_cap = IBV_ATOMIC_GLOB;
 	}
 }
 
@@ -3800,14 +3853,29 @@ static void get_hca_general_caps(struct mlx5_context *mctx)
 		DEVX_GET64(query_hca_cap_out, out,
 			   capability.cmd_hca_cap.general_obj_types);
 
+	mctx->max_dc_rd_atom =
+		1 << DEVX_GET(query_hca_cap_out, out,
+				capability.cmd_hca_cap.log_max_ra_req_dc);
+
+	mctx->max_dc_init_rd_atom =
+		1 << DEVX_GET(query_hca_cap_out, out,
+				capability.cmd_hca_cap.log_max_ra_res_dc);
+
 	get_hca_sig_caps(out, mctx);
 
 	if (DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.crypto))
 		mctx->crypto_caps.flags |= MLX5DV_CRYPTO_CAPS_CRYPTO;
 
-	if (DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.aes_xts))
+	if (DEVX_GET(query_hca_cap_out, out,
+		     capability.cmd_hca_cap.aes_xts_single_block_le_tweak))
 		mctx->crypto_caps.crypto_engines |=
-			MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS;
+			MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK;
+
+	if (DEVX_GET(query_hca_cap_out, out,
+		     capability.cmd_hca_cap.aes_xts_multi_block_be_tweak))
+		mctx->crypto_caps.crypto_engines |=
+			(MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK |
+			 MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK);
 
 	if (DEVX_GET(query_hca_cap_out, out,
 		     capability.cmd_hca_cap.hca_cap_2))
@@ -4023,6 +4091,7 @@ void mlx5_query_device_ctx(struct mlx5_context *mctx)
 		resp.dci_streams_caps.max_log_num_concurent;
 	mctx->dci_streams_caps.max_log_num_errored =
 		resp.dci_streams_caps.max_log_num_errored;
+	mctx->reg_c0 = resp.reg_c0;
 
 	if (resp.flags & MLX5_IB_QUERY_DEV_RESP_FLAGS_CQE_128B_COMP)
 		mctx->vendor_cap_flags |= MLX5_VENDOR_CAP_FLAGS_CQE_128B_COMP;
@@ -4941,8 +5010,10 @@ _mlx5dv_alloc_dm(struct ibv_context *context,
 	int err;
 
 	if ((mlx5_dm_attr->type != MLX5DV_DM_TYPE_MEMIC) &&
+	    (mlx5_dm_attr->type != MLX5DV_DM_TYPE_ENCAP_SW_ICM) &&
 	    (mlx5_dm_attr->type != MLX5DV_DM_TYPE_STEERING_SW_ICM) &&
-	    (mlx5_dm_attr->type != MLX5DV_DM_TYPE_HEADER_MODIFY_SW_ICM)) {
+	    (mlx5_dm_attr->type != MLX5DV_DM_TYPE_HEADER_MODIFY_SW_ICM) &&
+	    (mlx5_dm_attr->type != MLX5DV_DM_TYPE_HEADER_MODIFY_PATTERN_SW_ICM)) {
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
@@ -5403,6 +5474,95 @@ mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 				  NULL);
 }
 
+static struct mlx5dv_steering_anchor *
+_mlx5dv_create_steering_anchor(struct ibv_context *context,
+			       struct mlx5dv_steering_anchor_attr *attr)
+{
+	DECLARE_COMMAND_BUFFER(cmd, MLX5_IB_OBJECT_STEERING_ANCHOR,
+			       MLX5_IB_METHOD_STEERING_ANCHOR_CREATE,
+			       4);
+	struct mlx5_steering_anchor *steering_anchor;
+	struct ib_uverbs_attr *handle;
+	int err;
+
+	if (!check_comp_mask(attr->comp_mask, 0)) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	steering_anchor = calloc(1, sizeof(*steering_anchor));
+	if (!steering_anchor) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	handle = fill_attr_out_obj(cmd,
+				   MLX5_IB_ATTR_STEERING_ANCHOR_CREATE_HANDLE);
+	fill_attr_const_in(cmd, MLX5_IB_ATTR_STEERING_ANCHOR_FT_TYPE,
+			   attr->ft_type);
+	fill_attr_in(cmd, MLX5_IB_ATTR_STEERING_ANCHOR_PRIORITY,
+		     &attr->priority, sizeof(attr->priority));
+	fill_attr_out(cmd, MLX5_IB_ATTR_STEERING_ANCHOR_FT_ID,
+		      &steering_anchor->sa.id, sizeof(steering_anchor->sa.id));
+
+	err = execute_ioctl(context, cmd);
+	if (err) {
+		free(steering_anchor);
+		return NULL;
+	}
+	steering_anchor->context = context;
+	steering_anchor->handle =
+		read_attr_obj(MLX5_IB_ATTR_STEERING_ANCHOR_CREATE_HANDLE,
+			      handle);
+
+	return &steering_anchor->sa;
+}
+
+static int _mlx5dv_destroy_steering_anchor(struct mlx5_steering_anchor *anchor)
+{
+	DECLARE_COMMAND_BUFFER(cmd, MLX5_IB_OBJECT_STEERING_ANCHOR,
+			       MLX5_IB_METHOD_STEERING_ANCHOR_DESTROY,
+			       1);
+	int ret;
+
+	fill_attr_in_obj(cmd, MLX5_IB_ATTR_STEERING_ANCHOR_DESTROY_HANDLE,
+			 anchor->handle);
+	ret = execute_ioctl(anchor->context, cmd);
+	if (ret)
+		return ret;
+
+	free(anchor);
+	return 0;
+}
+
+struct mlx5dv_steering_anchor *
+mlx5dv_create_steering_anchor(struct ibv_context *context,
+			      struct mlx5dv_steering_anchor_attr *attr)
+{
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(context);
+
+	if (!dvops || !dvops->create_steering_anchor) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	return dvops->create_steering_anchor(context, attr);
+}
+
+int mlx5dv_destroy_steering_anchor(struct mlx5dv_steering_anchor *sa)
+{
+	struct mlx5_steering_anchor *anchor;
+	struct mlx5_dv_context_ops *dvops;
+
+	anchor = container_of(sa, struct mlx5_steering_anchor, sa);
+	dvops = mlx5_get_dv_ops(anchor->context);
+
+	if (!dvops || !dvops->destroy_steering_anchor)
+		return EOPNOTSUPP;
+
+	return dvops->destroy_steering_anchor(anchor);
+}
+
 static struct mlx5dv_devx_umem *
 __mlx5dv_devx_umem_reg_ex(struct ibv_context *context,
 			 struct mlx5dv_devx_umem_in *in,
@@ -5411,13 +5571,13 @@ __mlx5dv_devx_umem_reg_ex(struct ibv_context *context,
 	DECLARE_COMMAND_BUFFER(cmd,
 			       MLX5_IB_OBJECT_DEVX_UMEM,
 			       MLX5_IB_METHOD_DEVX_UMEM_REG,
-			       6);
+			       7);
 	struct ib_uverbs_attr *pgsz_bitmap;
 	struct ib_uverbs_attr *handle;
 	struct mlx5_devx_umem *umem;
 	int ret;
 
-	if (!check_comp_mask(in->comp_mask, 0)) {
+	if (!check_comp_mask(in->comp_mask, MLX5DV_UMEM_MASK_DMABUF)) {
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
@@ -5435,6 +5595,14 @@ __mlx5dv_devx_umem_reg_ex(struct ibv_context *context,
 	fill_attr_in_uint64(cmd, MLX5_IB_ATTR_DEVX_UMEM_REG_ADDR, (intptr_t)in->addr);
 	fill_attr_in_uint64(cmd, MLX5_IB_ATTR_DEVX_UMEM_REG_LEN, in->size);
 	fill_attr_in_uint32(cmd, MLX5_IB_ATTR_DEVX_UMEM_REG_ACCESS, in->access);
+	if (in->comp_mask & MLX5DV_UMEM_MASK_DMABUF) {
+		if (in->dmabuf_fd == -1) {
+			errno = EBADF;
+			goto err_umem_reg_cmd;
+		}
+		fill_attr_in_fd(cmd, MLX5_IB_ATTR_DEVX_UMEM_REG_DMABUF_FD,
+				in->dmabuf_fd);
+	}
 	pgsz_bitmap = fill_attr_in_uint64(cmd, MLX5_IB_ATTR_DEVX_UMEM_REG_PGSZ_BITMAP,
 					 in->pgsz_bitmap);
 	if (legacy)
@@ -5798,6 +5966,11 @@ void clean_dyn_uars(struct ibv_context *context)
 		mlx5_free_uar(context, bf);
 	}
 
+	list_for_each_safe(&ctx->dyn_uar_db_list, bf, tmp_bf, uar_entry) {
+		list_del(&bf->uar_entry);
+		mlx5_free_uar(context, bf);
+	}
+
 	list_for_each_safe(&ctx->dyn_uar_qp_dedicated_list, bf, tmp_bf, uar_entry) {
 		list_del(&bf->uar_entry);
 		mlx5_free_uar(context, bf);
@@ -5823,13 +5996,18 @@ _mlx5dv_devx_alloc_uar(struct ibv_context *context, uint32_t flags)
 	int ret;
 	struct mlx5_bf *bf;
 
-	if (!check_comp_mask(flags, MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC)) {
+	if (!check_comp_mask(flags,
+			     MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC |
+			     MLX5DV_UAR_ALLOC_TYPE_NC_DEDICATED)) {
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
 
 	if (flags & MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC)
 		return mlx5_get_singleton_nc_uar(context);
+
+	if (flags & MLX5DV_UAR_ALLOC_TYPE_NC_DEDICATED)
+		flags = MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC;
 
 	bf = mlx5_attach_dedicated_uar(context, flags);
 	if (!bf)
@@ -5876,7 +6054,7 @@ static void _mlx5dv_devx_free_uar(struct mlx5dv_devx_uar *dv_devx_uar)
 	struct mlx5_bf *bf = container_of(dv_devx_uar, struct mlx5_bf,
 					  devx_uar.dv_devx_uar);
 
-	if (bf->nc_mode)
+	if (bf->singleton)
 		return;
 
 	mlx5_detach_dedicated_uar(bf->devx_uar.context, bf);
@@ -6012,15 +6190,46 @@ static int _mlx5dv_devx_qp_modify(struct ibv_qp *qp, const void *in,
 	return execute_ioctl(qp->context, cmd);
 }
 
+static enum ibv_qp_state modify_opcode_to_state(uint16_t opcode)
+{
+	switch (opcode) {
+	case MLX5_CMD_OP_INIT2INIT_QP:
+	case MLX5_CMD_OP_RST2INIT_QP:
+		return IBV_QPS_INIT;
+	case MLX5_CMD_OP_INIT2RTR_QP:
+		return IBV_QPS_RTR;
+	case MLX5_CMD_OP_RTR2RTS_QP:
+	case MLX5_CMD_OP_RTS2RTS_QP:
+	case MLX5_CMD_OP_SQERR2RTS_QP:
+	case MLX5_CMD_OP_SQD_RTS_QP:
+		return IBV_QPS_RTS;
+	case MLX5_CMD_OP_2ERR_QP:
+		return IBV_QPS_ERR;
+	case MLX5_CMD_OP_2RST_QP:
+		return IBV_QPS_RESET;
+	default:
+		return IBV_QPS_UNKNOWN;
+	}
+}
+
 int mlx5dv_devx_qp_modify(struct ibv_qp *qp, const void *in, size_t inlen,
 			  void *out, size_t outlen)
 {
+	int ret;
+	enum ibv_qp_state qp_state;
 	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(qp->context);
 
 	if (!dvops || !dvops->devx_qp_modify)
 		return EOPNOTSUPP;
 
-	return dvops->devx_qp_modify(qp, in, inlen, out, outlen);
+	ret = dvops->devx_qp_modify(qp, in, inlen, out, outlen);
+	if (ret)
+		return ret;
+
+	qp_state = modify_opcode_to_state(DEVX_GET(rtr2rts_qp_in, in, opcode));
+	set_qp_operational_state(to_mqp(qp), qp_state);
+
+	return 0;
 }
 
 static int _mlx5dv_devx_srq_query(struct ibv_srq *srq, const void *in,
@@ -6580,17 +6789,23 @@ _mlx5dv_create_mkey(struct mlx5dv_mkey_init_attr *mkey_init_attr)
 	uint32_t out[DEVX_ST_SZ_DW(create_mkey_out)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_mkey_in)] = {};
 	struct mlx5_mkey *mkey;
+	bool update_tag;
 	bool sig_mkey;
 	bool crypto_mkey;
 	struct ibv_pd *pd = mkey_init_attr->pd;
 	size_t bsf_size = 0;
 	void *mkc;
 
+	update_tag = to_mctx(pd->context)->flags &
+		     MLX5_CTX_FLAGS_MKEY_UPDATE_TAG_SUPPORTED;
 	if (!mkey_init_attr->create_flags ||
 	    !check_comp_mask(mkey_init_attr->create_flags,
 			     MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT |
 			     MLX5DV_MKEY_INIT_ATTR_FLAGS_BLOCK_SIGNATURE |
-			     MLX5DV_MKEY_INIT_ATTR_FLAGS_CRYPTO)) {
+			     MLX5DV_MKEY_INIT_ATTR_FLAGS_CRYPTO |
+			     (update_tag ?
+			     MLX5DV_MKEY_INIT_ATTR_FLAGS_UPDATE_TAG : 0) |
+			     MLX5DV_MKEY_INIT_ATTR_FLAGS_REMOTE_INVALIDATE)) {
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
@@ -6617,9 +6832,8 @@ _mlx5dv_create_mkey(struct mlx5dv_mkey_init_attr *mkey_init_attr)
 
 	if (crypto_mkey) {
 		if (!(to_mctx(pd->context)->crypto_caps.crypto_engines &
-		      MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS) ||
-		    !(to_mctx(pd->context)->crypto_caps.flags &
-		      MLX5DV_CRYPTO_CAPS_WRAPPED_CRYPTO_OPERATIONAL)) {
+		      (MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK |
+		      MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK))) {
 			errno = EOPNOTSUPP;
 			goto err_destroy_sig_ctx;
 		}
@@ -6651,10 +6865,16 @@ _mlx5dv_create_mkey(struct mlx5dv_mkey_init_attr *mkey_init_attr)
 		DEVX_SET(mkc, mkc, bsf_octword_size, bsf_size / 16);
 	}
 
+	if (mkey_init_attr->create_flags &
+	    MLX5DV_MKEY_INIT_ATTR_FLAGS_REMOTE_INVALIDATE)
+		DEVX_SET(mkc, mkc, en_rinval, 1);
+
 	mkey->devx_obj = mlx5dv_devx_obj_create(pd->context, in, sizeof(in),
 						out, sizeof(out));
-	if (!mkey->devx_obj)
+	if (!mkey->devx_obj) {
+		errno = mlx5_get_cmd_status_err(errno, out);
 		goto err_free_crypto;
+	}
 
 	mkey_init_attr->max_entries = mkey->num_desc;
 	mkey->dv_mkey.lkey = (DEVX_GET(create_mkey_out, out, mkey_index) << 8) | 0;
@@ -6841,35 +7061,33 @@ int _mlx5dv_mkey_check(struct mlx5dv_mkey *dv_mkey,
 	return 0;
 }
 
-static int _mlx5dv_crypto_login(struct ibv_context *context,
-				struct mlx5dv_crypto_login_attr *login_attr)
+static struct mlx5dv_devx_obj *
+crypto_login_create(struct ibv_context *context,
+		    struct mlx5dv_crypto_login_attr_ex *login_attr)
 {
 	uint32_t in[DEVX_ST_SZ_DW(create_crypto_login_obj_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
 	struct mlx5_context *mctx = to_mctx(context);
-	int ret = 0;
+	struct mlx5dv_devx_obj *obj;
 	void *attr;
 
 	if (!(mctx->crypto_caps.flags & MLX5DV_CRYPTO_CAPS_CRYPTO) ||
 	    !(mctx->crypto_caps.flags &
-	      MLX5DV_CRYPTO_CAPS_WRAPPED_CRYPTO_OPERATIONAL))
-		return EOPNOTSUPP;
+	      MLX5DV_CRYPTO_CAPS_WRAPPED_CRYPTO_OPERATIONAL)) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
 
 	if (!(mctx->general_obj_types_caps &
-	      (1ULL << MLX5_OBJ_TYPE_CRYPTO_LOGIN)))
-		return EOPNOTSUPP;
-
-	if (login_attr->comp_mask)
-		return EINVAL;
+	      (1ULL << MLX5_OBJ_TYPE_CRYPTO_LOGIN))) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
 
 	if (login_attr->credential_id & 0xff000000 ||
-	    login_attr->import_kek_id & 0xff000000)
-		return EINVAL;
-
-	pthread_mutex_lock(&mctx->crypto_login_mutex);
-	if (mctx->crypto_login) {
-		ret = EEXIST;
-		goto out;
+	    login_attr->import_kek_id & 0xff000000) {
+		errno = EINVAL;
+		return NULL;
 	}
 
 	attr = DEVX_ADDR_OF(create_crypto_login_obj_in, in, hdr);
@@ -6884,13 +7102,84 @@ static int _mlx5dv_crypto_login(struct ibv_context *context,
 	DEVX_SET(crypto_login_obj, attr, session_import_kek_ptr,
 		 login_attr->import_kek_id);
 	memcpy(DEVX_ADDR_OF(crypto_login_obj, attr, credential),
-	       login_attr->credential, sizeof(login_attr->credential));
+	       login_attr->credential, login_attr->credential_len);
 
-	mctx->crypto_login = mlx5dv_devx_obj_create(context, in, sizeof(in),
-						    out, sizeof(out));
-	if (!mctx->crypto_login)
+	obj = mlx5dv_devx_obj_create(context, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+
+	return obj;
+}
+
+static int
+crypto_login_query(struct mlx5dv_devx_obj *obj,
+		   struct mlx5dv_crypto_login_query_attr *query_attr)
+{
+	uint32_t out[DEVX_ST_SZ_DW(query_crypto_login_obj_out)] = {};
+	uint32_t in[DEVX_ST_SZ_DW(general_obj_in_cmd_hdr)] = {};
+	uint8_t crypto_login_state;
+	void *attr;
+	int ret;
+
+	DEVX_SET(general_obj_in_cmd_hdr, in, opcode,
+		 MLX5_CMD_OP_QUERY_GENERAL_OBJECT);
+	DEVX_SET(general_obj_in_cmd_hdr, in, obj_type,
+		 MLX5_OBJ_TYPE_CRYPTO_LOGIN);
+	DEVX_SET(general_obj_in_cmd_hdr, in, obj_id, obj->object_id);
+
+	ret = mlx5dv_devx_obj_query(obj, in, sizeof(in), out, sizeof(out));
+	if (ret)
+		return mlx5_get_cmd_status_err(ret, out);
+
+	attr = DEVX_ADDR_OF(query_crypto_login_obj_out, out, obj);
+	crypto_login_state = DEVX_GET(crypto_login_obj, attr, state);
+
+	switch (crypto_login_state) {
+	case MLX5_CRYPTO_LOGIN_OBJ_STATE_VALID:
+		query_attr->state = MLX5DV_CRYPTO_LOGIN_STATE_VALID;
+		break;
+	case MLX5_CRYPTO_LOGIN_OBJ_STATE_INVALID:
+		query_attr->state = MLX5DV_CRYPTO_LOGIN_STATE_INVALID;
+		break;
+	default:
+		ret = EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
+static int _mlx5dv_crypto_login(struct ibv_context *context,
+				struct mlx5dv_crypto_login_attr *login_attr)
+{
+	struct mlx5dv_crypto_login_attr_ex login_attr_ex;
+	struct mlx5_context *mctx = to_mctx(context);
+	struct mlx5dv_devx_obj *obj;
+	int ret = 0;
+
+	if (login_attr->comp_mask)
+		return EINVAL;
+
+	pthread_mutex_lock(&mctx->crypto_login_mutex);
+
+	if (mctx->crypto_login) {
+		ret = EEXIST;
+		goto out;
+	}
+
+	login_attr_ex.credential_len = sizeof(login_attr->credential);
+	login_attr_ex.credential_id = login_attr->credential_id;
+	login_attr_ex.import_kek_id = login_attr->import_kek_id;
+	login_attr_ex.credential = login_attr->credential;
+	login_attr_ex.comp_mask = 0;
+
+	obj = crypto_login_create(context, &login_attr_ex);
+	if (!obj) {
 		ret = errno;
+		goto out;
+	}
 
+	mctx->crypto_login = obj;
 out:
 	pthread_mutex_unlock(&mctx->crypto_login_mutex);
 	return ret;
@@ -6911,11 +7200,8 @@ static int
 _mlx5dv_crypto_login_query_state(struct ibv_context *context,
 				 enum mlx5dv_crypto_login_state *state)
 {
-	uint32_t out[DEVX_ST_SZ_DW(query_crypto_login_obj_out)] = {};
-	uint32_t in[DEVX_ST_SZ_DW(general_obj_in_cmd_hdr)] = {};
 	struct mlx5_context *mctx = to_mctx(context);
-	uint8_t crypto_login_state;
-	void *attr;
+	struct mlx5dv_crypto_login_query_attr attr = {};
 	int ret;
 
 	pthread_mutex_lock(&mctx->crypto_login_mutex);
@@ -6925,32 +7211,11 @@ _mlx5dv_crypto_login_query_state(struct ibv_context *context,
 		goto out;
 	}
 
-	DEVX_SET(general_obj_in_cmd_hdr, in, opcode,
-		 MLX5_CMD_OP_QUERY_GENERAL_OBJECT);
-	DEVX_SET(general_obj_in_cmd_hdr, in, obj_type,
-		 MLX5_OBJ_TYPE_CRYPTO_LOGIN);
-	DEVX_SET(general_obj_in_cmd_hdr, in, obj_id,
-		 mctx->crypto_login->object_id);
-
-	ret = mlx5dv_devx_obj_query(mctx->crypto_login, in, sizeof(in), out,
-				    sizeof(out));
+	ret = crypto_login_query(mctx->crypto_login, &attr);
 	if (ret)
 		goto out;
 
-	attr = DEVX_ADDR_OF(query_crypto_login_obj_out, out, obj);
-	crypto_login_state = DEVX_GET(crypto_login_obj, attr, state);
-
-	switch (crypto_login_state) {
-	case MLX5_CRYPTO_LOGIN_OBJ_STATE_VALID:
-		*state = MLX5DV_CRYPTO_LOGIN_STATE_VALID;
-		break;
-	case MLX5_CRYPTO_LOGIN_OBJ_STATE_INVALID:
-		*state = MLX5DV_CRYPTO_LOGIN_STATE_INVALID;
-		break;
-	default:
-		ret = EINVAL;
-		break;
-	}
+	*state = attr.state;
 
 out:
 	pthread_mutex_unlock(&mctx->crypto_login_mutex);
@@ -7000,6 +7265,130 @@ int mlx5dv_crypto_logout(struct ibv_context *context)
 	return dvops->crypto_logout(context);
 }
 
+static struct mlx5dv_crypto_login_obj *
+_mlx5dv_crypto_login_create(struct ibv_context *context,
+			    struct mlx5dv_crypto_login_attr_ex *login_attr)
+{
+	struct mlx5dv_crypto_login_obj *crypto_login;
+	struct mlx5dv_devx_obj *obj;
+
+	if (login_attr->comp_mask) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	crypto_login = calloc(1, sizeof(*crypto_login));
+	if (!crypto_login) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	obj = crypto_login_create(context, login_attr);
+	if (!obj) {
+		free(crypto_login);
+		return NULL;
+	}
+
+	crypto_login->devx_obj = obj;
+
+	return crypto_login;
+}
+
+struct mlx5dv_crypto_login_obj *
+mlx5dv_crypto_login_create(struct ibv_context *context,
+			   struct mlx5dv_crypto_login_attr_ex *login_attr)
+{
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(context);
+
+	if (!dvops || !dvops->crypto_login_create) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	return dvops->crypto_login_create(context, login_attr);
+}
+
+static int
+_mlx5dv_crypto_login_query(struct mlx5dv_crypto_login_obj *crypto_login,
+			   struct mlx5dv_crypto_login_query_attr *query_attr)
+{
+	if (query_attr->comp_mask)
+		return EINVAL;
+
+	return crypto_login_query(crypto_login->devx_obj,
+				  query_attr);
+}
+
+int mlx5dv_crypto_login_query(struct mlx5dv_crypto_login_obj *crypto_login,
+			      struct mlx5dv_crypto_login_query_attr *query_attr)
+{
+	struct mlx5_dv_context_ops *dvops =
+		mlx5_get_dv_ops(crypto_login->devx_obj->context);
+
+	if (!dvops || !dvops->crypto_login_query)
+		return EOPNOTSUPP;
+
+	return dvops->crypto_login_query(crypto_login, query_attr);
+}
+
+static int
+_mlx5dv_crypto_login_destroy(struct mlx5dv_crypto_login_obj *crypto_login)
+{
+	int err;
+
+	err = mlx5dv_devx_obj_destroy(crypto_login->devx_obj);
+	if (err)
+		return err;
+
+	free(crypto_login);
+	return 0;
+}
+
+int mlx5dv_crypto_login_destroy(struct mlx5dv_crypto_login_obj *crypto_login)
+{
+	struct mlx5_dv_context_ops *dvops =
+		mlx5_get_dv_ops(crypto_login->devx_obj->context);
+
+	if (!dvops || !dvops->crypto_login_destroy)
+		return EOPNOTSUPP;
+
+	return dvops->crypto_login_destroy(crypto_login);
+}
+
+static int check_dek_import_method(struct ibv_context *context,
+				   struct mlx5dv_dek_init_attr *init_attr)
+{
+	struct mlx5_context *mctx = to_mctx(context);
+	int err = 0;
+
+	if (init_attr->comp_mask & MLX5DV_DEK_INIT_ATTR_CRYPTO_LOGIN) {
+		if (init_attr->crypto_login) {
+			/*
+			 * User wants to create a wrapped DEK using a crypto
+			 * login object created by mlx5dv_crypto_login_create().
+			 */
+			if (!(mctx->crypto_caps.wrapped_import_method &
+			      MLX5DV_CRYPTO_WRAPPED_IMPORT_METHOD_CAP_AES_XTS))
+				err = EINVAL;
+		} else {
+			/* User wants to create a plaintext DEK. */
+			if (mctx->crypto_caps.wrapped_import_method &
+			    MLX5DV_CRYPTO_WRAPPED_IMPORT_METHOD_CAP_AES_XTS)
+				err = EINVAL;
+		}
+	} else {
+		/*
+		 * User wants to create a wrapped DEK using the global crypto
+		 * login object created by mlx5dv_crypto_login().
+		 */
+		if (!mctx->crypto_login ||
+		    !(mctx->crypto_caps.wrapped_import_method &
+		      MLX5DV_CRYPTO_WRAPPED_IMPORT_METHOD_CAP_AES_XTS))
+			err = EINVAL;
+	}
+
+	return err;
+}
 static struct mlx5dv_dek *
 _mlx5dv_dek_create(struct ibv_context *context,
 		   struct mlx5dv_dek_init_attr *init_attr)
@@ -7011,6 +7400,13 @@ _mlx5dv_dek_create(struct ibv_context *context,
 	struct mlx5dv_dek *dek;
 	uint8_t key_size;
 	void *attr;
+
+	if (!(mctx->crypto_caps.crypto_engines &
+	      (MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK |
+	      MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK))) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
 
 	if (!(mctx->general_obj_types_caps & (1ULL << MLX5_OBJ_TYPE_DEK))) {
 		errno = EOPNOTSUPP;
@@ -7034,15 +7430,22 @@ _mlx5dv_dek_create(struct ibv_context *context,
 		return NULL;
 	}
 
-	if (init_attr->comp_mask) {
+	if (!check_comp_mask(init_attr->comp_mask,
+			     MLX5DV_DEK_INIT_ATTR_CRYPTO_LOGIN)) {
 		errno = EINVAL;
 		return NULL;
+	}
+
+	errno = check_dek_import_method(context, init_attr);
+	if (errno) {
+		dek = NULL;
+		goto out;
 	}
 
 	dek = calloc(1, sizeof(*dek));
 	if (!dek) {
 		errno = ENOMEM;
-		return NULL;
+		goto out;
 	}
 
 	attr = DEVX_ADDR_OF(create_encryption_key_obj_in, in, hdr);
@@ -7063,12 +7466,14 @@ _mlx5dv_dek_create(struct ibv_context *context,
 
 	obj = mlx5dv_devx_obj_create(context, in, sizeof(in), out, sizeof(out));
 	if (!obj) {
+		errno = mlx5_get_cmd_status_err(errno, out);
 		free(dek);
-		return NULL;
+		dek = NULL;
+		goto out;
 	}
 
 	dek->devx_obj = obj;
-
+out:
 	return dek;
 }
 
@@ -7105,7 +7510,7 @@ static int _mlx5dv_dek_query(struct mlx5dv_dek *dek,
 	ret = mlx5dv_devx_obj_query(dek->devx_obj, in, sizeof(in), out,
 				    sizeof(out));
 	if (ret)
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 
 	attr = DEVX_ADDR_OF(query_encryption_key_obj_out, out, obj);
 	dek_state = DEVX_GET(encryption_key_obj, attr, state);
@@ -7338,6 +7743,57 @@ void mlx5dv_pp_free(struct mlx5dv_pp *dv_pp)
 	dvops->pp_free(dv_pp);
 }
 
+struct mlx5dv_devx_msi_vector *
+mlx5dv_devx_alloc_msi_vector(struct ibv_context *ibctx)
+{
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(ibctx);
+
+	if (!dvops || !dvops->devx_alloc_msi_vector) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	return dvops->devx_alloc_msi_vector(ibctx);
+}
+
+int mlx5dv_devx_free_msi_vector(struct mlx5dv_devx_msi_vector *dvmsi)
+{
+	struct mlx5_devx_msi_vector *msi =
+		container_of(dvmsi, struct mlx5_devx_msi_vector, dv_msi);
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(msi->ibctx);
+
+	if (!dvops || !dvops->devx_free_msi_vector)
+		return EOPNOTSUPP;
+
+	return dvops->devx_free_msi_vector(dvmsi);
+}
+
+struct mlx5dv_devx_eq *
+mlx5dv_devx_create_eq(struct ibv_context *ibctx, const void *in, size_t inlen,
+		      void *out, size_t outlen)
+{
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(ibctx);
+
+	if (!dvops || !dvops->devx_create_eq) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	return dvops->devx_create_eq(ibctx, in, inlen, out, outlen);
+}
+
+int mlx5dv_devx_destroy_eq(struct mlx5dv_devx_eq *dveq)
+{
+	struct mlx5_devx_eq *eq =
+		container_of(dveq, struct mlx5_devx_eq, dv_eq);
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(eq->ibctx);
+
+	if (!dvops || !dvops->devx_destroy_eq)
+		return EOPNOTSUPP;
+
+	return dvops->devx_destroy_eq(dveq);
+}
+
 void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 {
 	ops->devx_general_cmd = _mlx5dv_devx_general_cmd;
@@ -7393,6 +7849,10 @@ void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 	ops->crypto_login_query_state = _mlx5dv_crypto_login_query_state;
 	ops->crypto_logout = _mlx5dv_crypto_logout;
 
+	ops->crypto_login_create = _mlx5dv_crypto_login_create;
+	ops->crypto_login_query = _mlx5dv_crypto_login_query;
+	ops->crypto_login_destroy = _mlx5dv_crypto_login_destroy;
+
 	ops->dek_create = _mlx5dv_dek_create;
 	ops->dek_query = _mlx5dv_dek_query;
 	ops->dek_destroy = _mlx5dv_dek_destroy;
@@ -7419,4 +7879,7 @@ void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 
 	ops->map_ah_to_qp = _mlx5dv_map_ah_to_qp;
 	ops->query_port = __mlx5dv_query_port;/*查询port信息*/
+
+	ops->create_steering_anchor = _mlx5dv_create_steering_anchor;
+	ops->destroy_steering_anchor = _mlx5dv_destroy_steering_anchor;
 }

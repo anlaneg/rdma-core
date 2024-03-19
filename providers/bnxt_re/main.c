@@ -84,6 +84,7 @@ static const struct verbs_match_ent cna_table[] = {
 	CNA(BROADCOM, 0x1804),	/* BCM57504 NPAR */
 	CNA(BROADCOM, 0x1805),	/* BCM57502 NPAR */
 	CNA(BROADCOM, 0x1807),	/* BCM5750x VF */
+	CNA(BROADCOM, 0x1809),  /* BCM5750x Gen P5 VF HV */
 	CNA(BROADCOM, 0xD800),  /* BCM880xx VF */
 	CNA(BROADCOM, 0xD802),  /* BCM58802 */
 	CNA(BROADCOM, 0xD804),  /* BCM8804 SR */
@@ -96,10 +97,12 @@ static const struct verbs_context_ops bnxt_re_cntx_ops = {
 	.alloc_pd      = bnxt_re_alloc_pd,
 	.dealloc_pd    = bnxt_re_free_pd,
 	.reg_mr        = bnxt_re_reg_mr,
+	.reg_dmabuf_mr = bnxt_re_reg_dmabuf_mr,
 	.dereg_mr      = bnxt_re_dereg_mr,
 	.create_cq     = bnxt_re_create_cq,
 	.poll_cq       = bnxt_re_poll_cq,
 	.req_notify_cq = bnxt_re_arm_cq,
+	.resize_cq     = bnxt_re_resize_cq,
 	.destroy_cq    = bnxt_re_destroy_cq,
 	.create_srq    = bnxt_re_create_srq,
 	.modify_srq    = bnxt_re_modify_srq,
@@ -112,16 +115,66 @@ static const struct verbs_context_ops bnxt_re_cntx_ops = {
 	.destroy_qp    = bnxt_re_destroy_qp,
 	.post_send     = bnxt_re_post_send,
 	.post_recv     = bnxt_re_post_recv,
+	.async_event   = bnxt_re_async_event,
 	.create_ah     = bnxt_re_create_ah,
 	.destroy_ah    = bnxt_re_destroy_ah,
 	.free_context  = bnxt_re_free_context,
 };
 
-bool bnxt_re_is_chip_gen_p5(struct bnxt_re_chip_ctx *cctx)
+static inline bool bnxt_re_is_chip_gen_p7(struct bnxt_re_chip_ctx *cctx)
+{
+	return (cctx->chip_num == CHIP_NUM_58818 ||
+		cctx->chip_num == CHIP_NUM_57608);
+}
+
+static bool bnxt_re_is_chip_gen_p5(struct bnxt_re_chip_ctx *cctx)
 {
 	return (cctx->chip_num == CHIP_NUM_57508 ||
 		cctx->chip_num == CHIP_NUM_57504 ||
 		cctx->chip_num == CHIP_NUM_57502);
+}
+
+static inline bool bnxt_re_is_chip_gen_p5_p7(struct bnxt_re_chip_ctx *cctx)
+{
+	return bnxt_re_is_chip_gen_p5(cctx) || bnxt_re_is_chip_gen_p7(cctx);
+}
+
+static int bnxt_re_alloc_map_dbr_page(struct ibv_context *ibvctx)
+{
+	struct bnxt_re_context *cntx = to_bnxt_re_context(ibvctx);
+	struct bnxt_re_mmap_info minfo = {};
+	int ret;
+
+	minfo.type = BNXT_RE_ALLOC_DBR_PAGE;
+	ret = bnxt_re_alloc_page(ibvctx, &minfo, NULL);
+	if (ret)
+		return ret;
+
+	cntx->dbr_page = mmap(NULL, minfo.alloc_size, PROT_READ,
+			      MAP_SHARED, ibvctx->cmd_fd, minfo.alloc_offset);
+	if (cntx->dbr_page == MAP_FAILED)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int bnxt_re_alloc_map_dbr_bar_page(struct ibv_context *ibvctx)
+{
+	struct bnxt_re_context *cntx = to_bnxt_re_context(ibvctx);
+	struct bnxt_re_mmap_info minfo = {};
+	int ret;
+
+	minfo.type = BNXT_RE_ALLOC_DBR_BAR_PAGE;
+	ret = bnxt_re_alloc_page(ibvctx, &minfo, NULL);
+	if (ret)
+		return ret;
+
+	cntx->bar_map = mmap(NULL, minfo.alloc_size, PROT_WRITE,
+			     MAP_SHARED, ibvctx->cmd_fd, minfo.alloc_offset);
+	if (cntx->bar_map == MAP_FAILED)
+		return -ENOMEM;
+
+	return 0;
 }
 
 /* Context Init functions */
@@ -130,9 +183,9 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 						   void *private_data)
 {
 	struct bnxt_re_dev *rdev = to_bnxt_re_dev(vdev);
-	struct ubnxt_re_cntx_resp resp;
+	struct ubnxt_re_cntx_resp resp = {};
+	struct ubnxt_re_cntx req = {};
 	struct bnxt_re_context *cntx;
-	struct ibv_get_context cmd;
 	int ret;
 
 	cntx = verbs_init_and_alloc_context(vdev, cmd_fd, cntx, ibvctx,
@@ -140,8 +193,8 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 	if (!cntx)
 		return NULL;
 
-	memset(&resp, 0, sizeof(resp));
-	if (ibv_cmd_get_context(&cntx->ibvctx, &cmd, sizeof(cmd),
+	req.comp_mask |= BNXT_RE_COMP_MASK_REQ_UCNTX_POW2_SUPPORT;
+	if (ibv_cmd_get_context(&cntx->ibvctx, &req.ibv_cmd, sizeof(req),
 				&resp.ibv_resp, sizeof(resp)))
 		goto failed;
 
@@ -157,12 +210,18 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 		cntx->cctx.chip_metal = (resp.chip_id0 >>
 					 BNXT_RE_CHIP_ID0_CHIP_MET_SFT) &
 					 0xFF;
+		cntx->cctx.gen_p5_p7 = bnxt_re_is_chip_gen_p5_p7(&cntx->cctx);
 	}
 
 	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_HAVE_MODE)
 		cntx->wqe_mode = resp.mode;
+	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_WC_DPI_ENABLED)
+		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_WC_DPI_ENABLED;
+	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_DBR_PACING_ENABLED)
+		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_DBR_PACING_ENABLED;
+	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_POW2_DISABLED)
+		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_POW2_DISABLED;
 
-	pthread_spin_init(&cntx->fqlock, PTHREAD_PROCESS_PRIVATE);
 	/* mmap shared page. */
 	cntx->shpg = mmap(NULL, rdev->pg_size, PROT_READ | PROT_WRITE,
 			  MAP_SHARED, cmd_fd, 0);
@@ -170,6 +229,23 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 		cntx->shpg = NULL;
 		goto failed;
 	}
+
+	if (cntx->comp_mask & BNXT_RE_COMP_MASK_UCNTX_DBR_PACING_ENABLED) {
+		if (bnxt_re_alloc_map_dbr_page(&cntx->ibvctx.context)) {
+			munmap(cntx->shpg, rdev->pg_size);
+			cntx->shpg = NULL;
+			goto failed;
+		}
+
+		if (bnxt_re_alloc_map_dbr_bar_page(&cntx->ibvctx.context)) {
+			munmap(cntx->shpg, rdev->pg_size);
+			cntx->shpg = NULL;
+			munmap(cntx->dbr_page, rdev->pg_size);
+			cntx->dbr_page = NULL;
+			goto failed;
+		}
+	}
+
 	pthread_mutex_init(&cntx->shlock, NULL);
 
 	verbs_set_ops(&cntx->ibvctx, &bnxt_re_cntx_ops);
@@ -195,14 +271,23 @@ static void bnxt_re_free_context(struct ibv_context *ibvctx)
 	pthread_mutex_destroy(&cntx->shlock);
 	if (cntx->shpg)
 		munmap(cntx->shpg, rdev->pg_size);
-	pthread_spin_destroy(&cntx->fqlock);
 
 	/* Un-map DPI only for the first PD that was
 	 * allocated in this context.
 	 */
+	if (cntx->udpi.wcdbpg && cntx->udpi.wcdbpg != MAP_FAILED) {
+		munmap(cntx->udpi.wcdbpg, rdev->pg_size);
+		cntx->udpi.wcdbpg = NULL;
+	}
 	if (cntx->udpi.dbpage && cntx->udpi.dbpage != MAP_FAILED) {
 		munmap(cntx->udpi.dbpage, rdev->pg_size);
 		cntx->udpi.dbpage = NULL;
+	}
+	if (cntx->comp_mask & BNXT_RE_COMP_MASK_UCNTX_DBR_PACING_ENABLED) {
+		munmap(cntx->dbr_page, rdev->pg_size);
+		cntx->dbr_page = NULL;
+		munmap(cntx->bar_map, rdev->pg_size);
+		cntx->bar_map = NULL;
 	}
 
 	verbs_uninit_context(&cntx->ibvctx);

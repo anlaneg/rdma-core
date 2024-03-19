@@ -13,8 +13,8 @@ from pyverbs.cq import CQ
 
 
 class LagRawQP(BaseResources):
-    def __init__(self, dev_name):
-        super().__init__(dev_name, None, None)
+    def __init__(self, dev_name, ib_port):
+        super().__init__(dev_name, ib_port, None)
         self.cq = self.create_cq()
         self.qp = self.create_qp()
 
@@ -31,7 +31,7 @@ class LagRawQP(BaseResources):
             if ex.error_code == errno.EOPNOTSUPP:
                 raise unittest.SkipTest("Create Raw Packet QP is not supported")
             raise ex
-        qp.to_init(QPAttr())
+        qp.to_init(QPAttr(port_num=self.ib_port))
         return qp
 
 
@@ -56,7 +56,7 @@ class LagPortTestCase(Mlx5RDMATestCase):
             raise ex
 
     def test_raw_modify_lag_port(self):
-        qp = LagRawQP(self.dev_name)
+        qp = LagRawQP(self.dev_name, self.ib_port)
         self.modify_lag(qp)
 
     def create_players(self, resource, **resource_arg):
@@ -67,17 +67,14 @@ class LagPortTestCase(Mlx5RDMATestCase):
                              specific attributes.
         :return: None
         """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
+        super().create_players(resource, **resource_arg)
         self.modify_lag(self.client)
         self.modify_lag(self.server)
 
     def test_rc_modify_lag_port(self):
         self.create_players(RCResources)
-        u.traffic(self.client, self.server, self.iters, self.gid_index, self.ib_port)
+        u.traffic(**self.traffic_args)
 
     def test_ud_modify_lag_port(self):
         self.create_players(UDResources)
-        u.traffic(self.client, self.server, self.iters, self.gid_index, self.ib_port)
+        u.traffic(**self.traffic_args)

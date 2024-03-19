@@ -144,6 +144,9 @@ int ibv_fork_init(void)
 	    /*mm_root已初始化，退出*/
 		return 0;
 
+	if (ibv_is_fork_initialized() == IBV_FORK_UNNEEDED)
+		return 0;
+
 	if (too_late)
 	    /*标记出始化过晚，返回错误*/
 		return EINVAL;

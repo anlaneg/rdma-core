@@ -7,6 +7,7 @@ import os
 from tests.rdmacm_utils import  CMSyncConnection, CMAsyncConnection
 from tests.base import RDMATestCase, RDMACMBaseTest
 from tests.utils import requires_mcast_support
+import tests.irdma_base as irdma
 import pyverbs.cm_enums as ce
 import pyverbs.device as d
 import pyverbs.enums as e
@@ -16,13 +17,10 @@ class CMTestCase(RDMACMBaseTest):
     """
     RDMACM Test class. Include all the native RDMACM functionalities.
     """
-    def get_port_space(self):
-        ctx = d.Context(name=self.dev_name)
-        dev_attrs = ctx.query_port(self.ib_port)
-        port_space = ce.RDMA_PS_IPOIB \
-            if dev_attrs.link_layer == e.IBV_LINK_LAYER_INFINIBAND \
-                else ce.RDMA_PS_UDP
-        return port_space
+    @staticmethod
+    def get_port_space():
+        # IPoIB currently is not supported
+        return ce.RDMA_PS_UDP
 
 
     def test_rdmacm_sync_traffic(self):
@@ -30,6 +28,7 @@ class CMTestCase(RDMACMBaseTest):
 
     def test_rdmacm_async_traffic(self):
         # QP ack timeout formula: 4.096 * 2^(ack_timeout) [usec]
+        irdma.skip_if_irdma_dev(d.Context(name=self.dev_name))
         self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
                                       qp_timeout=21)
 
@@ -49,13 +48,20 @@ class CMTestCase(RDMACMBaseTest):
                                       self.rdmacm_multicast_traffic,
                                       port_space=self.get_port_space(), extended=True)
 
+    @requires_mcast_support()
+    def test_rdmacm_async_ex_leave_multicast_traffic(self):
+        self.two_nodes_rdmacm_traffic(CMAsyncConnection,
+                                      self.rdmacm_multicast_traffic,
+                                      port_space=self.get_port_space(), extended=True,
+                                      leave_test=True, bad_flow=True)
+
     def test_rdmacm_async_traffic_external_qp(self):
         self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
                                       with_ext_qp=True)
 
     def test_rdmacm_async_udp_traffic(self):
         self.two_nodes_rdmacm_traffic(CMAsyncConnection, self.rdmacm_traffic,
-                                      port_space=self.get_port_space())
+                                      port_space=self.get_port_space(), ib_port=self.ib_port)
 
     def test_rdmacm_async_read(self):
         self.two_nodes_rdmacm_traffic(CMAsyncConnection,

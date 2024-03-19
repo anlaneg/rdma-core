@@ -46,6 +46,8 @@
 #include <pthread.h>
 #include <sys/param.h>
 
+#include <util/mmio.h>
+#include <util/util.h>
 #include <infiniband/driver.h>
 #include <util/udma_barrier.h>
 
@@ -60,16 +62,26 @@
 #define CHIP_NUM_57508		0x1750
 #define CHIP_NUM_57504		0x1751
 #define CHIP_NUM_57502		0x1752
+#define CHIP_NUM_58818          0xd818
+#define CHIP_NUM_57608          0x1760
+
+#define BNXT_RE_MAX_DO_PACING	0xFFFF
+#define BNXT_NSEC_PER_SEC	1000000000UL
+#define BNXT_RE_PAGE_MASK(pg_size) (~((__u64)(pg_size) - 1))
 
 struct bnxt_re_chip_ctx {
 	__u16 chip_num;
 	__u8 chip_rev;
 	__u8 chip_metal;
+	__u8 gen_p5_p7;
+	__u8 gen_p7;
 };
 
 struct bnxt_re_dpi {
 	__u32 dpindx;
+	__u32 wcdpi;
 	__u64 *dbpage;
+	__u64 *wcdbpg;
 };
 
 struct bnxt_re_pd {
@@ -80,15 +92,50 @@ struct bnxt_re_pd {
 struct bnxt_re_cq {
 	struct ibv_cq ibvcq;
 	uint32_t cqid;
-	struct bnxt_re_queue cqq;
+	struct bnxt_re_context *cntx;
+	struct bnxt_re_queue *cqq;
 	struct bnxt_re_dpi *udpi;
+	struct bnxt_re_mem *mem;
+	struct bnxt_re_mem *resize_mem;
 	struct list_head sfhead;
 	struct list_head rfhead;
+	struct list_head prev_cq_head;
 	uint32_t cqe_size;
 	uint8_t  phase;
-	int deferred_arm_flags;
-	bool first_arm;
-	bool deferred_arm;
+	struct xorshift32_state rand;
+	uint32_t mem_handle;
+	void *toggle_map;
+	uint32_t toggle_size;
+	uint8_t resize_tog;
+	bool deffered_db_sup;
+	uint32_t hw_cqes;
+};
+
+struct bnxt_re_push_buffer {
+	uintptr_t pbuf; /*push wc buffer */
+	uintptr_t  *wqe; /* hwqe addresses */
+	uintptr_t ucdb;
+	__u32 st_idx;
+	__u32 qpid;
+	__u16 wcdpi;
+	__u16 nbit;
+	__u32 tail;
+};
+
+enum bnxt_re_push_info_mask {
+	BNXT_RE_PUSH_SIZE_MASK  = 0x1FUL,
+	BNXT_RE_PUSH_SIZE_SHIFT = 0x18UL
+};
+
+struct bnxt_re_db_ppp_hdr {
+	struct bnxt_re_db_hdr db_hdr;
+	__u64 rsv_psz_pidx;
+};
+
+struct bnxt_re_push_rec {
+	struct bnxt_re_dpi *udpi;
+	struct bnxt_re_push_buffer *pbuf;
+	__u32 pbmap; /* only 16 bits in use */
 };
 
 struct bnxt_re_wrid {
@@ -100,7 +147,7 @@ struct bnxt_re_wrid {
 	uint32_t st_slot_idx;
 	uint8_t slots;
 	uint8_t sig;
-
+	uint8_t wc_opcd;
 };
 
 struct bnxt_re_qpcap {
@@ -110,14 +157,18 @@ struct bnxt_re_qpcap {
 	uint32_t max_rsge;
 	uint32_t max_inline;
 	uint8_t	sqsig;
+	uint8_t is_atomic_cap;
 };
 
 struct bnxt_re_srq {
 	struct ibv_srq ibvsrq;
 	struct ibv_srq_attr cap;
+	struct bnxt_re_context *cntx;
 	struct bnxt_re_queue *srqq;
 	struct bnxt_re_wrid *srwrid;
 	struct bnxt_re_dpi *udpi;
+	struct xorshift32_state rand;
+	struct bnxt_re_mem *mem;
 	uint32_t srqid;
 	int start_idx;
 	int last_idx;
@@ -125,6 +176,7 @@ struct bnxt_re_srq {
 };
 
 struct bnxt_re_joint_queue {
+	struct bnxt_re_context *cntx;
 	struct bnxt_re_queue *hwque;
 	struct bnxt_re_wrid *swque;
 	uint32_t start_idx;
@@ -134,6 +186,8 @@ struct bnxt_re_joint_queue {
 struct bnxt_re_qp {
 	struct ibv_qp ibvqp;
 	struct bnxt_re_chip_ctx *cctx;
+	struct bnxt_re_context *cntx;
+	struct xorshift32_state rand;
 	struct bnxt_re_joint_queue *jsqq;
 	struct bnxt_re_joint_queue *jrqq;
 	struct bnxt_re_srq *srq;
@@ -151,8 +205,10 @@ struct bnxt_re_qp {
 	uint16_t mtu;
 	uint16_t qpst;
 	uint32_t qpmode;
+	uint8_t push_st_en;
+	uint16_t max_push_sz;
 	uint8_t qptyp;
-	/* irdord? */
+	struct bnxt_re_mem *mem;
 };
 
 struct bnxt_re_mr {
@@ -180,16 +236,36 @@ struct bnxt_re_context {
 	uint32_t dev_id;
 	uint32_t max_qp;
 	struct bnxt_re_chip_ctx cctx;
+	uint64_t comp_mask;
 	uint32_t max_srq;
 	struct bnxt_re_dpi udpi;
 	void *shpg;
 	uint32_t wqe_mode;
 	pthread_mutex_t shlock;
-	pthread_spinlock_t fqlock;
+	struct bnxt_re_push_rec *pbrec;
+	uint32_t wc_handle;
+	void *dbr_page;
+	void *bar_map;
 };
 
-/* Chip context related functions */
-bool bnxt_re_is_chip_gen_p5(struct bnxt_re_chip_ctx *cctx);
+struct bnxt_re_pacing_data {
+	uint32_t do_pacing;
+	uint32_t pacing_th;
+	uint32_t alarm_th;
+	uint32_t fifo_max_depth;
+	uint32_t fifo_room_mask;
+	uint32_t fifo_room_shift;
+	uint32_t grc_reg_offset;
+};
+
+struct bnxt_re_mmap_info {
+	__u32 type;
+	__u32 dpi;
+	__u64 alloc_offset;
+	__u32 alloc_size;
+	__u32 pg_offset;
+	__u32 res_id;
+};
 
 /* DB ring functions used internally*/
 void bnxt_re_ring_rq_db(struct bnxt_re_qp *qp);
@@ -198,6 +274,28 @@ void bnxt_re_ring_srq_arm(struct bnxt_re_srq *srq);
 void bnxt_re_ring_srq_db(struct bnxt_re_srq *srq);
 void bnxt_re_ring_cq_db(struct bnxt_re_cq *cq);
 void bnxt_re_ring_cq_arm_db(struct bnxt_re_cq *cq, uint8_t aflag);
+
+void bnxt_re_ring_pstart_db(struct bnxt_re_qp *qp,
+			    struct bnxt_re_push_buffer *pbuf);
+void bnxt_re_ring_pend_db(struct bnxt_re_qp *qp,
+			  struct bnxt_re_push_buffer *pbuf);
+void bnxt_re_fill_push_wcb(struct bnxt_re_qp *qp,
+			   struct bnxt_re_push_buffer *pbuf,
+			   uint32_t idx);
+
+int bnxt_re_init_pbuf_list(struct bnxt_re_context *cntx);
+void bnxt_re_destroy_pbuf_list(struct bnxt_re_context *cntx);
+struct bnxt_re_push_buffer *bnxt_re_get_pbuf(uint8_t *push_st_en,
+					     struct bnxt_re_context *cntx);
+void bnxt_re_put_pbuf(struct bnxt_re_context *cntx,
+		      struct bnxt_re_push_buffer *pbuf);
+int bnxt_re_alloc_page(struct ibv_context *ibvctx,
+		       struct bnxt_re_mmap_info *minfo,
+		       uint32_t *page_handle);
+int bnxt_re_notify_drv(struct ibv_context *ibvctx);
+int bnxt_re_get_toggle_mem(struct ibv_context *ibvctx,
+			   struct bnxt_re_mmap_info *minfo,
+			   uint32_t *page_handle);
 
 /* pointer conversion functions*/
 static inline struct bnxt_re_dev *to_bnxt_re_dev(struct ibv_device *ibvdev)
@@ -435,7 +533,7 @@ static inline uint8_t bnxt_re_is_cqe_valid(struct bnxt_re_cq *cq,
 
 static inline void bnxt_re_change_cq_phase(struct bnxt_re_cq *cq)
 {
-	if (!cq->cqq.head)
+	if (!cq->cqq->head)
 		cq->phase = (~cq->phase & BNXT_RE_BCQE_PH_MASK);
 }
 
@@ -458,4 +556,65 @@ static inline void bnxt_re_jqq_mod_last(struct bnxt_re_joint_queue *jqq,
 {
 	jqq->last_idx = jqq->swque[idx].next_idx;
 }
+
+static inline uint32_t bnxt_re_init_depth(uint32_t ent, uint64_t cmask)
+{
+	return cmask & BNXT_RE_COMP_MASK_UCNTX_POW2_DISABLED ?
+		ent : roundup_pow_of_two(ent);
+}
+
+/* Helper function to copy to push buffers */
+static inline void bnxt_re_copy_data_to_pb(struct bnxt_re_push_buffer *pbuf,
+					   uint8_t offset, uint32_t idx)
+{
+	uintptr_t *src;
+	uintptr_t *dst;
+	int indx;
+
+	for (indx = 0; indx < idx; indx++) {
+		dst = (uintptr_t *)(pbuf->pbuf + 2 * (indx + offset));
+		src = (uintptr_t *)(pbuf->wqe[indx]);
+		mmio_write64(dst, *src);
+
+		dst++;
+		src++;
+		mmio_write64(dst, *src);
+	}
+}
+
+static void timespec_sub(const struct timespec *a, const struct timespec *b,
+			 struct timespec *res)
+{
+	res->tv_sec = a->tv_sec - b->tv_sec;
+	res->tv_nsec = a->tv_nsec - b->tv_nsec;
+	if (res->tv_nsec < 0) {
+		res->tv_sec--;
+		res->tv_nsec += BNXT_NSEC_PER_SEC;
+	}
+}
+
+/*
+ * Function waits in a busy loop for a given nano seconds
+ * The maximum wait period allowed is less than one second
+ */
+static inline void bnxt_re_sub_sec_busy_wait(uint32_t nsec)
+{
+	struct timespec start, cur, res;
+
+	if (nsec >= BNXT_NSEC_PER_SEC)
+		return;
+
+	if (clock_gettime(CLOCK_REALTIME, &start))
+		return;
+
+	while (1) {
+		if (clock_gettime(CLOCK_REALTIME, &cur))
+			return;
+		timespec_sub(&cur, &start, &res);
+		if (res.tv_nsec >= nsec)
+			break;
+	}
+}
+
+#define BNXT_RE_HW_RETX(a) ((a)->comp_mask & BNXT_RE_COMP_MASK_UCNTX_HW_RETX_ENABLED)
 #endif

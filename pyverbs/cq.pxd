@@ -8,20 +8,21 @@ cimport pyverbs.libibverbs as v
 
 cdef class CompChannel(PyverbsCM):
     cdef v.ibv_comp_channel *cc
-    cdef close(self)
+    cpdef close(self)
     cdef object context
     cdef add_ref(self, obj)
     cdef object cqs
 
 cdef class CQ(PyverbsCM):
     cdef v.ibv_cq *cq
-    cdef close(self)
+    cpdef close(self)
     cdef object context
     cdef add_ref(self, obj)
     cdef object qps
     cdef object srqs
     cdef object channel
     cdef object num_events
+    cdef object wqs
 
 cdef class CqInitAttrEx(PyverbsObject):
     cdef v.ibv_cq_init_attr_ex attr
@@ -31,7 +32,7 @@ cdef class CqInitAttrEx(PyverbsObject):
 cdef class CQEX(PyverbsCM):
     cdef v.ibv_cq_ex *cq
     cdef v.ibv_cq *ibv_cq
-    cdef close(self)
+    cpdef close(self)
     cdef object context
     cdef add_ref(self, obj)
     cdef object qps

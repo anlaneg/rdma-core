@@ -50,9 +50,29 @@
 #include <sys/mman.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <ccan/list.h>
 
 #include <infiniband/driver.h>
 #include <infiniband/verbs.h>
+
+struct bnxt_re_work_compl {
+	struct list_node list;
+	struct ibv_wc wc;
+};
+
+static inline uint8_t bnxt_re_get_psne_size(struct bnxt_re_context *cntx)
+{
+	return (BNXT_RE_HW_RETX(cntx)) ? sizeof(struct bnxt_re_msns) :
+					      (cntx->cctx.gen_p5_p7) ?
+					      sizeof(struct bnxt_re_psns_ext) :
+					      sizeof(struct bnxt_re_psns);
+}
+
+static inline uint32_t bnxt_re_get_npsn(uint8_t mode, uint32_t nwr,
+					uint32_t slots)
+{
+	return mode == BNXT_RE_WQE_MODE_VARIABLE ? slots : nwr;
+}
 
 int bnxt_re_query_device(struct ibv_context *context,
 			 const struct ibv_query_device_ex_input *input,
@@ -63,10 +83,13 @@ struct ibv_pd *bnxt_re_alloc_pd(struct ibv_context *uctx);
 int bnxt_re_free_pd(struct ibv_pd *ibvpd);
 struct ibv_mr *bnxt_re_reg_mr(struct ibv_pd *ibvpd, void *buf, size_t len,
 			      uint64_t hca_va, int ibv_access_flags);
+struct ibv_mr *bnxt_re_reg_dmabuf_mr(struct ibv_pd *, uint64_t start, size_t len,
+				     uint64_t iova, int fd, int access);
 int bnxt_re_dereg_mr(struct verbs_mr *vmr);
 
 struct ibv_cq *bnxt_re_create_cq(struct ibv_context *uctx, int ncqe,
 				 struct ibv_comp_channel *ch, int vec);
+int bnxt_re_resize_cq(struct ibv_cq *ibvcq, int ncqe);
 int bnxt_re_destroy_cq(struct ibv_cq *ibvcq);
 int bnxt_re_poll_cq(struct ibv_cq *ibvcq, int nwc, struct ibv_wc *wc);
 int bnxt_re_arm_cq(struct ibv_cq *ibvcq, int flags);
@@ -95,5 +118,17 @@ int bnxt_re_post_srq_recv(struct ibv_srq *ibvsrq, struct ibv_recv_wr *wr,
 struct ibv_ah *bnxt_re_create_ah(struct ibv_pd *ibvpd,
 				 struct ibv_ah_attr *attr);
 int bnxt_re_destroy_ah(struct ibv_ah *ibvah);
+void bnxt_re_async_event(struct ibv_context *context,
+			 struct ibv_async_event *event);
 
+static inline __le64 bnxt_re_update_msn_tbl(uint32_t st_idx, uint32_t npsn, uint32_t start_psn)
+{
+	/* Adjust the field values to their respective ofsets */
+	return htole64((((uint64_t)(st_idx) << BNXT_RE_SQ_MSN_SEARCH_START_IDX_SHIFT) &
+		 BNXT_RE_SQ_MSN_SEARCH_START_IDX_MASK) |
+		 (((uint64_t)(npsn) << BNXT_RE_SQ_MSN_SEARCH_NEXT_PSN_SHIFT) &
+		 BNXT_RE_SQ_MSN_SEARCH_NEXT_PSN_MASK) |
+		 (((start_psn) << BNXT_RE_SQ_MSN_SEARCH_START_PSN_SHIFT) &
+		 BNXT_RE_SQ_MSN_SEARCH_START_PSN_MASK));
+}
 #endif /* __BNXT_RE_VERBS_H__ */

@@ -72,6 +72,8 @@ int __attribute__((const)) ibv_rate_to_mult(enum ibv_rate rate)
 	case IBV_RATE_50_GBPS:  return 20;
 	case IBV_RATE_400_GBPS: return 160;
 	case IBV_RATE_600_GBPS: return 240;
+	case IBV_RATE_800_GBPS: return 320;
+	case IBV_RATE_1200_GBPS: return 480;
 	default:           return -1;
 	}
 }
@@ -92,6 +94,8 @@ enum ibv_rate __attribute__((const)) mult_to_ibv_rate(int mult)
 	case 20: return IBV_RATE_50_GBPS;
 	case 160: return IBV_RATE_400_GBPS;
 	case 240: return IBV_RATE_600_GBPS;
+	case 320: return IBV_RATE_800_GBPS;
+	case 480: return IBV_RATE_1200_GBPS;
 	default: return IBV_RATE_MAX;
 	}
 }
@@ -120,6 +124,8 @@ int  __attribute__((const)) ibv_rate_to_mbps(enum ibv_rate rate)
 	case IBV_RATE_50_GBPS:  return 53125;
 	case IBV_RATE_400_GBPS: return 425000;
 	case IBV_RATE_600_GBPS: return 637500;
+	case IBV_RATE_800_GBPS: return 850000;
+	case IBV_RATE_1200_GBPS: return 1275000;
 	default:               return -1;
 	}
 }
@@ -148,6 +154,8 @@ enum ibv_rate __attribute__((const)) mbps_to_ibv_rate(int mbps)
 	case 53125:  return IBV_RATE_50_GBPS;
 	case 425000: return IBV_RATE_400_GBPS;
 	case 637500: return IBV_RATE_600_GBPS;
+	case 850000: return IBV_RATE_800_GBPS;
+	case 1275000: return IBV_RATE_1200_GBPS;
 	default:     return IBV_RATE_MAX;
 	}
 }
@@ -715,7 +723,16 @@ int ibv_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 	 */
 	return 0;
 #else
-	return get_ops(qp->context)->query_qp_data_in_order(qp, op, flags);
+	int result;
+
+	if (!check_comp_mask(flags, IBV_QUERY_QP_DATA_IN_ORDER_RETURN_CAPS))
+		return 0;
+
+	result = get_ops(qp->context)->query_qp_data_in_order(qp, op, flags);
+	if (result & IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG)
+		result |= IBV_QUERY_QP_DATA_IN_ORDER_ALIGNED_128_BYTES;
+
+	return flags ? result : !!(result & IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG);
 #endif
 }
 

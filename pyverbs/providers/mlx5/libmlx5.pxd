@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
 # Copyright (c) 2019 Mellanox Technologies, Inc. All rights reserved. See COPYING file
 
-include 'mlx5dv_enums.pxd'
+#cython: language_level=3
 
 from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t, uintptr_t
 from posix.types cimport off_t
 from libcpp cimport bool
 cimport libc.stdio as s
 
+from pyverbs.providers.mlx5.mlx5_enums cimport *
 cimport pyverbs.libibverbs as v
 
 
@@ -59,6 +60,9 @@ cdef extern from 'infiniband/mlx5dv.h':
         uint8_t                 num_lag_ports
         mlx5dv_crypto_caps      crypto_caps
         size_t                  max_wr_memcpy_length
+        uint64_t                max_dc_rd_atom
+        uint64_t                max_dc_init_rd_atom
+
 
     cdef struct mlx5dv_dci_streams:
         uint8_t       log_num_concurent
@@ -171,6 +175,20 @@ cdef extern from 'infiniband/mlx5dv.h':
         mlx5dv_dr_action *dest
         mlx5dv_dr_action_dest_reformat *dest_reformat
 
+    cdef struct mlx5dv_dr_flow_sampler_attr:
+        uint32_t        sample_ratio
+        mlx5dv_dr_table    *default_next_table
+        uint32_t        num_sample_actions
+        mlx5dv_dr_action    **sample_actions
+        uint64_t        action
+
+    cdef struct mlx5dv_dr_flow_meter_attr:
+        mlx5dv_dr_table *next_table
+        uint8_t         active
+        uint8_t         reg_c_index
+        size_t          flow_meter_parameter_sz
+        void            *flow_meter_parameter
+
     cdef struct mlx5dv_clock_info:
         pass
 
@@ -255,11 +273,19 @@ cdef extern from 'infiniband/mlx5dv.h':
         uint32_t    access
         uint64_t    pgsz_bitmap
         uint64_t    comp_mask
+        int         dmabuf_fd
 
     cdef struct mlx5dv_vfio_context_attr:
         const char  *pci_name
         uint32_t    flags
         uint64_t    comp_mask
+
+    cdef struct mlx5dv_devx_msi_vector:
+        int         vector
+        int         fd
+
+    cdef struct mlx5dv_devx_eq:
+        void        *vaddr
 
     cdef struct mlx5dv_pd:
         uint32_t    pdn
@@ -335,10 +361,24 @@ cdef extern from 'infiniband/mlx5dv.h':
     cdef struct mlx5dv_dek:
         pass
 
+    cdef struct mlx5dv_crypto_login_obj:
+        pass
+
     cdef struct mlx5dv_crypto_login_attr:
         uint32_t credential_id
         uint32_t import_kek_id
         char *credential
+        uint64_t comp_mask
+
+    cdef struct mlx5dv_crypto_login_attr_ex:
+        uint32_t credential_id
+        uint32_t import_kek_id
+        const void *credential
+        size_t credential_len
+        uint64_t comp_mask
+
+    cdef struct mlx5dv_crypto_login_query_attr:
+        mlx5dv_crypto_login_state state
         uint64_t comp_mask
 
     cdef struct mlx5dv_crypto_attr:
@@ -359,6 +399,7 @@ cdef extern from 'infiniband/mlx5dv.h':
         char *opaque
         char *key
         uint64_t comp_mask
+        mlx5dv_crypto_login_obj *crypto_login
 
     cdef struct mlx5dv_dek_attr:
         mlx5dv_dek_state state
@@ -468,6 +509,10 @@ cdef extern from 'infiniband/mlx5dv.h':
                                                          uint32_t vport)
     mlx5dv_dr_action *mlx5dv_dr_action_create_dest_ib_port(mlx5dv_dr_domain *dmn,
                                                            uint32_t ib_port)
+    mlx5dv_dr_action *mlx5dv_dr_action_create_packet_reformat(mlx5dv_dr_domain *domain,
+                                                              uint32_t flags,
+                                                              unsigned char reformat_type,
+                                                              size_t data_sz, void *data)
     int mlx5dv_dr_rule_destroy(mlx5dv_dr_rule *rule)
     void mlx5dv_dr_domain_allow_duplicate_rules(mlx5dv_dr_domain *dmn, bool allow)
 
@@ -478,6 +523,12 @@ cdef extern from 'infiniband/mlx5dv.h':
     v.ibv_device **mlx5dv_get_vfio_device_list(mlx5dv_vfio_context_attr *attr)
     int mlx5dv_vfio_get_events_fd(v.ibv_context *ibctx)
     int mlx5dv_vfio_process_events(v.ibv_context *context)
+    mlx5dv_dr_action *mlx5dv_dr_action_create_dest_devx_tir(mlx5dv_devx_obj *devx_obj)
+    mlx5dv_dr_action *mlx5dv_dr_action_create_flow_sampler(mlx5dv_dr_flow_sampler_attr *attr)
+    mlx5dv_dr_action *mlx5dv_dr_action_create_flow_meter(mlx5dv_dr_flow_meter_attr *attr)
+    int mlx5dv_dr_action_modify_flow_meter(mlx5dv_dr_action *action,
+                                           mlx5dv_dr_flow_meter_attr *attr,
+                                           uint64_t modify_field_select)
 
     # DevX APIs
     mlx5dv_devx_uar *mlx5dv_devx_alloc_uar(v.ibv_context *context, uint32_t flags)
@@ -498,6 +549,11 @@ cdef extern from 'infiniband/mlx5dv.h':
                                size_t inlen, void *out, size_t outlen)
     int mlx5dv_devx_obj_destroy(mlx5dv_devx_obj *obj)
     int mlx5dv_init_obj(mlx5dv_obj *obj, uint64_t obj_type)
+    mlx5dv_devx_msi_vector *mlx5dv_devx_alloc_msi_vector(v.ibv_context *ibctx)
+    int mlx5dv_devx_free_msi_vector(mlx5dv_devx_msi_vector *msi)
+    mlx5dv_devx_eq *mlx5dv_devx_create_eq(v.ibv_context *context, const void *_in,
+                                          size_t inlen, void *out, size_t outlen)
+    int mlx5dv_devx_destroy_eq(mlx5dv_devx_eq *eq)
 
     # Mkey setters
     void mlx5dv_wr_mkey_configure(mlx5dv_qp_ex *mqp, mlx5dv_mkey *mkey,
@@ -519,3 +575,8 @@ cdef extern from 'infiniband/mlx5dv.h':
     mlx5dv_dek *mlx5dv_dek_create(v.ibv_context *context, mlx5dv_dek_init_attr *init_attr)
     int mlx5dv_dek_query(mlx5dv_dek *dek, mlx5dv_dek_attr *attr)
     int mlx5dv_dek_destroy(mlx5dv_dek *dek)
+    mlx5dv_crypto_login_obj *mlx5dv_crypto_login_create(v.ibv_context *context,
+                                                        mlx5dv_crypto_login_attr_ex *login_attr)
+    int mlx5dv_crypto_login_query(mlx5dv_crypto_login_obj *crypto_login,
+                                  mlx5dv_crypto_login_query_attr *query_attr)
+    int mlx5dv_crypto_login_destroy(mlx5dv_crypto_login_obj *crypto_login)

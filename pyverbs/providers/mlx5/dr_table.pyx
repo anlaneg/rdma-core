@@ -37,9 +37,10 @@ cdef class DrTable(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         if self.table != NULL:
-            self.logger.debug('Closing DrTable.')
+            if self.logger:
+                self.logger.debug('Closing DrTable.')
             close_weakrefs([self.dr_matchers, self.dr_actions])
             rc = dv.mlx5dv_dr_table_destroy(self.table)
             if rc:

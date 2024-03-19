@@ -41,8 +41,44 @@ enum {
 		 MLX5DV_DR_DOMAIN_SYNC_FLAGS_MEM),
 };
 
+bool dr_domain_is_support_sw_encap(struct mlx5dv_dr_domain *dmn)
+{
+	return !!dmn->info.caps.log_sw_encap_icm_size;
+}
+
+static int dr_domain_init_sw_encap_resources(struct mlx5dv_dr_domain *dmn)
+{
+	if (!dr_domain_is_support_sw_encap(dmn))
+		return 0;
+
+	dmn->encap_icm_pool = dr_icm_pool_create(dmn, DR_ICM_TYPE_ENCAP);
+	if (!dmn->encap_icm_pool) {
+		dr_dbg(dmn, "Couldn't get sw-encap icm memory for %s\n",
+		       ibv_get_device_name(dmn->ctx->device));
+		return errno;
+	}
+
+	return 0;
+}
+
+static void dr_domain_destroy_sw_encap_resources(struct mlx5dv_dr_domain *dmn)
+{
+	if (!dr_domain_is_support_sw_encap(dmn))
+		return;
+
+	dr_icm_pool_destroy(dmn->encap_icm_pool);
+}
+
+bool dr_domain_is_support_modify_hdr_cache(struct mlx5dv_dr_domain *dmn)
+{
+	return dmn->info.caps.sw_format_ver >= MLX5_HW_CONNECTX_6DX &&
+	       dmn->info.caps.support_modify_argument;
+}
+
 static int dr_domain_init_resources(struct mlx5dv_dr_domain *dmn)
 {
+	struct mlx5dv_pd mlx5_pd = {};
+	struct mlx5dv_obj obj;
 	int ret = -1;
 
 	dmn->ste_ctx = dr_ste_get_ctx(dmn->info.caps.sw_format_ver);
@@ -56,6 +92,14 @@ static int dr_domain_init_resources(struct mlx5dv_dr_domain *dmn)
 		dr_dbg(dmn, "Couldn't allocate PD\n");
 		return ret;
 	}
+
+	obj.pd.in = dmn->pd;
+	obj.pd.out = &mlx5_pd;
+	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_PD);
+	if (ret)
+		goto clean_pd;
+
+	dmn->pd_num = mlx5_pd.pdn;
 
 	dmn->uar = mlx5dv_devx_alloc_uar(dmn->ctx,
 					 MLX5_IB_UAPI_UAR_ALLOC_TYPE_NC);
@@ -83,16 +127,38 @@ static int dr_domain_init_resources(struct mlx5dv_dr_domain *dmn)
 		goto free_ste_icm_pool;
 	}
 
+	if (dr_domain_is_support_modify_hdr_cache(dmn)) {
+		dmn->modify_header_ptrn_mngr = dr_ptrn_mngr_create(dmn);
+		if (dmn->modify_header_ptrn_mngr) {
+			dmn->modify_header_arg_mngr = dr_arg_mngr_create(dmn);
+			if (!dmn->modify_header_arg_mngr) {
+				dr_ptrn_mngr_destroy(dmn->modify_header_ptrn_mngr);
+				dmn->modify_header_ptrn_mngr = NULL;
+			}
+		}
+	}
+
+	ret = dr_domain_init_sw_encap_resources(dmn);
+	if (ret) {
+		dr_dbg(dmn, "Couldn't create sw-encap resource for %s\n",
+		       ibv_get_device_name(dmn->ctx->device));
+		goto free_modify_header_ptrn_arg_mngr;
+	}
+
 	ret = dr_send_ring_alloc(dmn);
 	if (ret) {
 		dr_dbg(dmn, "Couldn't create send-ring for %s\n",
 		       ibv_get_device_name(dmn->ctx->device));
-		goto free_action_icm_pool;
+		goto free_sw_encap_resources;
 	}
 
 	return 0;
 
-free_action_icm_pool:
+free_sw_encap_resources:
+	dr_domain_destroy_sw_encap_resources(dmn);
+free_modify_header_ptrn_arg_mngr:
+	dr_ptrn_mngr_destroy(dmn->modify_header_ptrn_mngr);
+	dr_arg_mngr_destroy(dmn->modify_header_arg_mngr);
 	dr_icm_pool_destroy(dmn->action_icm_pool);
 free_ste_icm_pool:
 	dr_icm_pool_destroy(dmn->ste_icm_pool);
@@ -107,6 +173,9 @@ clean_pd:
 static void dr_free_resources(struct mlx5dv_dr_domain *dmn)
 {
 	dr_send_ring_free(dmn);
+	dr_domain_destroy_sw_encap_resources(dmn);
+	dr_ptrn_mngr_destroy(dmn->modify_header_ptrn_mngr);
+	dr_arg_mngr_destroy(dmn->modify_header_arg_mngr);
 	dr_icm_pool_destroy(dmn->action_icm_pool);
 	dr_icm_pool_destroy(dmn->ste_icm_pool);
 	mlx5dv_devx_free_uar(dmn->uar);
@@ -151,6 +220,9 @@ static void dr_domain_vports_uninit(struct mlx5dv_dr_domain *dmn)
 		vports->vports = NULL;
 	}
 	pthread_spin_destroy(&vports->lock);
+
+	if (vports->ib_ports)
+		free(vports->ib_ports);
 }
 
 static int dr_domain_query_esw_mgr(struct mlx5dv_dr_domain *dmn,
@@ -231,6 +303,14 @@ static int dr_domain_query_fdb_caps(struct ibv_context *ctx,
 	return 0;
 }
 
+static bool dr_domain_caps_is_sw_owner_supported(bool sw_owner,
+						 bool sw_owner_v2,
+						 uint8_t sw_format_ver)
+{
+	return sw_owner ||
+	       (sw_owner_v2 && sw_format_ver <= MLX5_HW_CONNECTX_7);
+}
+
 static int dr_domain_caps_init(struct ibv_context *ctx,
 			       struct mlx5dv_dr_domain *dmn)
 {
@@ -279,9 +359,9 @@ static int dr_domain_caps_init(struct ibv_context *ctx,
 
 	switch (dmn->type) {
 	case MLX5DV_DR_DOMAIN_TYPE_NIC_RX:
-		if (!dmn->info.caps.rx_sw_owner &&
-		    !(dmn->info.caps.rx_sw_owner_v2 &&
-		      dmn->info.caps.sw_format_ver <= MLX5_HW_CONNECTX_6DX))
+		if (!dr_domain_caps_is_sw_owner_supported(dmn->info.caps.rx_sw_owner,
+							  dmn->info.caps.rx_sw_owner_v2,
+							  dmn->info.caps.sw_format_ver))
 			return 0;
 
 		dmn->info.supp_sw_steering = true;
@@ -290,9 +370,9 @@ static int dr_domain_caps_init(struct ibv_context *ctx,
 		dmn->info.rx.drop_icm_addr = dmn->info.caps.nic_rx_drop_address;
 		break;
 	case MLX5DV_DR_DOMAIN_TYPE_NIC_TX:
-		if (!dmn->info.caps.tx_sw_owner &&
-		    !(dmn->info.caps.tx_sw_owner_v2 &&
-		      dmn->info.caps.sw_format_ver <= MLX5_HW_CONNECTX_6DX))
+		if (!dr_domain_caps_is_sw_owner_supported(dmn->info.caps.tx_sw_owner,
+							  dmn->info.caps.tx_sw_owner_v2,
+							  dmn->info.caps.sw_format_ver))
 			return 0;
 
 		dmn->info.supp_sw_steering = true;
@@ -304,9 +384,9 @@ static int dr_domain_caps_init(struct ibv_context *ctx,
 		if (!dmn->info.caps.eswitch_manager)
 			return 0;
 
-		if (!dmn->info.caps.fdb_sw_owner &&
-		    !(dmn->info.caps.fdb_sw_owner_v2 &&
-		      dmn->info.caps.sw_format_ver <= MLX5_HW_CONNECTX_6DX))
+		if (!dr_domain_caps_is_sw_owner_supported(dmn->info.caps.fdb_sw_owner,
+							  dmn->info.caps.fdb_sw_owner_v2,
+							  dmn->info.caps.sw_format_ver))
 			return 0;
 
 		dmn->info.rx.type = DR_DOMAIN_NIC_TYPE_RX;
@@ -321,7 +401,7 @@ static int dr_domain_caps_init(struct ibv_context *ctx,
 	default:
 		dr_dbg(dmn, "Invalid domain\n");
 		ret = EINVAL;
-		break;
+		goto uninit_vports;
 	}
 
 	return ret;
@@ -393,6 +473,25 @@ static int dr_domain_check_icm_memory_caps(struct mlx5dv_dr_domain *dmn)
 	max_req_chunks_log = max_req_bytes_log - DR_STE_LOG_SIZE;
 	dmn->info.max_log_sw_icm_sz =
 		min_t(uint32_t, DR_CHUNK_SIZE_1024K, max_req_chunks_log);
+	dmn->info.max_log_sw_icm_rehash_sz = dmn->info.max_log_sw_icm_sz;
+
+	if (dmn->info.caps.sw_format_ver >= MLX5_HW_CONNECTX_6DX) {
+		if (dmn->info.caps.log_modify_pattern_icm_size < DR_CHUNK_SIZE_4K +
+		    DR_MODIFY_ACTION_LOG_SIZE) {
+			errno = ENOMEM;
+			return errno;
+		}
+		dmn->info.max_log_modify_hdr_pattern_icm_sz = DR_CHUNK_SIZE_4K;
+	}
+
+	if (dr_domain_is_support_sw_encap(dmn)) {
+		if (dmn->info.caps.log_sw_encap_icm_size <
+		    (DR_CHUNK_SIZE_4K + DR_SW_ENCAP_ENTRY_LOG_SIZE)) {
+			errno = ENOMEM;
+			return errno;
+		}
+		dmn->info.max_log_sw_encap_icm_sz = DR_CHUNK_SIZE_4K;
+	}
 
 	return 0;
 }
@@ -503,8 +602,20 @@ int mlx5dv_dr_domain_sync(struct mlx5dv_dr_domain *dmn, uint32_t flags)
 				return ret;
 		}
 
-		if (dmn->action_icm_pool)
+		if (dmn->encap_icm_pool) {
+			ret = dr_icm_pool_sync_pool(dmn->encap_icm_pool);
+			if (ret)
+				return ret;
+		}
+
+		if (dmn->action_icm_pool) {
 			ret = dr_icm_pool_sync_pool(dmn->action_icm_pool);
+			if (ret)
+				return ret;
+		}
+
+		if (dmn->modify_header_ptrn_mngr)
+			ret = dr_ptrn_sync_pool(dmn->modify_header_ptrn_mngr);
 	}
 
 	return ret;

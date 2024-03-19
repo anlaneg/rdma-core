@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 /*
- * Copyright 2019-2021 Amazon.com, Inc. or its affiliates. All rights reserved.
+ * Copyright 2019-2023 Amazon.com, Inc. or its affiliates. All rights reserved.
  */
 
 #include <stdio.h>
@@ -21,6 +21,7 @@ static const struct verbs_match_ent efa_table[] = {
 	VERBS_DRIVER_ID(RDMA_DRIVER_EFA),
 	VERBS_PCI_MATCH(PCI_VENDOR_ID_AMAZON, 0xefa0, NULL),
 	VERBS_PCI_MATCH(PCI_VENDOR_ID_AMAZON, 0xefa1, NULL),
+	VERBS_PCI_MATCH(PCI_VENDOR_ID_AMAZON, 0xefa2, NULL),
 	{}
 };
 
@@ -44,6 +45,7 @@ static const struct verbs_context_ops efa_ctx_ops = {
 	.query_device_ex = efa_query_device_ex,
 	.query_port = efa_query_port,
 	.query_qp = efa_query_qp,
+	.query_qp_data_in_order = efa_query_qp_data_in_order,
 	.reg_dmabuf_mr = efa_reg_dmabuf_mr,
 	.reg_mr = efa_reg_mr,
 	.req_notify_cq = efa_arm_cq,
@@ -75,6 +77,7 @@ static struct verbs_context *efa_alloc_context(struct ibv_device *vdev,
 	ctx->sub_cqs_per_cq = resp.sub_cqs_per_cq;
 	ctx->cmds_supp_udata_mask = resp.cmds_supp_udata_mask;
 	ctx->cqe_size = sizeof(struct efa_io_rx_cdesc);
+	ctx->ex_cqe_size = sizeof(struct efa_io_rx_cdesc_ex);
 	ctx->inline_buf_size = resp.inline_buf_size;
 	ctx->max_llq_size = resp.max_llq_size;
 	ctx->max_tx_batch = resp.max_tx_batch;

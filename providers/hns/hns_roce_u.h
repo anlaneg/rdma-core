@@ -42,14 +42,12 @@
 #include <util/util.h>
 #include <infiniband/verbs.h>
 #include <ccan/array_size.h>
-#include <ccan/bitmap.h>
+#include <util/bitmap.h>
 #include <ccan/container_of.h>
 #include <linux/if_ether.h>
 #include "hns_roce_u_abi.h"
 
-#define HNS_ROCE_HW_VER1		('h' << 24 | 'i' << 16 | '0' << 8 | '6')
-
-#define HNS_ROCE_HW_VER2		('h' << 24 | 'i' << 16 | '0' << 8 | '8')
+#define HNS_ROCE_HW_VER2		0x100
 #define HNS_ROCE_HW_VER3		0x130
 
 #define PFX				"hns: "
@@ -60,9 +58,7 @@
 
 #define HNS_ROCE_MAX_RC_INL_INN_SZ	32
 #define HNS_ROCE_MAX_UD_INL_INN_SZ	8
-#define HNS_ROCE_MAX_CQ_NUM		0x10000
 #define HNS_ROCE_MIN_CQE_NUM		0x40
-#define HNS_ROCE_V1_MIN_WQE_NUM		0x20
 #define HNS_ROCE_V2_MIN_WQE_NUM		0x40
 #define HNS_ROCE_MIN_SRQ_WQE_NUM	1
 
@@ -76,10 +72,9 @@
 
 #define HNS_ROCE_GID_SIZE		16
 
-#define HNS_ROCE_CQ_DB_BUF_SIZE		((HNS_ROCE_MAX_CQ_NUM >> 11) << 12)
-#define HNS_ROCE_STATIC_RATE		3 /* Gbps */
-
 #define INVALID_SGE_LENGTH 0x80000000
+
+#define HNS_ROCE_DWQE_PAGE_SIZE 65536
 
 #define HNS_ROCE_ADDRESS_MASK 0xFFFFFFFF
 #define HNS_ROCE_ADDRESS_SHIFT 32
@@ -99,28 +94,71 @@
 #define roce_set_bit(origin, shift, val) \
 	roce_set_field((origin), (1ul << (shift)), (shift), (val))
 
-#define hr_ilog32(n)		ilog32((unsigned int)(n) - 1)
+#define FIELD_LOC(field_type, field_h, field_l)                                \
+	field_type, field_h,                                                   \
+		field_l + BUILD_ASSERT_OR_ZERO(((field_h) / 32) ==             \
+					       ((field_l) / 32))
 
-enum {
-	HNS_ROCE_QP_TABLE_BITS		= 8,
-	HNS_ROCE_QP_TABLE_SIZE		= 1 << HNS_ROCE_QP_TABLE_BITS,
-};
+#define _hr_reg_enable(ptr, field_type, field_h, field_l)                      \
+	({                                                                     \
+		const field_type *_ptr = ptr;                                  \
+		BUILD_ASSERT((field_h) == (field_l));                          \
+		*((__le32 *)_ptr + (field_h) / 32) |=                          \
+			htole32(BIT((field_l) % 32));                          \
+	})
+
+#define hr_reg_enable(ptr, field) _hr_reg_enable(ptr, field)
+
+#define _hr_reg_clear(ptr, field_type, field_h, field_l)                       \
+	({                                                                     \
+		const field_type *_ptr = ptr;                                  \
+		BUILD_ASSERT((field_h) >= (field_l));                          \
+		*((__le32 *)_ptr + (field_h) / 32) &=                          \
+			~htole32(GENMASK((field_h) % 32, (field_l) % 32));     \
+	})
+
+#define hr_reg_clear(ptr, field) _hr_reg_clear(ptr, field)
+
+#define _hr_reg_write_bool(ptr, field_type, field_h, field_l, val)             \
+	({                                                                     \
+		(val) ? _hr_reg_enable(ptr, field_type, field_h, field_l) :    \
+			      _hr_reg_clear(ptr, field_type, field_h, field_l);\
+	})
+
+#define hr_reg_write_bool(ptr, field, val) _hr_reg_write_bool(ptr, field, val)
+
+#define _hr_reg_write(ptr, field_type, field_h, field_l, val)                  \
+	({                                                                     \
+		const uint32_t _val = val;                                     \
+		_hr_reg_clear(ptr, field_type, field_h, field_l);              \
+		*((__le32 *)ptr + (field_h) / 32) |= htole32(FIELD_PREP(       \
+			GENMASK((field_h) % 32, (field_l) % 32), _val));       \
+	})
+
+#define hr_reg_write(ptr, field, val) _hr_reg_write(ptr, field, val)
+
+#define _hr_reg_read(ptr, field_type, field_h, field_l)                        \
+	({                                                                     \
+		const field_type *_ptr = ptr;                                  \
+		BUILD_ASSERT((field_h) >= (field_l));                          \
+		FIELD_GET(GENMASK((field_h) % 32, (field_l) % 32),             \
+			  le32toh(*((__le32 *)_ptr + (field_h) / 32)));        \
+	})
+
+#define hr_reg_read(ptr, field) _hr_reg_read(ptr, field)
+
+#define HNS_ROCE_QP_TABLE_BITS 8
+#define HNS_ROCE_QP_TABLE_SIZE BIT(HNS_ROCE_QP_TABLE_BITS)
 
 #define HNS_ROCE_SRQ_TABLE_BITS 8
 #define HNS_ROCE_SRQ_TABLE_SIZE BIT(HNS_ROCE_SRQ_TABLE_BITS)
-
-/* operation type list */
-enum {
-	/* rq&srq operation */
-	HNS_ROCE_OPCODE_SEND_DATA_RECEIVE         = 0x06,
-	HNS_ROCE_OPCODE_RDMA_WITH_IMM_RECEIVE     = 0x07,
-};
 
 struct hns_roce_device {
 	struct verbs_device		ibv_dev;
 	int				page_size;
 	const struct hns_roce_u_hw	*u_hw;
 	int				hw_version;
+	uint8_t                         congest_cap;
 };
 
 struct hns_roce_buf {
@@ -135,7 +173,14 @@ struct hns_roce_buf {
 enum hns_roce_db_type {
 	HNS_ROCE_QP_TYPE_DB,
 	HNS_ROCE_CQ_TYPE_DB,
+	HNS_ROCE_SRQ_TYPE_DB,
 	HNS_ROCE_DB_TYPE_NUM
+};
+
+enum hns_roce_pktype {
+	HNS_ROCE_PKTYPE_ROCE_V1,
+	HNS_ROCE_PKTYPE_ROCE_V2_IPV6,
+	HNS_ROCE_PKTYPE_ROCE_V2_IPV4,
 };
 
 struct hns_roce_db_page {
@@ -143,7 +188,7 @@ struct hns_roce_db_page {
 	struct hns_roce_buf	buf;
 	unsigned int		num_db;
 	unsigned int		use_cnt;
-	bitmap			*bitmap;
+	unsigned long		*bitmap;
 };
 
 struct hns_roce_context {
@@ -151,14 +196,11 @@ struct hns_roce_context {
 	void				*uar;
 	pthread_spinlock_t		uar_lock;
 
-	void				*cq_tptr_base;
-
 	struct {
 		struct hns_roce_qp	**table;
 		int			refcnt;
 	} qp_table[HNS_ROCE_QP_TABLE_SIZE];
 	pthread_mutex_t			qp_table_mutex;
-	uint32_t			num_qps;
 	uint32_t			qp_table_shift;
 	uint32_t			qp_table_mask;
 
@@ -167,7 +209,6 @@ struct hns_roce_context {
 		int			refcnt;
 	} srq_table[HNS_ROCE_SRQ_TABLE_SIZE];
 	pthread_mutex_t			srq_table_mutex;
-	uint32_t			num_srqs;
 	uint32_t			srq_table_shift;
 	uint32_t			srq_table_mask;
 
@@ -180,6 +221,8 @@ struct hns_roce_context {
 	unsigned int			max_srq_sge;
 	int				max_cqe;
 	unsigned int			cqe_size;
+	uint32_t			config;
+	unsigned int			max_inline_data;
 };
 
 struct hns_roce_pd {
@@ -188,7 +231,7 @@ struct hns_roce_pd {
 };
 
 struct hns_roce_cq {
-	struct ibv_cq			ibv_cq;
+	struct verbs_cq			verbs_cq;
 	struct hns_roce_buf		buf;
 	pthread_spinlock_t		lock;
 	unsigned int			cqn;
@@ -199,6 +242,7 @@ struct hns_roce_cq {
 	int				arm_sn;
 	unsigned long			flags;
 	unsigned int			cqe_size;
+	struct hns_roce_v2_cqe		*cqe;
 };
 
 struct hns_roce_idx_que {
@@ -210,10 +254,21 @@ struct hns_roce_idx_que {
 	unsigned int			tail;
 };
 
+struct hns_roce_rinl_wqe {
+	struct ibv_sge			*sg_list;
+	unsigned int			sge_cnt;
+};
+
+struct hns_roce_rinl_buf {
+	struct hns_roce_rinl_wqe	*wqe_list;
+	unsigned int			wqe_cnt;
+};
+
 struct hns_roce_srq {
 	struct verbs_srq		verbs_srq;
 	struct hns_roce_idx_que		idx_que;
 	struct hns_roce_buf		wqe_buf;
+	struct hns_roce_rinl_buf	srq_rinl_buf;
 	pthread_spinlock_t		lock;
 	unsigned long			*wrid;
 	unsigned int			srqn;
@@ -221,7 +276,8 @@ struct hns_roce_srq {
 	unsigned int			max_gs;
 	unsigned int			rsv_sge;
 	unsigned int			wqe_shift;
-	unsigned int			*db;
+	unsigned int			*rdb;
+	unsigned int			cap_flags;
 	unsigned short			counter;
 };
 
@@ -233,10 +289,12 @@ struct hns_roce_wq {
 	unsigned int			head;
 	unsigned int			tail;
 	unsigned int			max_gs;
+	unsigned int			ext_sge_cnt;
 	unsigned int			rsv_sge;
 	unsigned int			wqe_shift;
 	unsigned int			shift; /* wq size is 2^shift */
 	int				offset;
+	void				*db_reg;
 };
 
 /* record the result of sge process */
@@ -252,21 +310,6 @@ struct hns_roce_sge_ex {
 	unsigned int			sge_shift;
 };
 
-struct hns_roce_rinl_sge {
-	void				*addr;
-	unsigned int			len;
-};
-
-struct hns_roce_rinl_wqe {
-	struct hns_roce_rinl_sge	*sg_list;
-	unsigned int			sge_cnt;
-};
-
-struct hns_roce_rinl_buf {
-	struct hns_roce_rinl_wqe	*wqe_list;
-	unsigned int			wqe_cnt;
-};
-
 struct hns_roce_qp {
 	struct verbs_qp			verbs_qp;
 	struct hns_roce_buf		buf;
@@ -280,13 +323,20 @@ struct hns_roce_qp {
 	struct hns_roce_sge_ex		ex_sge;
 	unsigned int			next_sge;
 	int				port_num;
-	int				sl;
+	uint8_t				sl;
 	unsigned int			qkey;
 	enum ibv_mtu			path_mtu;
 
 	struct hns_roce_rinl_buf	rq_rinl_buf;
 	unsigned long			flags;
 	int				refcnt; /* specially used for XRC */
+	void				*dwqe_page;
+
+	/* specific fields for the new post send APIs */
+	int				err;
+	void				*cur_wqe;
+	unsigned int			rb_sq_head; /* roll back sq head */
+	struct hns_roce_sge_info	sge_info;
 };
 
 struct hns_roce_av {
@@ -322,6 +372,23 @@ static inline unsigned int to_hr_hem_entries_size(int count, int buf_shift)
 	return hr_hw_page_align(count << buf_shift);
 }
 
+static inline unsigned int hr_ilog32(unsigned int count)
+{
+	return ilog32(count - 1);
+}
+
+static inline uint32_t to_hr_qp_table_index(uint32_t qpn,
+					    struct hns_roce_context *ctx)
+{
+	return (qpn >> ctx->qp_table_shift) & (HNS_ROCE_QP_TABLE_SIZE - 1);
+}
+
+static inline uint32_t to_hr_srq_table_index(uint32_t srqn,
+					     struct hns_roce_context *ctx)
+{
+	return (srqn >> ctx->srq_table_shift) & (HNS_ROCE_SRQ_TABLE_SIZE - 1);
+}
+
 static inline struct hns_roce_device *to_hr_dev(struct ibv_device *ibv_dev)
 {
 	return container_of(ibv_dev, struct hns_roce_device, ibv_dev.device);
@@ -339,7 +406,7 @@ static inline struct hns_roce_pd *to_hr_pd(struct ibv_pd *ibv_pd)
 
 static inline struct hns_roce_cq *to_hr_cq(struct ibv_cq *ibv_cq)
 {
-	return container_of(ibv_cq, struct hns_roce_cq, ibv_cq);
+	return container_of(ibv_cq, struct hns_roce_cq, verbs_cq.cq);
 }
 
 static inline struct hns_roce_srq *to_hr_srq(struct ibv_srq *ibv_srq)
@@ -380,6 +447,8 @@ int hns_roce_u_bind_mw(struct ibv_qp *qp, struct ibv_mw *mw,
 struct ibv_cq *hns_roce_u_create_cq(struct ibv_context *context, int cqe,
 				    struct ibv_comp_channel *channel,
 				    int comp_vector);
+struct ibv_cq_ex *hns_roce_u_create_cq_ex(struct ibv_context *context,
+					  struct ibv_cq_init_attr_ex *cq_attr);
 
 int hns_roce_u_modify_cq(struct ibv_cq *cq, struct ibv_modify_cq_attr *attr);
 int hns_roce_u_destroy_cq(struct ibv_cq *cq);
@@ -426,7 +495,8 @@ void hns_roce_free_qp_buf(struct hns_roce_qp *qp, struct hns_roce_context *ctx);
 
 void hns_roce_init_qp_indices(struct hns_roce_qp *qp);
 
-extern const struct hns_roce_u_hw hns_roce_u_hw_v1;
+bool is_hns_dev(struct ibv_device *device);
+
 extern const struct hns_roce_u_hw hns_roce_u_hw_v2;
 
 #endif /* _HNS_ROCE_U_H */

@@ -1,13 +1,12 @@
 Source: rdma-core
 Maintainer: Linux RDMA Mailing List <linux-rdma@vger.kernel.org>
-Uploaders: Benjamin Drung <benjamin.drung@ionos.com>,
+Uploaders: Benjamin Drung <bdrung@ubuntu.com>,
            Talat Batheesh <talatb@mellanox.com>
 Section: net
 Priority: optional
 Build-Depends: cmake (>= 2.8.11),
                cython3,
-               debhelper (>= 9),
-               debhelper (>= 9.20160709) | dh-systemd,
+               debhelper (>= 10),
                dh-python,
                dpkg-dev (>= 1.17),
                libnl-3-dev,
@@ -21,18 +20,14 @@ Build-Depends: cmake (>= 2.8.11),
                python3-docutils,
                valgrind [amd64 arm64 armhf i386 mips mips64el mipsel powerpc ppc64 ppc64el s390x]
 Rules-Requires-Root: no
-Standards-Version: 4.6.0
+Standards-Version: 4.6.2
 Vcs-Git: https://github.com/linux-rdma/rdma-core.git
 Vcs-Browser: https://github.com/linux-rdma/rdma-core
 Homepage: https://github.com/linux-rdma/rdma-core
 
 Package: rdma-core
 Architecture: linux-any
-Depends: lsb-base (>= 3.2-14~),
-         udev,
-         ${misc:Depends},
-         ${perl:Depends},
-         ${shlibs:Depends}
+Depends: udev, ${misc:Depends}, ${perl:Depends}, ${shlibs:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Recommends: dmidecode, ethtool, iproute2
 Breaks: infiniband-diags (<< 2.0.0)
@@ -52,10 +47,7 @@ Description: RDMA core userspace infrastructure and documentation
 
 Package: ibacm
 Architecture: linux-any
-Depends: lsb-base (>= 3.2-14~),
-         rdma-core (>= 15),
-         ${misc:Depends},
-         ${shlibs:Depends}
+Depends: rdma-core (>= 15), ${misc:Depends}, ${shlibs:Depends}
 Description: InfiniBand Communication Manager Assistant (ACM)
  The IB ACM implements and provides a framework for name, address, and
  route (path) resolution services over InfiniBand.
@@ -68,7 +60,7 @@ Package: ibverbs-providers
 Architecture: linux-any
 Multi-Arch: same
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Provides: libefa1, libipathverbs1, libmlx4-1, libmlx5-1, libmthca1
+Provides: libefa1, libipathverbs1, libmana1, libmlx4-1, libmlx5-1, libmthca1
 Replaces: libipathverbs1 (<< 15),
           libmlx4-1 (<< 15),
           libmlx5-1 (<< 15),
@@ -93,10 +85,12 @@ Description: User space provider drivers for libibverbs
   - bnxt_re: Broadcom NetXtreme-E RoCE HCAs
   - cxgb4: Chelsio T4 iWARP HCAs
   - efa: Amazon Elastic Fabric Adapter
+  - erdma: Alibaba Elastic RDMA (iWarp) Adapter
   - hfi1verbs: Intel Omni-Path HFI
   - hns: HiSilicon Hip06 SoC
   - ipathverbs: QLogic InfiniPath HCAs
   - irdma: Intel Ethernet Connection RDMA
+  - mana: Microsoft Azure Network Adapter
   - mlx4: Mellanox ConnectX-3 InfiniBand HCAs
   - mlx5: Mellanox Connect-IB/X-4+ InfiniBand HCAs
   - mthca: Mellanox InfiniBand HCAs
@@ -246,7 +240,7 @@ Description: Development files for the librdmacm library
  provided by libibverbs, which provides the interface used to actually
  transfer data.
  .
- This package is needed to compile programs against librdmacm1.
+ This package is needed to compile programs against librdmacm.
  It contains the header files and static libraries (optionally)
  needed for compiling.
 
@@ -311,16 +305,12 @@ Description: Examples for the librdmacm library
  provided by libibverbs, which provides the interface used to actually
  transfer data.
  .
- This package contains useful librdmacm1 example programs such as
+ This package contains useful librdmacm example programs such as
  rping and udaddy.
 
 Package: srptools
 Architecture: linux-any
-Depends: lsb-base (>= 3.2-14~),
-         rdma-core (>= 15),
-         udev,
-         ${misc:Depends},
-         ${shlibs:Depends}
+Depends: rdma-core (>= 15), udev, ${misc:Depends}, ${shlibs:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Description: Tools for Infiniband attached storage (SRP)
  In conjunction with the kernel ib_srp driver, srptools allows you to
@@ -447,5 +437,5 @@ Description: InfiniBand diagnostics library headers
  failover, and it is designed to be scalable.
  .
  This package provides development files required to build
- applications aginast the libibnetdisc5 InfiniBand diagnostic
+ applications against the libibnetdisc InfiniBand diagnostic
  libraries.

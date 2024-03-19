@@ -9,6 +9,7 @@ import random
 import errno
 import stat
 import json
+import sys
 import os
 
 from pyverbs.qp import QPCap, QPInitAttrEx, QPInitAttr, QPAttr, QP
@@ -62,6 +63,11 @@ def set_rnr_attributes(qp_attr):
     qp_attr.rnr_retry = RNR_RETRY
 
 
+def is_gid_available(gid_index):
+    if gid_index is None:
+        raise unittest.SkipTest(f'No relevant GID found')
+
+
 class PyverbsAPITestCase(unittest.TestCase):
     def __init__(self, methodName='runTest'):
         super().__init__(methodName)
@@ -71,6 +77,8 @@ class PyverbsAPITestCase(unittest.TestCase):
         self.ctx = None
         self.attr = None
         self.attr_ex = None
+        self.gid_index = 0
+        self.pre_environment = {}
 
     def setUp(self):
         """
@@ -88,6 +96,9 @@ class PyverbsAPITestCase(unittest.TestCase):
                 raise unittest.SkipTest('No IB devices found')
             self.dev_name = dev_list[0].name.decode()
 
+        if self.config['gid']:
+            self.gid_index = self.config['gid']
+
         self.create_context()
         self.attr = self.ctx.query_device()
         self.attr_ex = self.ctx.query_device_ex()
@@ -95,7 +106,23 @@ class PyverbsAPITestCase(unittest.TestCase):
     def create_context(self):
         self.ctx = d.Context(name=self.dev_name)
 
+    def set_env_variable(self, var, value):
+        """
+        Set environment variable. The current value for each variable is stored
+        and is set back at the end of the test.
+        :param var: The name of the environment variable
+        :param value: The requested new value of this environment variable
+        """
+        if var not in self.pre_environment.keys():
+            self.pre_environment[var] = os.environ.get(var)
+        os.environ[var] = value
+
     def tearDown(self):
+        for k, v in self.pre_environment.items():
+            if v is None:
+                os.environ.pop(k)
+            else:
+                os.environ[k] = v
         self.ctx.close()
 
 
@@ -136,17 +163,8 @@ class RDMATestCase(unittest.TestCase):
         self.pre_environment = {}
         self.server = None
         self.client = None
+        self.iters = 10
 
-    def set_env_variable(self, var, value):
-        """
-        Set environment variable. The current value for each variable is stored
-        and is set back at the end of the test.
-        :param var: The name of the environment variable
-        :param value: The requested new value of this environment variable
-        """
-        if var not in self.pre_environment.keys():
-            self.pre_environment[var] = os.environ.get(var)
-        os.environ[var] = value
 
     def is_eth_and_has_roce_hw_bug(self):
         """
@@ -163,10 +181,21 @@ class RDMATestCase(unittest.TestCase):
             has_roce_hw_bug(vendor_id, vendor_pid)
 
     @staticmethod
-    def get_net_name(dev):
-        out = subprocess.check_output(['ls',
-                                       '/sys/class/infiniband/{}/device/net/'
-                                      .format(dev)])
+    def get_net_name(dev, port=None):
+        if port is not None:
+            out = subprocess.check_output(['rdma', 'link',  'show', '-j'])
+            loaded_json = json.loads(out.decode())
+            for row in loaded_json:
+                try:
+                    if row['ifname'] == dev and row['port'] == port:
+                        return row['netdev']
+                except KeyError:
+                    pass
+
+        if not os.path.exists(f'/sys/class/infiniband/{dev}/device/net/'):
+            return None
+
+        out = subprocess.check_output(['ls', f'/sys/class/infiniband/{dev}/device/net/'])
         return out.decode().split('\n')[0]
 
     @staticmethod
@@ -222,6 +251,9 @@ class RDMATestCase(unittest.TestCase):
         port_attrs = ctx.query_port(port)
         if port_attrs.state != e.IBV_PORT_ACTIVE:
             return
+        if not port_attrs.gid_tbl_len:
+            self._get_ip_mac(dev, port, None)
+            return
         dev_attrs = ctx.query_device()
         vendor_id = dev_attrs.vendor_id
         vendor_pid = dev_attrs.vendor_part_id
@@ -245,10 +277,10 @@ class RDMATestCase(unittest.TestCase):
         self._add_gids_per_port(ctx, dev, self.ib_port)
 
     def _get_ip_mac(self, dev, port, idx):
-        if not os.path.exists('/sys/class/infiniband/{}/device/net/'.format(dev)):
+        net_name = self.get_net_name(dev, port)
+        if net_name is None:
             self.args.append([dev, port, idx, None, None])
             return
-        net_name = self.get_net_name(dev)
         try:
             ip_addr, mac_addr = self.get_ip_mac_address(net_name)
         except (KeyError, IndexError):
@@ -282,6 +314,45 @@ class RDMATestCase(unittest.TestCase):
             self.pre_environment[var] = os.environ.get(var)
         os.environ[var] = value
 
+    def sync_remote_attr(self):
+        """
+        Sync the MR remote attributes between the server and the client.
+        """
+        self.server.rkey = self.client.mr.rkey
+        self.server.raddr = self.client.mr.buf
+        self.client.rkey = self.server.mr.rkey
+        self.client.raddr = self.server.mr.buf
+
+    def pre_run(self):
+        """
+        Configure Resources before running traffic.
+        pre_run() must be implemented by the client and server.
+        """
+        self.client.pre_run(self.server.psns, self.server.qps_num)
+        self.server.pre_run(self.client.psns, self.client.qps_num)
+
+    def create_players(self, resource, sync_attrs=True, **resource_arg):
+        """
+        Init test resources.
+        :param resource: The RDMA resources to use.
+        :param sync_attrs: If True, sync remote attrs such as rkey and raddr
+        :param resource_arg: Dict of args that specify the resource specific
+                             attributes.
+        """
+        try:
+            self.client = resource(**self.dev_info, **resource_arg)
+            self.server = resource(**self.dev_info, **resource_arg)
+        except PyverbsRDMAError as ex:
+            if ex.error_code == errno.EOPNOTSUPP:
+                raise unittest.SkipTest(f'Create player of {resource.__name__} is not supported')
+            raise ex
+        self.pre_run()
+        if sync_attrs:
+            self.sync_remote_attr()
+        self.traffic_args = {'client': self.client, 'server': self.server,
+                             'iters': self.iters, 'gid_idx': self.gid_index,
+                             'port': self.ib_port}
+
     def tearDown(self):
         """
         Restore the previous environment variables values before ending the test.
@@ -311,14 +382,18 @@ class RDMACMBaseTest(RDMATestCase):
         if not self.ip_addr:
             raise unittest.SkipTest('Device {} doesn\'t have net interface'
                                     .format(self.dev_name))
+        is_gid_available(self.gid_index)
 
-    def two_nodes_rdmacm_traffic(self, connection_resources, test_flow,
+    def two_nodes_rdmacm_traffic(self, connection_resources, test_flow, bad_flow=False,
                                  **resource_kwargs):
         """
-        Init and manage the rdmacm test processes. If needed, terminate those
-        processes and raise an exception.
+        Init and manage the rdmacm test processes. The exit code of the
+        test processes indicates if exception was thrown.
+        {0: pass, 2: exception was thrown, 5: skip test}
+        If needed, terminate those processes and raise an exception.
         :param connection_resources: The CMConnection resources to use.
         :param test_flow: The target RDMACM flow method to run.
+        :param bad_flow: If true, traffic is expected to fail.
         :param resource_kwargs: Dict of args that specify the CMResources
                                 specific attributes. Each test case can pass
                                 here as key words the specific CMResources
@@ -340,37 +415,37 @@ class RDMACMBaseTest(RDMATestCase):
                                       'passive':False, **resource_kwargs})
         passive.start()
         active.start()
-        proc_raised_ex = False
-        for i in range(15):
-            if proc_raised_ex:
-                break
+        repeat_times=150 if not bad_flow else 3
+        proc_res = {}
+        for _ in range(repeat_times):
             for proc in [passive, active]:
-                proc.join(1)
-                if not proc.is_alive() and not self.notifier.empty():
-                    proc_raised_ex = True
-                    break
-
+                proc.join(0.1)
+                # Write the exit code of the proc.
+                if not proc.is_alive():
+                    side = 'passive' if proc == passive else 'active'
+                    if side not in proc_res.keys():
+                        proc_res[side] = proc.exitcode
         # If the processes is still alive kill them and fail the test.
         proc_killed = False
         for proc in [passive, active]:
             if proc.is_alive():
                 proc.terminate()
                 proc_killed = True
+        # Check if need to skip this test
+        for side in proc_res.keys():
+            if proc_res[side] == 5:
+                raise unittest.SkipTest(f'SkipTest occurred on {side} side')
         # Check if the test processes raise exceptions.
-        proc_res = {}
-        while not self.notifier.empty():
-            res, side = self.notifier.get()
-            proc_res[side] = res
-        for ex in proc_res.values():
-            if isinstance(ex, unittest.case.SkipTest):
-                raise(ex)
-        if proc_res:
-            print(f'Received the following exceptions: {proc_res}')
-            if isinstance(res, Exception):
-                raise(res)
-            raise PyverbsError(res)
+        res_exception = False
+        for side in proc_res:
+            if 0 < proc_res[side] < 5:
+                res_exception = True
+        if res_exception:
+            raise Exception('Exception in active/passive side occurred')
         # Raise exeption if the test proceses was terminate.
-        if proc_killed:
+        if bad_flow and not proc_killed:
+            raise Exception('Bad flow: traffic passed which is not expected')
+        if not bad_flow and proc_killed:
             raise Exception('RDMA CM test procces is stuck, kill the test')
 
     def rdmacm_traffic(self, connection_resources=None, passive=None, **kwargs):
@@ -392,17 +467,18 @@ class RDMACMBaseTest(RDMATestCase):
             player.rdmacm_traffic()
             player.disconnect()
         except Exception as ex:
-            side = 'passive' if passive else 'active'
-            self.notifier.put((ex, side))
+            self._rdmacm_exception_handler(passive, ex)
 
     def rdmacm_multicast_traffic(self, connection_resources=None, passive=None,
-                                 extended=False, **kwargs):
+                                 extended=False, leave_test=False, **kwargs):
         """
         Run RDMACM multicast traffic between two CMIDs.
         :param connection_resources: The connection resources to use.
         :param passive: Indicate if this CMID is the passive side.
         :param extended: Use exteneded multicast join request. This request
                          allows CMID to join with specific join flags.
+        :param leave_test: Perform traffic after leaving the multicast group to
+                           ensure leave works.
         :param kwargs: Arguments to be passed to the connection_resources.
         :return: None
         """
@@ -415,9 +491,10 @@ class RDMACMBaseTest(RDMATestCase):
                                      extended=extended)
             player.rdmacm_traffic(server=passive, multicast=True)
             player.leave_multicast(mc_addr=mc_addr)
+            if leave_test:
+                player.rdmacm_traffic(server=passive, multicast=True)
         except Exception as ex:
-            side = 'passive' if passive else 'active'
-            self.notifier.put((ex, side))
+            self._rdmacm_exception_handler(passive, ex)
 
     def rdmacm_remote_traffic(self, connection_resources=None, passive=None,
                               remote_op='write', **kwargs):
@@ -439,10 +516,15 @@ class RDMACMBaseTest(RDMATestCase):
             player.remote_traffic(passive=passive, remote_op=remote_op)
             player.disconnect()
         except Exception as ex:
-            while not self.notifier.empty():
-                self.notifier.get()
-            side = 'passive' if passive else 'active'
-            self.notifier.put((ex, side))
+            self._rdmacm_exception_handler(passive, ex)
+
+    @staticmethod
+    def _rdmacm_exception_handler(passive, exception):
+        if isinstance(exception, unittest.case.SkipTest):
+            sys.exit(5)
+        side = 'passive' if passive else 'active'
+        print(f'Player {side} got: {exception}')
+        sys.exit(2)
 
 
 class BaseResources(object):
@@ -469,6 +551,13 @@ class BaseResources(object):
 
     def create_pd(self):
         self.pd = PD(self.ctx)
+
+    def mem_write(self, data, size, offset=0):
+        self.mr.write(data, size, offset)
+
+    def mem_read(self, size=None, offset=0):
+        size_ = self.msg_size if size is None else size
+        return self.mr.read(size_, offset)
 
 
 class TrafficResources(BaseResources):
@@ -522,9 +611,9 @@ class TrafficResources(BaseResources):
         :return: None
         """
         self.port_attr = self.ctx.query_port(self.ib_port)
+        self.create_cq()
         if self.with_srq:
             self.create_srq()
-        self.create_cq()
         self.create_mr()
         self.create_qps()
 
@@ -589,17 +678,30 @@ class TrafficResources(BaseResources):
 
     def pre_run(self, rpsns, rqps_num):
         """
-        Modify the QP's states to RTS and fill receive queue with <num_msgs> work
-        requests.
-        This method is not implemented in this class.
-        :param rpsns: Remote PSNs
+        Configure resources before running traffic and modifies the QP to RTS
+        if required.
+        :param rpsns: Remote PSNs (packet serial numbers)
         :param rqps_num: Remote QPs Number
-        :return: None
+        """
+        self.rpsns = rpsns
+        self.rqps_num = rqps_num
+        self.to_rts()
+
+    def to_rts(self):
+        """
+        Modify the QP's states to RTS and initialize it to be ready for traffic.
+        If not required, can be "passed" but must be implemented.
         """
         raise NotImplementedError()
 
 
-class RCResources(TrafficResources):
+class RoCETrafficResources(TrafficResources):
+    def __init__(self, dev_name, ib_port, gid_index, **kwargs):
+        is_gid_available(gid_index)
+        super(RoCETrafficResources, self).__init__(dev_name, ib_port, gid_index, **kwargs)
+
+
+class RCResources(RoCETrafficResources):
 
     def to_rts(self):
         """
@@ -623,19 +725,8 @@ class RCResources(TrafficResources):
             attr.sq_psn = self.rpsns[i]
             self.qps[i].to_rts(attr)
 
-    def pre_run(self, rpsns, rqps_num):
-        """
-        Configure Resources before running traffic
-        :param rpsns: Remote PSNs (packet serial number)
-        :param rqps_num: Remote QPs number
-        :return: None
-        """
-        self.rpsns = rpsns
-        self.rqps_num = rqps_num
-        self.to_rts()
 
-
-class UDResources(TrafficResources):
+class UDResources(RoCETrafficResources):
     UD_QKEY = 0x11111111
     UD_PKEY_INDEX = 0
     GRH_SIZE = 40
@@ -654,14 +745,18 @@ class UDResources(TrafficResources):
         qp_attr.qkey = self.UD_QKEY
         qp_attr.pkey_index = self.UD_PKEY_INDEX
         for _ in range(self.qp_count):
-            qp = QP(self.pd, qp_init_attr, qp_attr)
-            self.qps.append(qp)
-            self.qps_num.append(qp.qp_num)
-            self.psns.append(random.getrandbits(24))
+            try:
+                qp = QP(self.pd, qp_init_attr, qp_attr)
+                self.qps.append(qp)
+                self.qps_num.append(qp.qp_num)
+                self.psns.append(random.getrandbits(24))
+            except PyverbsRDMAError as ex:
+                if ex.error_code == errno.EOPNOTSUPP:
+                    raise unittest.SkipTest(f'Create QP type {qp_init_attr.qp_type} is not supported')
+                raise ex
 
-    def pre_run(self, rpsns, rqps_num):
-        self.rpsns = rpsns
-        self.rqps_num = rqps_num
+    def to_rts(self):
+        pass
 
 
 class RawResources(TrafficResources):
@@ -669,8 +764,11 @@ class RawResources(TrafficResources):
         return QPInitAttr(qp_type=e.IBV_QPT_RAW_PACKET, scq=self.cq,
                           rcq=self.cq, srq=self.srq, cap=self.create_qp_cap())
 
+    def pre_run(self, rpsns=None, rqps_num=None):
+        pass
 
-class XRCResources(TrafficResources):
+
+class XRCResources(RoCETrafficResources):
     def __init__(self, dev_name, ib_port, gid_index, qp_count=2):
         self.temp_file = None
         self.xrcd_fd = -1
@@ -683,6 +781,10 @@ class XRCResources(TrafficResources):
     def close(self):
         os.close(self.xrcd_fd)
         self.temp_file.close()
+
+    @property
+    def qp(self):
+        return self.sqp_lst[0]
 
     def create_qps(self):
         """
@@ -769,8 +871,3 @@ class XRCResources(TrafficResources):
         self.create_xrcd()
         super(XRCResources, self).init_resources()
         self.create_srq()
-
-    def pre_run(self, rpsns, rqps_num):
-        self.rqps_num = rqps_num
-        self.rpsns = rpsns
-        self.to_rts()

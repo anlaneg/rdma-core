@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
-# Copyright 2020 Amazon.com, Inc. or its affiliates. All rights reserved.
+# Copyright 2020-2024 Amazon.com, Inc. or its affiliates. All rights reserved.
 """
 Test module for efa direct-verbs.
 """
@@ -17,7 +17,7 @@ from pyverbs.cq import CQ
 import pyverbs.enums as e
 from pyverbs.pd import PD
 
-from tests.efa_base import EfaAPITestCase
+from tests.efa_base import EfaAPITestCase, EfaRDMATestCase, EfaCQRes
 import tests.utils as u
 
 
@@ -107,7 +107,9 @@ class EfaQPExTest(EfaAPITestCase):
 def get_random_send_op_flags():
     send_ops_flags = [e.IBV_QP_EX_WITH_SEND,
                       e.IBV_QP_EX_WITH_SEND_WITH_IMM,
-                      e.IBV_QP_EX_WITH_RDMA_READ]
+                      e.IBV_QP_EX_WITH_RDMA_READ,
+                      e.IBV_QP_EX_WITH_RDMA_WRITE,
+                      e.IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM]
     selected = u.sample(send_ops_flags)
     selected_ops_flags = 0
     for s in selected:
@@ -125,3 +127,49 @@ def get_qp_init_attr_ex(cq, pd, attr):
     qia.recv_cq = cq
     qia.pd = pd
     return qia
+
+
+class EfaCqTest(EfaRDMATestCase):
+    def setUp(self):
+        super().setUp()
+        self.iters = 100
+        self.server = None
+        self.client = None
+
+    def create_players(self, dev_cap, wc_flags, send_ops_flags, qp_count=8):
+        super().create_players(EfaCQRes, send_ops_flags=send_ops_flags, qp_count=qp_count,
+                               requested_dev_cap=dev_cap, wc_flags=wc_flags)
+        self.server.remote_gid = self.client.ctx.query_gid(self.client.ib_port, self.client.gid_index)
+
+    def test_dv_cq_ex_with_sgid(self):
+        wc_flag = efa_e.EFADV_WC_EX_WITH_SGID
+        dev_cap = efa_e.EFADV_DEVICE_ATTR_CAPS_CQ_WITH_SGID
+        self.create_players(dev_cap, wc_flag, e.IBV_QP_EX_WITH_SEND, qp_count=1)
+        recv_wr = u.get_recv_wr(self.server)
+        self.server.qps[0].post_recv(recv_wr)
+        ah_client = u.get_global_ah(self.client, self.gid_index, self.ib_port)
+        _ , sg = u.get_send_elements(self.client, False)
+        u.send(self.client, sg, e.IBV_WR_SEND, new_send=True, qp_idx=0, ah=ah_client)
+        u.poll_cq_ex(self.client.cq)
+        u.poll_cq_ex(self.server.cq, sgid=self.server.remote_gid)
+
+
+class EfaMRTest(EfaAPITestCase):
+    """
+    Test various functionalities of the EfaMR class.
+    """
+    def test_efadv_query_mr(self):
+        with PD(self.ctx) as pd:
+            try:
+                mr = efa.EfaMR(pd, 16, e.IBV_ACCESS_LOCAL_WRITE)
+                mr_attrs = mr.query()
+                if self.config['verbosity']:
+                    print(f'\n{mr_attrs}')
+
+                assert(mr_attrs.ic_id_validity & ~(efa_e.EFADV_MR_ATTR_VALIDITY_RECV_IC_ID |
+                                                   efa_e.EFADV_MR_ATTR_VALIDITY_RDMA_READ_IC_ID |
+                                                   efa_e.EFADV_MR_ATTR_VALIDITY_RDMA_RECV_IC_ID) == 0)
+            except PyverbsRDMAError as ex:
+                if ex.error_code in [errno.EOPNOTSUPP, errno.ENOTTY, errno.EPROTONOSUPPORT]:
+                    raise unittest.SkipTest(f'Query MR not supported, errno={ex.error_code}')
+                raise ex

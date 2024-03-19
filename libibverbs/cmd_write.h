@@ -144,15 +144,14 @@ enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
  * structure based on the KABI struct linked to the enum op code.
  */
 int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
-		       struct ib_uverbs_cmd_hdr *req, size_t core_req_size,
+		       void *req, size_t core_req_size,
 		       size_t req_size, void *resp, size_t core_resp_size,
 		       size_t resp_size);
 #define execute_cmd_write(ctx, enum/*write方法*/, cmd/*request消息头*/, cmd_size/*消息长度*/, resp/*响应结果*/, resp_size/*响应buffer长度*/)           \
 	({                                                                     \
 		(cmd)->core_payload.response = ioctl_ptr_to_u64(resp);         \
 		_execute_cmd_write(                                            \
-			ctx, enum,                                             \
-			&(cmd)->hdr + check_type(cmd, IBV_ABI_REQ(enum) *),    \
+			ctx, enum, cmd + check_type(cmd, IBV_ABI_REQ(enum) *), \
 			sizeof(*(cmd)), cmd_size,                              \
 			resp + check_type(resp, IBV_KABI_RESP(enum) *),        \
 			sizeof(*(resp)), resp_size);                           \
@@ -163,10 +162,9 @@ int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
 	({                                                                     \
 		static_assert(sizeof(IBV_KABI_RESP(enum)) == 0,                \
 			      "Method has a response!");                       \
-		_execute_cmd_write(                                            \
-			ctx, enum,                                             \
-			&(cmd)->hdr + check_type(cmd, IBV_ABI_REQ(enum) *),    \
-			sizeof(*(cmd)), cmd_size, NULL, 0, 0);                 \
+		_execute_cmd_write(ctx, enum,                                  \
+				   cmd + check_type(cmd, IBV_ABI_REQ(enum) *), \
+				   sizeof(*(cmd)), cmd_size, NULL, 0, 0);      \
 	})
 
 /*
@@ -179,8 +177,7 @@ int _execute_cmd_write(struct ibv_context *ctx, unsigned int write_method,
 	({                                                                     \
 		(cmd)->core_payload.response = ioctl_ptr_to_u64(resp);         \
 		_execute_cmd_write(                                            \
-			ctx, enum,                                             \
-			&(cmd)->hdr + check_type(cmd, IBV_ABI_REQ(enum) *),    \
+			ctx, enum, cmd + check_type(cmd, IBV_ABI_REQ(enum) *), \
 			cmd_size, cmd_size,                                    \
 			resp + check_type(resp, IBV_KABI_RESP(enum) *),        \
 			resp_size, resp_size);                                 \

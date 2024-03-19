@@ -52,10 +52,12 @@
 #      Disable man pages. Allows rdma-core to be built and installed
 #      (without man pages) when neither pandoc/rst2man nor the pandoc-prebuilt
 #      directory are available.
+#   -DENABLE_LTTNG (default, no tracing support)
+#      Enable LTTng tracing.
 
 if (${CMAKE_VERSION} VERSION_LESS "3.18.1")
-	# Centos 6 support
-	cmake_minimum_required(VERSION 2.8.11 FATAL_ERROR)
+	# Centos 7 support
+	cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
 else()
 	cmake_minimum_required(VERSION 3.18.1 FATAL_ERROR)
 endif()
@@ -77,7 +79,7 @@ endif()
 set(PACKAGE_NAME "RDMA")
 
 # See Documentation/versioning.md
-set(PACKAGE_VERSION "39.0")
+set(PACKAGE_VERSION "51.0")
 # When this is changed the values in these files need changing too:
 #   debian/control
 #   debian/libibverbs1.symbols
@@ -89,32 +91,34 @@ set(IBVERBS_PROVIDER_SUFFIX "-rdmav${IBVERBS_PABI_VERSION}.so")
 
 # Override the CMAKE_INSTALL_ dirs to be under the build/ directory
 if (IN_PLACE)
-  set(CMAKE_INSTALL_SYSCONFDIR "${CMAKE_BINARY_DIR}/etc")
-  set(CMAKE_INSTALL_BINDIR "${CMAKE_BINARY_DIR}/bin")
-  set(CMAKE_INSTALL_SBINDIR "${CMAKE_BINARY_DIR}/bin")
-  set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
+  set(CMAKE_INSTALL_SYSCONFDIR "${PROJECT_BINARY_DIR}/etc")
+  set(CMAKE_INSTALL_BINDIR "${PROJECT_BINARY_DIR}/bin")
+  set(CMAKE_INSTALL_SBINDIR "${PROJECT_BINARY_DIR}/bin")
+  set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
   set(CMAKE_INSTALL_LIBDIR "lib")
   set(CMAKE_INSTALL_INCLUDEDIR "include")
 endif()
 
 include(GNUInstallDirs)
 # C include root
-set(BUILD_INCLUDE ${CMAKE_BINARY_DIR}/include)
+set(BUILD_INCLUDE ${PROJECT_BINARY_DIR}/include)
 # Executables
-set(BUILD_BIN ${CMAKE_BINARY_DIR}/bin)
+set(BUILD_BIN ${PROJECT_BINARY_DIR}/bin)
 # Libraries
-set(BUILD_LIB ${CMAKE_BINARY_DIR}/lib)
+set(BUILD_LIB ${PROJECT_BINARY_DIR}/lib)
 # Static library pre-processing
-set(BUILD_STATIC_LIB ${CMAKE_BINARY_DIR}/lib/statics)
+set(BUILD_STATIC_LIB ${PROJECT_BINARY_DIR}/lib/statics)
 # Used for IN_PLACE configuration
-set(BUILD_ETC ${CMAKE_BINARY_DIR}/etc)
-set(BUILD_PYTHON ${CMAKE_BINARY_DIR}/python)
+set(BUILD_ETC ${PROJECT_BINARY_DIR}/etc)
+set(BUILD_PYTHON ${PROJECT_BINARY_DIR}/python)
 
 set(IBDIAG_CONFIG_PATH "${CMAKE_INSTALL_FULL_SYSCONFDIR}/infiniband-diags")
 set(IBDIAG_NODENAME_MAP_PATH "${CMAKE_INSTALL_FULL_SYSCONFDIR}/rdma/ib-node-name-map")
 
 set(CMAKE_INSTALL_INITDDIR "${CMAKE_INSTALL_SYSCONFDIR}/init.d"
   CACHE PATH "Location for init.d files")
+set(CMAKE_INSTALL_MODPROBEDIR "${CMAKE_INSTALL_SYSCONFDIR}/modprobe.d/"
+  CACHE PATH "Location for modprobe.d files")
 set(CMAKE_INSTALL_SYSTEMD_SERVICEDIR "${CMAKE_INSTALL_PREFIX}/lib/systemd/system"
   CACHE PATH "Location for systemd service files")
 set(CMAKE_INSTALL_SYSTEMD_BINDIR "/lib/systemd"
@@ -169,11 +173,12 @@ set(DISTRO_FLAVOUR "None" CACHE
 
 #-------------------------
 # Load CMake components
-set(BUILDLIB "${CMAKE_SOURCE_DIR}/buildlib")
+set(BUILDLIB "${PROJECT_SOURCE_DIR}/buildlib")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${BUILDLIB}")
 
 include(CMakeParseArguments)
 include(CheckCCompilerFlag)
+include(CheckCSourceCompiles)
 include(CheckIncludeFile)
 include(CheckTypeSize)
 include(RDMA_EnableCStd)
@@ -202,19 +207,39 @@ endif()
 RDMA_BuildType()
 include_directories(${BUILD_INCLUDE})
 
-# Look for Python. We prefer some variant of python 3 if the system has it.
-FIND_PACKAGE(PythonInterp 3 QUIET)
-if (PythonInterp_FOUND)
-  # pyverbs can only use python3:
-  if (NO_PYVERBS)
-    set(CYTHON_EXECUTABLE "")
+# Working means that the compiler doesn't spew output that confuses cmake's
+# capabilitiy tests. ie cmake will test and succeed a simple program
+RDMA_Check_C_Compiles(HAVE_WORKING_WERROR "int main(int argc,const char *argv[]) { return 0; }" "")
+if (NOT HAVE_WORKING_WERROR)
+  message(FATAL_ERROR "-Werror doesn't work (compiler always creates warnings?). Werror is required for CMake.")
+endif()
+
+# Use Python modules based on CMake version for backward compatibility
+set(CYTHON_EXECUTABLE "")
+if (${CMAKE_VERSION} VERSION_LESS "3.12")
+  # Look for Python. We prefer some variant of python 3 if the system has it
+  FIND_PACKAGE(PythonInterp 3 QUIET)
+  if (PythonInterp_FOUND)
+    # pyverbs can only use python3:
+    if (NOT NO_PYVERBS)
+      FIND_PACKAGE(cython)
+    endif()
   else()
-    FIND_PACKAGE(cython)
+    # But we still must have python (be it 2) for the build process
+    FIND_PACKAGE(PythonInterp REQUIRED)
   endif()
 else()
-  # But we still must have python (be it 2) for the build process:
-  FIND_PACKAGE(PythonInterp REQUIRED)
-  set(CYTHON_EXECUTABLE "")
+  # FindPython looks preferably for Python3. If not found, version 2 is searched
+  FIND_PACKAGE(Python COMPONENTS Interpreter REQUIRED)
+  set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
+  if (NOT NO_PYVERBS AND Python_VERSION_MAJOR EQUAL 3)
+    FIND_PACKAGE(cython)
+  endif()
+endif()
+
+find_program(SYSTEMCTL_BIN systemctl HINTS "/usr/bin" "/bin")
+if (NOT SYSTEMCTL_BIN)
+  set (SYSTEMCTL_BIN "/bin/systemctl")
 endif()
 
 RDMA_CheckSparse()
@@ -226,7 +251,7 @@ RDMA_EnableCStd()
 # but turn off some that are not terribly useful for this source.
 # FIXME: I wonder how many of the signed compares are bugs?
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WARNINGS
-  "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter -Wno-stringop-overread")
+  "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WMISSING_PROTOTYPES "-Wmissing-prototypes")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WMISSING_DECLARATIONS "-Wmissing-declarations")
 RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WWRITE_STRINGS "-Wwrite-strings")
@@ -255,6 +280,16 @@ RDMA_Check_C_Compiles(HAVE_C_WORKING_MISSING_FIELD_INITIALIZERS "
 )
 if (NOT HAVE_C_WORKING_MISSING_FIELD_INITIALIZERS)
   RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WNO_MISSING_FIELD_INITIALIZERS "-Wno-missing-field-initializers")
+endif()
+
+# clang doesn't support variable size GCC extension
+RDMA_Check_C_Compiles(HAVE_C_VARIABLE_SIZE "
+ struct c { int a; int b[]; };
+ struct foo { struct c c; int b; };
+ int main(int argc,const char *argv[]) { return 0; }"
+)
+if (NOT HAVE_C_VARIABLE_SIZE)
+	RDMA_AddOptCFlag(CMAKE_C_FLAGS HAVE_C_WNO_VARIABLE_SIZE "-Wno-gnu-variable-sized-type-not-at-end")
 endif()
 
 # Check that the compiler supports -fno-strict-aliasing.
@@ -423,15 +458,22 @@ if (CYTHON_EXECUTABLE)
  # find a matching -devel installation but will happily return a non-matching
  # one too. We need them both to match exactly to guarantee cython does the
  # right thing.
-  FIND_PACKAGE(PythonLibs ${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}
-    EXACT REQUIRED)
+  if (${CMAKE_VERSION} VERSION_LESS "3.12")
+    FIND_PACKAGE(PythonLibs ${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}
+      EXACT REQUIRED)
+  else()
+    FIND_PACKAGE(Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}
+      EXACT COMPONENTS Development REQUIRED)
+    set(PYTHON_LIBRARIES ${Python_LIBRARIES})
+    set(PYTHON_INCLUDE_DIRS ${Python_INCLUDE_DIRS})
+  endif()
 
  # Get a default installation path
   execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c
-    "import sysconfig; print(sysconfig.get_path(\"platstdlib\"))"
+    "import sysconfig; print(sysconfig.get_path(\"platlib\"))"
   OUTPUT_VARIABLE py_path)
   string(STRIP ${py_path} py_path)
-  set(CMAKE_INSTALL_PYTHON_ARCH_LIB "${CMAKE_INSTALL_PREFIX}${py_path}"
+  set(CMAKE_INSTALL_PYTHON_ARCH_LIB "${py_path}"
   CACHE PATH "Location for architecture specific python libraries")
 
  # See PEP3149
@@ -502,8 +544,11 @@ check_type_size("long" SIZEOF_LONG BUILTIN_TYPES_ONLY LANGUAGE C)
 # Determine if this arch supports cache coherent DMA. This isn't really an
 # arch specific property, but for our purposes arches that do not support it
 # also do not define wmb/etc which breaks our compile.
+# As a special case s390x always has coherent DMA but needs linking for its wmb
 CHECK_C_SOURCE_COMPILES("
+#if !defined(__s390x__)
 #include \"${CMAKE_CURRENT_SOURCE_DIR}/util/udma_barrier.h\"
+#endif
  int main(int argc,const char *argv[]) {return 0;}"
   HAVE_COHERENT_DMA)
 
@@ -527,6 +572,12 @@ if (DRM_INCLUDE_DIRS)
   else()
     unset(DRM_INCLUDE_DIRS CACHE)
   endif()
+endif()
+
+# LTTng Tracer support
+if (DEFINED ENABLE_LTTNG)
+  include(FindLTTngUST REQUIRED)
+  add_definitions(-DLTTNG_ENABLED)
 endif()
 
 #-------------------------
@@ -609,12 +660,27 @@ RDMA_Check_C_Compiles(HAVE_GLIBC_FXSTAT "
  struct stat stat = {};  __fxstat(0, 0, &stat);  return 0;}")
 RDMA_DoFixup("${HAVE_GLIBC_FXSTAT}" "sys/stat.h")
 
+
+# glibc before 2.35 does not necesarily define the HWCAP_S390_PCI_MIO hardware
+# capability bit constant. Check for it and if necessary shim it in such that
+# kernel support for PCI MIO instructions can always be checked.
+RDMA_Check_C_Compiles(HAVE_GLIBC_HWCAP_S390_PCI_MIO "
+ #if defined(__s390x__)
+ #include <sys/auxv.h>
+ int main(int argc, const char *argv[]) {
+ return !!(getauxval(AT_HWCAP) & HWCAP_S390_PCI_MIO);}
+ #else
+ int main(int argc, const char *argv[]) {return 0;}
+ #endif
+ ")
+RDMA_DoFixup("${HAVE_GLIBC_HWCAP_S390_PCI_MIO}" "sys/auxv.h")
+
 #-------------------------
 # Build Prep
 # Write out a git ignore file to the build directory if it isn't the source
 # directory. For developer convenience
 if (NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
-  file(WRITE ${CMAKE_BINARY_DIR}/.gitignore "*")
+  file(WRITE ${PROJECT_BINARY_DIR}/.gitignore "*")
 endif()
 
 if ("${IOCTL_MODE}" STREQUAL "both")
@@ -651,6 +717,7 @@ configure_file("${BUILDLIB}/config.h.in" "${BUILD_INCLUDE}/config.h" ESCAPE_QUOT
 # Sub-directories
 add_subdirectory(ccan)
 add_subdirectory(util)
+add_subdirectory(util/tests)
 add_subdirectory(Documentation)
 add_subdirectory(kernel-boot)
 add_subdirectory(kernel-headers)
@@ -668,8 +735,12 @@ add_subdirectory(providers/bnxt_re)
 add_subdirectory(providers/cxgb4) # NO SPARSE
 add_subdirectory(providers/efa)
 add_subdirectory(providers/efa/man)
+add_subdirectory(providers/erdma)
 add_subdirectory(providers/hns)
+add_subdirectory(providers/hns/man)
 add_subdirectory(providers/irdma)
+add_subdirectory(providers/mana)
+add_subdirectory(providers/mana/man)
 add_subdirectory(providers/mlx4)
 add_subdirectory(providers/mlx4/man)
 add_subdirectory(providers/mlx5)
@@ -759,14 +830,14 @@ if (NO_MAN_PAGES)
   message(STATUS " man pages NOT built")
 else()
   if (NOT PANDOC_FOUND)
-    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
+    if (NOT EXISTS "${PROJECT_SOURCE_DIR}/buildlib/pandoc-prebuilt")
       message(STATUS " pandoc NOT found and NO prebuilt man pages. 'install' disabled")
     else()
       message(STATUS " pandoc NOT found (using prebuilt man pages)")
     endif()
   endif()
   if (NOT RST2MAN_FOUND)
-    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/buildlib/pandoc-prebuilt")
+    if (NOT EXISTS "${PROJECT_SOURCE_DIR}/buildlib/pandoc-prebuilt")
       message(STATUS " rst2man NOT found and NO prebuilt man pages. 'install' disabled")
     else()
       message(STATUS " rst2man NOT found (using prebuilt man pages)")
@@ -805,4 +876,7 @@ if (NOT HAVE_TARGET_SSE)
 endif()
 if (NOT DRM_INCLUDE_DIRS)
   message(STATUS " DMABUF NOT supported (disabling some tests)")
+endif()
+if (NOT HAVE_GLIBC_HWCAP_S390_PCI_MIO )
+  message(STATUS " Glibc version does not contain the HWCAP_S390_PCI_MIO bit, using shim version")
 endif()

@@ -2,6 +2,7 @@ publish_internal_headers(rdma
   rdma/bnxt_re-abi.h
   rdma/cxgb4-abi.h
   rdma/efa-abi.h
+  rdma/erdma-abi.h
   rdma/hns-abi.h
   rdma/ib_user_ioctl_cmds.h
   rdma/ib_user_ioctl_verbs.h
@@ -9,6 +10,7 @@ publish_internal_headers(rdma
   rdma/ib_user_sa.h
   rdma/ib_user_verbs.h
   rdma/irdma-abi.h
+  rdma/mana-abi.h
   rdma/mlx4-abi.h
   rdma/mlx5-abi.h
   rdma/mlx5_user_ioctl_cmds.h
@@ -49,9 +51,9 @@ function(rdma_kernel_provider_abi)
     add_custom_command(
       OUTPUT "${OHDR}"
       #生成abi结构体
-      COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/buildlib/make_abi_structs.py" "${IHDR}" "${OHDR}"
+      COMMAND "${PYTHON_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/buildlib/make_abi_structs.py" "${IHDR}" "${OHDR}"
       MAIN_DEPENDENCY "${IHDR}"
-      DEPENDS "${CMAKE_SOURCE_DIR}/buildlib/make_abi_structs.py"
+      DEPENDS "${PROJECT_SOURCE_DIR}/buildlib/make_abi_structs.py"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       COMMENT "Creating ABI wrapper ${OHDR}"
       )
@@ -66,9 +68,11 @@ rdma_kernel_provider_abi(
   rdma/bnxt_re-abi.h
   rdma/cxgb4-abi.h
   rdma/efa-abi.h
+  rdma/erdma-abi.h
   rdma/hns-abi.h
   rdma/ib_user_verbs.h
   rdma/irdma-abi.h
+  rdma/mana-abi.h
   rdma/mlx4-abi.h
   rdma/mlx5-abi.h
   rdma/mthca-abi.h

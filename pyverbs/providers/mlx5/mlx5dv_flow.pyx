@@ -42,9 +42,10 @@ cdef class Mlx5FlowMatchParameters(PyverbsObject):
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         if self.params != NULL:
-            self.logger.debug('Closing Mlx5FlowMatchParameters')
+            if self.logger:
+                self.logger.debug('Closing Mlx5FlowMatchParameters')
             free(self.params)
             self.params = NULL
 
@@ -121,9 +122,10 @@ cdef class Mlx5FlowMatcher(PyverbsObject):
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         if self.flow_matcher != NULL:
-            self.logger.debug('Closing Mlx5FlowMatcher')
+            if self.logger:
+                self.logger.debug('Closing Mlx5FlowMatcher')
             close_weakrefs([self.flows])
             rc = dv.mlx5dv_destroy_flow_matcher(self.flow_matcher)
             if rc:
@@ -223,7 +225,7 @@ cdef class Mlx5FlowActionAttr(PyverbsObject):
 
 cdef class Mlx5Flow(Flow):
     def __init__(self, Mlx5FlowMatcher matcher,
-                 Mlx5FlowMatchParameters match_value, action_attrs=[],
+                 Mlx5FlowMatchParameters match_value, action_attrs=None,
                  num_actions=0):
         """
         Initialize a Mlx5Flow object derived form Flow class.
@@ -236,6 +238,7 @@ cdef class Mlx5Flow(Flow):
         cdef void *attr_addr
 
         super(Flow, self).__init__()
+        action_attrs = [] if action_attrs is None else action_attrs
         if len(action_attrs) != num_actions:
             self.logger.warn('num_actions is different from actions array length.')
         total_size = num_actions * sizeof(dv.mlx5dv_flow_action_attr)

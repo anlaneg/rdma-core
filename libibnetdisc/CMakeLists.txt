@@ -5,7 +5,7 @@ publish_headers(infiniband
 
 rdma_library(ibnetdisc libibnetdisc.map
   # See Documentation/versioning.md
-  5 5.0.${PACKAGE_VERSION}
+  5 5.1.${PACKAGE_VERSION}
   chassis.c
   ibnetdisc.c
   ibnetdisc_cache.c
@@ -20,5 +20,6 @@ rdma_pkg_config("ibnetdisc" "libibumad libibmad" "")
 rdma_test_executable(testleaks tests/testleaks.c)
 target_link_libraries(testleaks LINK_PRIVATE
   ibmad
+  ibumad
   ibnetdisc
 )

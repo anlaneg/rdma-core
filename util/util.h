@@ -28,6 +28,7 @@ static inline bool __good_snprintf(size_t len, int rc)
 
 #define BITS_PER_LONG	   (8 * sizeof(long))
 #define BITS_PER_LONG_LONG (8 * sizeof(long long))
+#define BITS_TO_LONGS(nr)  (((nr) + BITS_PER_LONG - 1) / BITS_PER_LONG)
 
 #define GENMASK(h, l) \
 	(((~0UL) - (1UL << (l)) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
@@ -85,9 +86,18 @@ static inline unsigned long DIV_ROUND_UP(unsigned long n, unsigned long d)
 	return (n + d - 1) / d;
 }
 
+struct xorshift32_state {
+	/* The state word must be initialized to non-zero */
+	uint32_t seed;
+};
+
+uint32_t xorshift32(struct xorshift32_state *state);
+
 int set_fd_nonblock(int fd, bool nonblock);
 
 int open_cdev(const char *devname_hint, dev_t cdev);
 
 unsigned int get_random(void);
+
+bool check_env(const char *var);
 #endif

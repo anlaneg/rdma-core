@@ -5,13 +5,17 @@
 
 from posix.stdlib cimport posix_memalign as c_posix_memalign
 from libc.stdlib cimport malloc as c_malloc, free as c_free
-from posix.mman cimport mmap as c_mmap, munmap as c_munmap
+from posix.mman cimport mmap as c_mmap, munmap as c_munmap, madvise as c_madvise
+
 from libc.stdint cimport uintptr_t, uint32_t, uint64_t
+from pyverbs.base import PyverbsRDMAErrno
+from libc.string cimport memcpy
 from libc.string cimport memset
 cimport posix.mman as mm
 
 cdef extern from 'sys/mman.h':
     cdef void* MAP_FAILED
+    cdef int MADV_DONTNEED
 
 cdef extern from 'endian.h':
     unsigned long htobe32(unsigned long host_32bits)
@@ -36,6 +40,18 @@ def mmap(addr=0, length=100, prot=mm.PROT_READ | mm.PROT_WRITE,
     if <void *>ptr == MAP_FAILED:
         raise MemoryError('Failed to mmap memory')
     return <uintptr_t> ptr
+
+
+def madvise(addr, length, flags=MADV_DONTNEED):
+    """
+    Python wrapper for sys madvise function
+    :param addr: Address of the memory to be advised about
+    :param length: The length of the requested memory in bytes
+    :param flags: Specify speicific flags to this memory
+    """
+    rc = c_madvise(<void*><uintptr_t>addr, length, flags)
+    if rc:
+        raise PyverbsRDMAErrno('Failed to madvise memory')
 
 
 def munmap(addr, length):
@@ -106,6 +122,23 @@ def writebe64(addr, val, offset=0):
     (<uint64_t*><void*><uintptr_t>addr)[offset] = htobe64(val)
 
 
+def write(addr, data, length, offset=0):
+    """
+    Write user data to a given address
+    :param addr: The start of the address to write to
+    :param data: User data to write (string or bytes)
+    :param length: Length of the data to write (in bytes)
+    :param offset: Writing offset (in bytes)
+    """
+    cdef int off = offset
+    cdef void* buf = <void*><uintptr_t>addr
+    # If data is a string, cast it to bytes as Python3 doesn't
+    # automatically convert it.
+    if isinstance(data, str):
+        data = data.encode()
+    memcpy(<char*>(buf + off), <char *>data, length)
+
+
 def read32(addr, offset=0):
     """
     Read 32-bit value from address <addr> and offset <offset>
@@ -124,6 +157,19 @@ def read64(addr, offset=0):
     :return: The read value
     """
     return (<uint64_t*><uintptr_t>addr)[offset]
+
+
+def read(addr, length, offset=0):
+    """
+    Reads data from a given address
+    :param addr: The start of the address to read from
+    :param length: Length of data to read (in bytes)
+    :param offset: Reading offset (in bytes)
+    :return: The data on the buffer in the requested offset (bytes)
+    """
+    cdef char *data
+    data = <char*><uintptr_t>(addr + offset)
+    return data[:length]
 
 
 # protection bits for mmap/mprotect

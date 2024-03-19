@@ -323,6 +323,7 @@ static void remove_cma_dev(struct cma_device *cma_dev)
 		ibv_dealloc_pd(cma_dev->pd);
 	if (cma_dev->verbs)
 		ibv_close_device(cma_dev->verbs);
+	free(cma_dev->port);
 	list_del_from(&cma_dev_list, &cma_dev->entry);
 	free(cma_dev);
 }
@@ -449,7 +450,8 @@ err1:
 //打开当前系统可见ib device中首个guid相同的设备
 static bool match(struct cma_device *cma_dev, __be64 guid, uint32_t idx)
 {
-	if (idx == UCMA_INVALID_IB_INDEX)
+	if ((idx == UCMA_INVALID_IB_INDEX) ||
+	    (cma_dev->ibv_idx == UCMA_INVALID_IB_INDEX))
 		return cma_dev->guid == guid;
 
 	return cma_dev->ibv_idx == idx && cma_dev->guid == guid;

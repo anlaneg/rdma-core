@@ -12,7 +12,8 @@ from pyverbs.cq import CQ
 
 
 GRH_SIZE = 40
-qp_type_per_ps = {ce.RDMA_PS_TCP: e.IBV_QPT_RC, ce.RDMA_PS_UDP: e.IBV_QPT_UD}
+qp_type_per_ps = {ce.RDMA_PS_TCP: e.IBV_QPT_RC, ce.RDMA_PS_UDP: e.IBV_QPT_UD,
+                  ce.RDMA_PS_IPOIB : e.IBV_QPT_UD}
 
 
 class CMResources(abc.ABC):
@@ -36,6 +37,7 @@ class CMResources(abc.ABC):
         self.passive = passive
         self.with_ext_qp = kwargs.get('with_ext_qp', False)
         self.port = kwargs.get('port') if kwargs.get('port') else '7471'
+        self.ib_port = int(kwargs.get('ib_port', '1'))
         self.port_space = kwargs.get('port_space', ce.RDMA_PS_TCP)
         self.remote_operation = kwargs.get('remote_op')
         self.qp_type = qp_type_per_ps[self.port_space]
@@ -95,7 +97,7 @@ class CMResources(abc.ABC):
         return ConnParam(qp_num=qp_num)
 
     def set_ud_params(self, cm_event):
-        if self.port_space == ce.RDMA_PS_UDP:
+        if self.port_space in [ce.RDMA_PS_UDP, ce.RDMA_PS_IPOIB]:
             self.ud_params = UDParam(cm_event)
 
     def my_qp_number(self):
@@ -132,6 +134,13 @@ class CMResources(abc.ABC):
         self.qps[conn_idx].modify(attr, mask)
         attr, mask = cmid.init_qp_attr(e.IBV_QPS_RTS)
         self.qps[conn_idx].modify(attr, mask)
+
+    def mem_write(self, data, size, offset=0):
+        self.mr.write(data, size, offset)
+
+    def mem_read(self, size=None, offset=0):
+        size_ = self.msg_size if size is None else size
+        return self.mr.read(size_, offset)
 
     @abc.abstractmethod
     def create_child_id(self, cm_event=None):

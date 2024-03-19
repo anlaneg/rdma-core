@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: (GPL-2.0 OR Linux-OpenIB)
 # Copyright (c) 2019 Mellanox Technologies, Inc. All rights reserved. See COPYING file
 # Copyright (c) 2020 Kamal Heib <kamalheib1@gmail.com>, All rights reserved.  See COPYING file
+# Copyright 2020-2023 Amazon.com, Inc. or its affiliates. All rights reserved.
 
 """
 Test module for pyverbs' qp module.
@@ -14,6 +15,7 @@ from pyverbs.pyverbs_error import PyverbsRDMAError
 from pyverbs.qp import QPInitAttr, QPAttr, QP
 from tests.base import PyverbsAPITestCase
 import pyverbs.utils as pu
+import pyverbs.device as d
 import pyverbs.enums as e
 from pyverbs.pd import PD
 from pyverbs.cq import CQ
@@ -39,7 +41,7 @@ class QPTest(PyverbsAPITestCase):
                 raise unittest.SkipTest(f'Create {qp_type_str} QP {with_str} attrs is not supported')
             raise ex
 
-    def create_qp_common_test(self, qp_type, qp_state, is_ex, with_attr):
+    def create_qp_common_test(self, qp_type, qp_state, is_ex, with_attr, qp_attr_edit_callback=None):
         """
         Common function used by create QP tests.
         """
@@ -57,7 +59,11 @@ class QPTest(PyverbsAPITestCase):
                     qia.qp_type = qp_type
                     creator = pd
 
+                if qp_attr_edit_callback:
+                    qia = qp_attr_edit_callback(qia)
+
                 qp = self.create_qp(creator, qia, is_ex, with_attr, self.ib_port)
+
                 qp_type_str = pu.qp_type_to_str(qp_type)
                 qp_state_str = pu.qp_state_to_str(qp_state)
                 assert qp.qp_state == qp_state , f'{qp_type_str} QP should have been in {qp_state_str}'
@@ -169,13 +175,78 @@ class QPTest(PyverbsAPITestCase):
         """
         self.create_qp_common_test(e.IBV_QPT_RAW_PACKET, e.IBV_QPS_RTS, True, True)
 
+    def qp_attr_edit_max_send_wr_callback(self, qp_init_attr):
+        qp_init_attr.max_send_wr = 0xffffffff # max_uint32
+        return qp_init_attr
+
+    def qp_attr_edit_max_send_sge_callback(self, qp_init_attr):
+        qp_init_attr.max_send_sge = 0xffff # max_uint16
+        return qp_init_attr
+
+    def qp_attr_edit_max_recv_sge_callback(self, qp_init_attr):
+        qp_init_attr.max_recv_sge = 0xffff # max_uint16
+        return qp_init_attr
+
+    def qp_attr_edit_max_recv_wr_callback(self, qp_init_attr):
+        qp_init_attr.max_recv_wr = 0xffffffff # max_uint32
+        return qp_init_attr
+
+    def test_create_raw_qp_ex_with_illegal_caps_max_send_wr(self):
+        """
+        Test Raw Packet QP creation via ibv_create_qp_ex with a QPAttr object with illegal max_send_wr.
+        """
+        dev_attr = self.ctx.query_device()
+        if dev_attr.max_qp_wr < 0xffffffff:
+            with self.assertRaises(PyverbsRDMAError) as ex:
+                self.create_qp_common_test(e.IBV_QPT_UD, e.IBV_QPS_RTS, False, True,
+                                        qp_attr_edit_callback=self.qp_attr_edit_max_send_wr_callback)
+            self.assertNotEqual(ex.exception.error_code, 0)
+
+    def test_create_raw_qp_ex_with_illegal_caps_max_send_sge(self):
+        """
+        Test Raw Packet QP creation via ibv_create_qp_ex with a QPAttr object with illegal max_send_sge.
+        """
+        dev_attr = self.ctx.query_device()
+        if dev_attr.max_sge < 0xffff:
+            with self.assertRaises(PyverbsRDMAError) as ex:
+                self.create_qp_common_test(e.IBV_QPT_UD, e.IBV_QPS_RTS, False, True,
+                                        qp_attr_edit_callback=self.qp_attr_edit_max_send_sge_callback)
+            self.assertNotEqual(ex.exception.error_code, 0)
+
+    def test_create_raw_qp_ex_with_illegal_caps_max_recv_sge(self):
+        """
+        Test Raw Packet QP creation via ibv_create_qp_ex with a QPAttr object with illegal max_recv_sge.
+        """
+        dev_attr = self.ctx.query_device()
+        if dev_attr.max_sge < 0xffff:
+            with self.assertRaises(PyverbsRDMAError) as ex:
+                self.create_qp_common_test(e.IBV_QPT_UD, e.IBV_QPS_RTS, False, True,
+                                        qp_attr_edit_callback=self.qp_attr_edit_max_recv_sge_callback)
+            self.assertNotEqual(ex.exception.error_code, 0)
+
+    def test_create_raw_qp_ex_with_illegal_caps_max_recv_wr(self):
+        """
+        Test Raw Packet QP creation via ibv_create_qp_ex with a QPAttr object with illegal max_recv_wr.
+        """
+        dev_attr = self.ctx.query_device()
+        if dev_attr.max_qp_wr < 0xffffffff:
+            with self.assertRaises(PyverbsRDMAError) as ex:
+                self.create_qp_common_test(e.IBV_QPT_UD, e.IBV_QPS_RTS, False, True,
+                                        qp_attr_edit_callback=self.qp_attr_edit_max_recv_wr_callback)
+            self.assertNotEqual(ex.exception.error_code, 0)
+
     def verify_qp_attrs(self, orig_cap, state, init_attr, attr):
-        self.assertEqual(state, attr.cur_qp_state)
+        self.assertEqual(state, attr.qp_state)
         self.assertLessEqual(orig_cap.max_send_wr, init_attr.cap.max_send_wr)
         self.assertLessEqual(orig_cap.max_recv_wr, init_attr.cap.max_recv_wr)
         self.assertLessEqual(orig_cap.max_send_sge, init_attr.cap.max_send_sge)
         self.assertLessEqual(orig_cap.max_recv_sge, init_attr.cap.max_recv_sge)
         self.assertLessEqual(orig_cap.max_inline_data, init_attr.cap.max_inline_data)
+
+    def get_node_type(self):
+        for dev in d.get_device_list():
+            if dev.name.decode() == self.ctx.name:
+                return dev.node_type
 
     def query_qp_common_test(self, qp_type):
         with PD(self.ctx) as pd:
@@ -190,14 +261,20 @@ class QPTest(PyverbsAPITestCase):
                 caps = qia.cap
                 qp = self.create_qp(pd, qia, False, False, self.ib_port)
                 qp_attr, qp_init_attr = qp.query(e.IBV_QP_STATE | e.IBV_QP_CAP)
-                self.verify_qp_attrs(caps, e.IBV_QPS_RESET, qp_init_attr, qp_attr)
+                if self.get_node_type() == e.IBV_NODE_RNIC:
+                    self.verify_qp_attrs(caps, e.IBV_QPS_INIT, qp_init_attr, qp_attr)
+                else:
+                    self.verify_qp_attrs(caps, e.IBV_QPS_RESET, qp_init_attr, qp_attr)
 
                 # Extended QP
                 qia = get_qp_init_attr_ex(cq, pd, self.attr, self.attr_ex, qp_type)
                 caps = qia.cap # Save them to verify values later
                 qp = self.create_qp(self.ctx, qia, True, False, self.ib_port)
                 qp_attr, qp_init_attr = qp.query(e.IBV_QP_STATE | e.IBV_QP_CAP)
-                self.verify_qp_attrs(caps, e.IBV_QPS_RESET, qp_init_attr, qp_attr)
+                if self.get_node_type() == e.IBV_NODE_RNIC:
+                    self.verify_qp_attrs(caps, e.IBV_QPS_INIT, qp_init_attr, qp_attr)
+                else:
+                    self.verify_qp_attrs(caps, e.IBV_QPS_RESET, qp_init_attr, qp_attr)
 
     def test_query_rc_qp(self):
         """
@@ -239,8 +316,14 @@ class QPTest(PyverbsAPITestCase):
                 qia.qp_type = e.IBV_QPT_UD
                 qp = self.create_qp(pd, qia, False, True, self.ib_port)
                 is_data_in_order = qp.query_data_in_order(e.IBV_WR_SEND)
-                self.assertIn(is_data_in_order, [0, 1], 'Data in order result is not valid')
+                self.assertIn(is_data_in_order, [0, 1], 'Data in order result with flags=0 is not valid')
+                is_data_in_order = qp.query_data_in_order(e.IBV_WR_SEND,e.IBV_QUERY_QP_DATA_IN_ORDER_RETURN_CAPS)
+                valid_results = [0,
+                                e.IBV_QUERY_QP_DATA_IN_ORDER_ALIGNED_128_BYTES,
+                                e.IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG | e.IBV_QUERY_QP_DATA_IN_ORDER_ALIGNED_128_BYTES]
+                self.assertIn(is_data_in_order, valid_results, 'Data in order result with flags=1 is not valid')
 
+    @u.skip_unsupported
     def test_modify_ud_qp(self):
         """
         Queries a UD QP after calling modify(). Verifies that its properties are

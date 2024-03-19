@@ -37,7 +37,7 @@
 #include <pthread.h>
 
 #include <infiniband/driver.h>
-#include <ccan/bitmap.h>
+#include <util/bitmap.h>
 
 #define INIT		__attribute__((constructor))
 
@@ -70,8 +70,8 @@ void load_drivers(void);
 #endif
 
 struct verbs_ex_private {
-    /*指明这些命令是否不支持ioctl（执行过程中回调返回unsupport,则打上此标记）*/
-	BITMAP_DECLARE(unsupported_ioctls, VERBS_OPS_NUM);
+    	/*指明这些命令是否不支持ioctl（执行过程中回调返回unsupport,则打上此标记）*/
+	BMP_DECLARE(unsupported_ioctls, VERBS_OPS_NUM);
 	/*driver类型*/
 	uint32_t driver_id;
 	/*是否使用ioctl来替代write方法*/

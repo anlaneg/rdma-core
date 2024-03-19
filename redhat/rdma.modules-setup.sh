@@ -1,7 +1,7 @@
 #!/bin/bash
 
 check() {
-	[ -n "$hostonly" -a -c /sys/class/infiniband_verbs/uverbs0 ] && return 0
+	[ -n "$hostonly" -a -d /sys/class/infiniband_verbs/uverbs0 ] && return 0
 	[ -n "$hostonly" ] && return 255
 	return 0
 }
@@ -29,5 +29,5 @@ install() {
 
 installkernel() {
 	hostonly='' instmods =drivers/infiniband =drivers/net/ethernet/mellanox =drivers/net/ethernet/chelsio =drivers/net/ethernet/cisco =drivers/net/ethernet/emulex =drivers/target
-	hostonly='' instmods crc-t10dif crct10dif_common
+	hostonly='' instmods crc-t10dif crct10dif_common xprtrdma svcrdma
 }

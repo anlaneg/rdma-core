@@ -22,6 +22,7 @@ cdef class QPInitAttrEx(PyverbsObject):
     cdef object _pd
     cdef object xrcd
     cdef object srq
+    cdef object ind_table
 
 cdef class QPAttr(PyverbsObject):
     cdef v.ibv_qp_attr attr
@@ -33,7 +34,7 @@ cdef class QP(PyverbsCM):
     cdef object pd
     cdef object context
     cdef object xrcd
-    cdef close(self)
+    cpdef close(self)
     cdef update_cqs(self, init_attr)
     cdef object scq
     cdef object rcq
@@ -48,6 +49,7 @@ cdef class DataBuffer(PyverbsCM):
 
 cdef class QPEx(QP):
     cdef v.ibv_qp_ex *qp_ex
+    cdef object ind_table
 
 cdef class ECE(PyverbsCM):
     cdef v.ibv_ece ece

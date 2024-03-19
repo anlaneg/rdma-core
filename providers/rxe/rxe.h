@@ -68,6 +68,7 @@ struct rxe_cq {
 struct rxe_ah {
 	struct ibv_ah		ibv_ah;
 	struct rxe_av		av;
+	int			ah_num;
 };
 
 struct rxe_wq {
@@ -89,18 +90,14 @@ struct rxe_qp {
 	struct mminfo		sq_mmap_info;
 	/*发送队列*/
 	struct rxe_wq		sq;
-	/*全局发送用编号*/
-	unsigned int		ssn;
 
 	/* new API support */
 	uint32_t		cur_index;
 	int			err;
 };
 
-#define qp_type(qp)		((qp)->vqp.qp.qp_type)
-
 struct rxe_srq {
-	struct ibv_srq		ibv_srq;
+	struct verbs_srq	vsrq;
 	struct mminfo		mmap_info;
 	struct rxe_wq		rq;
 	uint32_t		srq_num;
@@ -130,12 +127,17 @@ static inline struct rxe_qp *to_rqp(struct ibv_qp *ibqp)
 
 static inline struct rxe_srq *to_rsrq(struct ibv_srq *ibsrq)
 {
-	return to_rxxx(srq, srq);
+	return container_of(ibsrq, struct rxe_srq, vsrq.srq);
 }
 
 static inline struct rxe_ah *to_rah(struct ibv_ah *ibah)
 {
 	return to_rxxx(ah, ah);
+}
+
+static inline enum ibv_qp_type qp_type(struct rxe_qp *qp)
+{
+	return qp->vqp.qp.qp_type;
 }
 
 #endif /* RXE_H */

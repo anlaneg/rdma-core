@@ -8,11 +8,15 @@ rdma_man_pages(
   mlx5dv_create_flow_matcher.3.md
   mlx5dv_create_mkey.3.md
   mlx5dv_create_qp.3.md
+  mlx5dv_create_steering_anchor.3.md
   mlx5dv_crypto_login.3.md
+  mlx5dv_crypto_login_create.3.md
   mlx5dv_dci_stream_id_reset.3.md
   mlx5dv_dek_create.3.md
+  mlx5dv_devx_alloc_msi_vector.3.md
   mlx5dv_devx_alloc_uar.3.md
   mlx5dv_devx_create_cmd_comp.3.md
+  mlx5dv_devx_create_eq.3.md
   mlx5dv_devx_create_event_channel.3.md
   mlx5dv_devx_get_event.3.md
   mlx5dv_devx_obj_create.3.md
@@ -53,12 +57,17 @@ rdma_man_pages(
 rdma_alias_man_pages(
  mlx5dv_alloc_var.3 mlx5dv_free_var.3
  mlx5dv_create_mkey.3 mlx5dv_destroy_mkey.3
+ mlx5dv_create_steering_anchor.3 mlx5dv_destroy_steering_anchor.3
  mlx5dv_crypto_login.3 mlx5dv_crypto_login_query_state.3
  mlx5dv_crypto_login.3 mlx5dv_crypto_logout.3
+ mlx5dv_crypto_login_create.3 mlx5dv_crypto_login_destroy.3
+ mlx5dv_crypto_login_create.3 mlx5dv_crypto_login_query.3
  mlx5dv_dek_create.3 mlx5dv_dek_query.3
  mlx5dv_dek_create.3 mlx5dv_dek_destroy.3
+ mlx5dv_devx_alloc_msi_vector.3 mlx5dv_devx_free_msi_vector.3
  mlx5dv_devx_alloc_uar.3 mlx5dv_devx_free_uar.3
  mlx5dv_devx_create_cmd_comp.3 mlx5dv_devx_destroy_cmd_comp.3
+ mlx5dv_devx_create_eq.3 mlx5dv_devx_destroy_eq.3
  mlx5dv_devx_create_event_channel.3 mlx5dv_devx_destroy_event_channel.3
  mlx5dv_devx_create_cmd_comp.3 mlx5dv_devx_get_async_cmd_comp.3
  mlx5dv_devx_obj_create.3 mlx5dv_devx_general_cmd.3
@@ -80,6 +89,7 @@ rdma_alias_man_pages(
  mlx5dv_devx_umem_reg.3 mlx5dv_devx_umem_reg_ex.3
  mlx5dv_dr_flow.3 mlx5dv_dr_action_create_aso.3
  mlx5dv_dr_flow.3 mlx5dv_dr_action_create_dest_table.3
+ mlx5dv_dr_flow.3 mlx5dv_dr_action_create_dest_root_table.3
  mlx5dv_dr_flow.3 mlx5dv_dr_action_create_dest_ib_port.3
  mlx5dv_dr_flow.3 mlx5dv_dr_action_create_dest_ibv_qp.3
  mlx5dv_dr_flow.3 mlx5dv_dr_action_create_dest_devx_tir.3

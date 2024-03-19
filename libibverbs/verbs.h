@@ -43,7 +43,6 @@
 #include <errno.h>
 #include <string.h>
 #include <linux/types.h>
-#include <stdint.h>
 #include <sys/types.h>
 #include <infiniband/verbs_api.h>
 
@@ -420,6 +419,8 @@ enum ibv_port_cap_flags2 {
 	IBV_PORT_SWITCH_PORT_STATE_TABLE_SUP	= 1 << 3,
 	IBV_PORT_LINK_WIDTH_2X_SUP		= 1 << 4,
 	IBV_PORT_LINK_SPEED_HDR_SUP		= 1 << 5,
+	IBV_PORT_LINK_SPEED_NDR_SUP		= 1 << 10,
+	IBV_PORT_LINK_SPEED_XDR_SUP		= 1 << 12,
 };
 
 struct ibv_port_attr {
@@ -445,6 +446,7 @@ struct ibv_port_attr {
 	uint8_t			link_layer;
 	uint8_t			flags;
 	uint16_t		port_cap_flags2;
+	uint32_t		active_speed_ex;
 };
 
 enum ibv_event_type {
@@ -518,6 +520,8 @@ enum ibv_wc_opcode {
 	IBV_WC_BIND_MW,
 	IBV_WC_LOCAL_INV,
 	IBV_WC_TSO,
+	IBV_WC_FLUSH,
+	IBV_WC_ATOMIC_WRITE = 9,
 /*
  * Set value of IBV_WC_RECV so consumers can test if a completion is a
  * receive by testing (opcode & IBV_WC_RECV).
@@ -616,6 +620,8 @@ enum ibv_access_flags {
 	/*需要在demand模式下运行*/
 	IBV_ACCESS_ON_DEMAND		= (1<<6),
 	IBV_ACCESS_HUGETLB		= (1<<7),
+	IBV_ACCESS_FLUSH_GLOBAL		= (1 << 8),
+	IBV_ACCESS_FLUSH_PERSISTENT	= (1 << 9),
 	IBV_ACCESS_RELAXED_ORDERING	= IBV_ACCESS_OPTIONAL_FIRST,
 };
 
@@ -734,6 +740,8 @@ enum ibv_rate {
 	IBV_RATE_50_GBPS  = 20,
 	IBV_RATE_400_GBPS = 21,
 	IBV_RATE_600_GBPS = 22,
+	IBV_RATE_800_GBPS = 23,
+	IBV_RATE_1200_GBPS = 24,
 };
 
 /**
@@ -761,7 +769,7 @@ int __attribute_const ibv_rate_to_mbps(enum ibv_rate rate);
  * mbps_to_ibv_rate - Convert a Mbit/sec value to an IB rate enum.
  * @mbps: value to convert.
  */
-enum ibv_rate __attribute_const mbps_to_ibv_rate(int mbps) __attribute_const;
+enum ibv_rate __attribute_const mbps_to_ibv_rate(int mbps);
 
 struct ibv_ah_attr {
 	struct ibv_global_route	grh;
@@ -964,6 +972,8 @@ enum ibv_qp_create_send_ops_flags {
 	IBV_QP_EX_WITH_BIND_MW			= 1 << 8,
 	IBV_QP_EX_WITH_SEND_WITH_INV		= 1 << 9,
 	IBV_QP_EX_WITH_TSO			= 1 << 10,
+	IBV_QP_EX_WITH_FLUSH			= 1 << 11,
+	IBV_QP_EX_WITH_ATOMIC_WRITE		= 1 << 12,
 };
 
 struct ibv_rx_hash_conf {
@@ -1048,6 +1058,15 @@ enum ibv_qp_attr_mask {
 	IBV_QP_RATE_LIMIT		= 1 << 25,
 };
 
+enum ibv_query_qp_data_in_order_flags {
+	IBV_QUERY_QP_DATA_IN_ORDER_RETURN_CAPS = 1 << 0,
+};
+
+enum ibv_query_qp_data_in_order_caps {
+	IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG = 1 << 0,
+	IBV_QUERY_QP_DATA_IN_ORDER_ALIGNED_128_BYTES = 1 << 1,
+};
+
 enum ibv_qp_state {
 	IBV_QPS_RESET,
 	IBV_QPS_INIT,
@@ -1114,7 +1133,11 @@ enum ibv_wr_opcode {
 	IBV_WR_SEND_WITH_INV,
 	IBV_WR_TSO,
 	IBV_WR_DRIVER1,
+	IBV_WR_FLUSH = 14,
+	IBV_WR_ATOMIC_WRITE = 15,
 };
+
+const char *ibv_wr_opcode_str(enum ibv_wr_opcode opcode);
 
 enum ibv_send_flags {
 	IBV_SEND_FENCE		= 1 << 0,
@@ -1123,6 +1146,16 @@ enum ibv_send_flags {
 	/*inline式发送*/
 	IBV_SEND_INLINE		= 1 << 3,
 	IBV_SEND_IP_CSUM	= 1 << 4
+};
+
+enum ibv_placement_type {
+	IBV_FLUSH_GLOBAL = 1U << 0,
+	IBV_FLUSH_PERSISTENT = 1U << 1,
+};
+
+enum ibv_selectivity_level {
+	IBV_FLUSH_RANGE = 0,
+	IBV_FLUSH_MR,
 };
 
 struct ibv_data_buf {
@@ -1336,6 +1369,12 @@ struct ibv_qp_ex {
 	void (*wr_start)(struct ibv_qp_ex *qp);
 	int (*wr_complete)(struct ibv_qp_ex *qp);
 	void (*wr_abort)(struct ibv_qp_ex *qp);
+
+	void (*wr_atomic_write)(struct ibv_qp_ex *qp, uint32_t rkey,
+				uint64_t remote_addr, const void *atomic_wr);
+	void (*wr_flush)(struct ibv_qp_ex *qp, uint32_t rkey,
+			 uint64_t remote_addr, size_t len, uint8_t type,
+			 uint8_t level);
 };
 
 struct ibv_qp_ex *ibv_qp_to_qp_ex(struct ibv_qp *qp);
@@ -1376,6 +1415,13 @@ static inline void ibv_wr_rdma_write(struct ibv_qp_ex *qp, uint32_t rkey,
 				     uint64_t remote_addr)
 {
 	qp->wr_rdma_write(qp, rkey, remote_addr);
+}
+
+static inline void ibv_wr_flush(struct ibv_qp_ex *qp, uint32_t rkey,
+				uint64_t remote_addr, size_t len, uint8_t type,
+				uint8_t level)
+{
+	qp->wr_flush(qp, rkey, remote_addr, len, type, level);
 }
 
 static inline void ibv_wr_rdma_write_imm(struct ibv_qp_ex *qp, uint32_t rkey,
@@ -1456,6 +1502,12 @@ static inline int ibv_wr_complete(struct ibv_qp_ex *qp)
 static inline void ibv_wr_abort(struct ibv_qp_ex *qp)
 {
 	qp->wr_abort(qp);
+}
+
+static inline void ibv_wr_atomic_write(struct ibv_qp_ex *qp, uint32_t rkey,
+				       uint64_t remote_addr, const void *atomic_wr)
+{
+	qp->wr_atomic_write(qp, rkey, remote_addr, atomic_wr);
 }
 
 struct ibv_ece {
@@ -2240,7 +2292,7 @@ struct ibv_device **ibv_get_device_list(int *num_devices);
  */
 #ifdef RDMA_STATIC_PROVIDERS
 #define _RDMA_STATIC_PREFIX_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11,     \
-			     _12, _13, _14, _15, _16, _17, ...)                \
+			     _12, _13, _14, _15, _16, _17, _18, _19, ...)      \
 	&verbs_provider_##_1, &verbs_provider_##_2, &verbs_provider_##_3,      \
 		&verbs_provider_##_4, &verbs_provider_##_5,                    \
 		&verbs_provider_##_6, &verbs_provider_##_7,                    \
@@ -2248,20 +2300,23 @@ struct ibv_device **ibv_get_device_list(int *num_devices);
 		&verbs_provider_##_10, &verbs_provider_##_11,                  \
 		&verbs_provider_##_12, &verbs_provider_##_13,                  \
 		&verbs_provider_##_14, &verbs_provider_##_15,                  \
-		&verbs_provider_##_16, &verbs_provider_##_17
+		&verbs_provider_##_16, &verbs_provider_##_17,                  \
+		&verbs_provider_##_18, &verbs_provider_##_19
 #define _RDMA_STATIC_PREFIX(arg)                                               \
 	_RDMA_STATIC_PREFIX_(arg, none, none, none, none, none, none, none,    \
 			     none, none, none, none, none, none, none, none,   \
-			     none)
+			     none, none, none)
 
 struct verbs_devices_ops;
 extern const struct verbs_device_ops verbs_provider_bnxt_re;
 extern const struct verbs_device_ops verbs_provider_cxgb4;
 extern const struct verbs_device_ops verbs_provider_efa;
+extern const struct verbs_device_ops verbs_provider_erdma;
 extern const struct verbs_device_ops verbs_provider_hfi1verbs;
 extern const struct verbs_device_ops verbs_provider_hns;
 extern const struct verbs_device_ops verbs_provider_ipathverbs;
 extern const struct verbs_device_ops verbs_provider_irdma;
+extern const struct verbs_device_ops verbs_provider_mana;
 extern const struct verbs_device_ops verbs_provider_mlx4;
 extern const struct verbs_device_ops verbs_provider_mlx5;
 extern const struct verbs_device_ops verbs_provider_mthca;
@@ -2579,7 +2634,7 @@ __ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsigned int access,
 	     int is_access_const)
 {
 	if (is_access_const && (access & IBV_ACCESS_OPTIONAL_RANGE) == 0)
-		return ibv_reg_mr(pd, addr, length, access);
+		return ibv_reg_mr(pd, addr, length, (int)access);
 	else
 		return ibv_reg_mr_iova2(pd, addr, length, (uintptr_t)addr,
 					access);
@@ -2588,7 +2643,7 @@ __ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsigned int access,
 #define ibv_reg_mr(pd, addr, length, access)                                   \
 	__ibv_reg_mr(pd, addr, length, access,                                 \
 		     __builtin_constant_p(				       \
-			     ((access) & IBV_ACCESS_OPTIONAL_RANGE) == 0))
+			     ((int)(access) & IBV_ACCESS_OPTIONAL_RANGE) == 0))
 
 /**
  * ibv_reg_mr_iova - Register a memory region with a virtual offset
@@ -2602,7 +2657,7 @@ __ibv_reg_mr_iova(struct ibv_pd *pd, void *addr, size_t length, uint64_t iova,
 		  unsigned int access, int is_access_const)
 {
 	if (is_access_const && (access & IBV_ACCESS_OPTIONAL_RANGE) == 0)
-		return ibv_reg_mr_iova(pd, addr, length, iova, access);
+		return ibv_reg_mr_iova(pd, addr, length, iova, (int)access);
 	else
 		return ibv_reg_mr_iova2(pd, addr, length, iova, access);
 }
@@ -2613,7 +2668,7 @@ __ibv_reg_mr_iova(struct ibv_pd *pd, void *addr, size_t length, uint64_t iova,
 				  ((access) & IBV_ACCESS_OPTIONAL_RANGE) == 0))
 
 /**
- * ibv_reg_dmabuf_mr - Register a dambuf-based memory region
+ * ibv_reg_dmabuf_mr - Register a dmabuf-based memory region
  */
 struct ibv_mr *ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length,
 				 uint64_t iova, int fd, int access);
@@ -2685,8 +2740,16 @@ static inline uint32_t ibv_inc_rkey(uint32_t rkey)
 static inline int ibv_bind_mw(struct ibv_qp *qp, struct ibv_mw *mw,
 			      struct ibv_mw_bind *mw_bind)
 {
+	struct ibv_mw_bind_info *bind_info = &mw_bind->bind_info;
+
 	if (mw->type != IBV_MW_TYPE_1)
 		return EINVAL;
+
+	if (!bind_info->mr && (bind_info->addr || bind_info->length))
+		return EINVAL;
+
+	if (bind_info->mr && (mw->pd != bind_info->mr->pd))
+		return EPERM;
 
 	return mw->context->ops.bind_mw(qp, mw, mw_bind);
 }
@@ -2960,7 +3023,7 @@ ibv_create_srq_ex(struct ibv_context *context,
 	struct verbs_context *vctx;
 	uint32_t mask = srq_init_attr_ex->comp_mask;
 
-	if (!(mask & ~(IBV_SRQ_INIT_ATTR_PD | IBV_SRQ_INIT_ATTR_TYPE)) &&
+	if (!(mask & ~(uint32_t)(IBV_SRQ_INIT_ATTR_PD | IBV_SRQ_INIT_ATTR_TYPE)) &&
 	    (mask & IBV_SRQ_INIT_ATTR_PD) &&
 	    (!(mask & IBV_SRQ_INIT_ATTR_TYPE) ||
 	     (srq_init_attr_ex->srq_type == IBV_SRQT_BASIC)))
@@ -3211,11 +3274,15 @@ ibv_modify_qp_rate_limit(struct ibv_qp *qp,
  *   written in-order.
  * @qp: The QP to query.
  * @op: Operation type.
- * @flags: Extra field for future input. For now must be 0.
+ * @flags: Flags are used to select a query type.
+ * For IBV_QUERY_QP_DATA_IN_ORDER_RETURN_CAPS, the function will return a
+ * capabilities vector. If 0, will query for IBV_QUERY_QP_DATA_IN_ORDER_WHOLE_MSG
+ * support and return 0/1 result.
  *
  * Return Value
- * ibv_query_qp_data_in_order() returns 1 if the data is guaranteed to be
- *   written in-order, 0 otherwise.
+ * ibv_query_qp_data_in_order() return value is determined by flags.
+ * For each capability bit, 1 is returned if the data is guaranteed to be
+ * written in-order for selected operation and type, 0 otherwise.
  */
 int ibv_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 			       uint32_t flags);

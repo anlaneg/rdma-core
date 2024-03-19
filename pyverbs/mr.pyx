@@ -124,7 +124,7 @@ cdef class MR(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         """
         Closes the underlying C object of the MR and frees the memory allocated.
         MR may be deleted directly or indirectly by closing its context, which
@@ -135,7 +135,8 @@ cdef class MR(PyverbsCM):
         :return: None
         """
         if self.mr != NULL:
-            self.logger.debug('Closing MR')
+            if self.logger:
+                self.logger.debug('Closing MR')
             if not self._is_imported:
                 rc = v.ibv_dereg_mr(self.mr)
                 if rc != 0:
@@ -168,7 +169,7 @@ cdef class MR(PyverbsCM):
             data = data.encode()
         memcpy(<char*>(self.buf + off), <char *>data, length)
 
-    cdef read(self, length, offset):
+    cpdef read(self, length, offset):
         """
         Reads data from the MR's buffer
         :param length: Length of data to read
@@ -239,7 +240,7 @@ cdef class MR(PyverbsCM):
 
     def __str__(self):
         print_format = '{:22}: {:<20}\n'
-        return 'MR\n' + \
+        return 'MR:\n' + \
                print_format.format('lkey', self.lkey) + \
                print_format.format('rkey', self.rkey) + \
                print_format.format('length', self.length) + \
@@ -311,16 +312,17 @@ cdef class MW(PyverbsCM):
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         """
-        Closes the underlaying C MW object.
+        Closes the underlying C MW object.
         MW may be deleted directly or by deleting its PD, which leaves the
-        Python object without the underlaying MW.
-        Need to check that the underlaying MW wasn't dealloced before.
+        Python object without the underlying MW.
+        Need to check that the underlying MW wasn't dealloced before.
         :return: None
         """
         if self.mw is not NULL:
-            self.logger.debug('Closing MW')
+            if self.logger:
+                self.logger.debug('Closing MW')
             rc = v.ibv_dealloc_mw(self.mw)
             if rc != 0:
                 raise PyverbsRDMAError('Failed to dealloc MW', rc)
@@ -381,11 +383,11 @@ cdef class DMMR(MR):
             data = data.encode()
         return self.dm.copy_to_dm(offset, data, length)
 
-    cdef read(self, length, offset):
+    cpdef read(self, length, offset):
         return self.dm.copy_from_dm(offset, length)
 
 cdef class DmaBufMR(MR):
-    def __init__(self, PD pd not None, length, access, DmaBuf dmabuf=None,
+    def __init__(self, PD pd not None, length, access, dmabuf=None,
                  offset=0, gpu=0, gtt=0):
         """
         Initializes a DmaBufMR (DMA-BUF Memory Region) of the given length
@@ -393,7 +395,8 @@ cdef class DmaBufMR(MR):
         :param pd: A PD object
         :param length: Length in bytes
         :param access: Access flags, see ibv_access_flags enum
-        :param dmabuf: A DmaBuf object. One will be allocated if absent
+        :param dmabuf: A DmaBuf object or a FD representing a dmabuf.
+                       DmaBuf object will be allocated if None is passed.
         :param offset: Byte offset from the beginning of the dma-buf
         :param gpu: GPU unit for internal dmabuf allocation
         :param gtt: If true allocate internal dmabuf from GTT instead of VRAM
@@ -403,7 +406,8 @@ cdef class DmaBufMR(MR):
         if dmabuf is None:
             self.is_dmabuf_internal = True
             dmabuf = DmaBuf(length + offset, gpu, gtt)
-        self.mr = v.ibv_reg_dmabuf_mr(pd.pd, offset, length, offset, dmabuf.fd, access)
+        fd = dmabuf.fd if isinstance(dmabuf, DmaBuf) else dmabuf
+        self.mr = v.ibv_reg_dmabuf_mr(pd.pd, offset, length, offset, fd, access)
         if self.mr == NULL:
             raise PyverbsRDMAErrno(f'Failed to register a dma-buf MR. length: {length}, access flags: {access}')
         super().__init__(pd, length, access)
@@ -411,19 +415,21 @@ cdef class DmaBufMR(MR):
         self.dmabuf = dmabuf
         self.offset = offset
         pd.add_ref(self)
-        dmabuf.add_ref(self)
+        if isinstance(dmabuf, DmaBuf):
+            dmabuf.add_ref(self)
         self.logger.debug(f'Registered dma-buf ibv_mr. Length: {length}, access flags {access}')
 
     def __dealloc__(self):
         self.close()
 
-    cdef close(self):
+    cpdef close(self):
         """
         Closes the underlying C object of the MR and frees the memory allocated.
         :return: None
         """
         if self.mr != NULL:
-            self.logger.debug('Closing dma-buf MR')
+            if self.logger:
+                self.logger.debug('Closing dma-buf MR')
             rc = v.ibv_dereg_mr(self.mr)
             if rc != 0:
                 raise PyverbsRDMAError('Failed to dereg dma-buf MR', rc)
@@ -462,7 +468,7 @@ cdef class DmaBufMR(MR):
         memcpy(<char*>(buf + off), <char *>data, length)
         munmap(buf, length + off)
 
-    cdef read(self, length, offset):
+    cpdef read(self, length, offset):
         """
         Reads data from the dma-buf backing the MR
         :param length: Length of data to read

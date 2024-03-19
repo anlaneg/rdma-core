@@ -180,7 +180,7 @@ struct mlx5_crypto_bsf {
 	__be32 raw_data_size;
 	uint8_t bs_pointer;
 	uint8_t rsvd1[7];
-	__be32 xts_init_tweak[4];
+	uint8_t xts_init_tweak[16];
 	__be32 rsvd_dek_ptr;
 	uint8_t rsvd2[4];
 	uint8_t keytag[8];
@@ -236,6 +236,16 @@ struct mlx5_mmo_wqe {
 	struct mlx5_mmo_metadata_seg mmo_meta;
 	struct mlx5_wqe_data_seg src;
 	struct mlx5_wqe_data_seg dest;
+};
+
+struct mlx5_wqe_flow_update_ctrl_seg {
+	__be32 flow_idx_update;
+	__be32 dest_handle;
+	uint8_t reserved0[40];
+};
+
+struct mlx5_wqe_header_modify_argument_update_seg {
+	uint8_t argument_list[64];
 };
 
 #endif /* WQE_H */

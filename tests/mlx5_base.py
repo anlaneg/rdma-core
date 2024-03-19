@@ -14,9 +14,10 @@ from pyverbs.providers.mlx5.mlx5dv import Mlx5Context, Mlx5DVContextAttr, \
     Mlx5DVQPInitAttr, Mlx5QP, Mlx5DVDCInitAttr, Mlx5DCIStreamInitAttr, \
     Mlx5DevxObj, Mlx5UMEM, Mlx5UAR, WqeDataSeg, WqeCtrlSeg, Wqe, Mlx5Cqe64, \
     Mlx5DVCQInitAttr, Mlx5CQ
-from tests.base import TrafficResources, set_rnr_attributes, DCT_KEY, \
+from tests.base import RoCETrafficResources, set_rnr_attributes, DCT_KEY, \
     RDMATestCase, PyverbsAPITestCase, RDMACMBaseTest, BaseResources, PATH_MTU, \
-    RNR_RETRY, RETRY_CNT, MIN_RNR_TIMER, TIMEOUT, MAX_RDMA_ATOMIC, RCResources
+    RNR_RETRY, RETRY_CNT, MIN_RNR_TIMER, TIMEOUT, MAX_RDMA_ATOMIC, RCResources, \
+    is_gid_available
 from pyverbs.pyverbs_error import PyverbsRDMAError, PyverbsUserError, \
     PyverbsError
 from pyverbs.providers.mlx5.mlx5dv_objects import Mlx5DvObj
@@ -34,6 +35,7 @@ import tests.utils
 
 MLX5_CQ_SET_CI = 0
 POLL_CQ_TIMEOUT = 5  # In seconds
+PORT_STATE_TIMEOUT = 20  # In seconds
 
 MELLANOX_VENDOR_ID = 0x02c9
 MLX5_DEVS = {
@@ -53,15 +55,34 @@ MLX5_DEVS = {
     0x101e,  # ConnectX family mlx5Gen Virtual Function
     0x101f,  # ConnectX-6 LX
     0x1021,  # ConnectX-7
+    0x1023,  # ConnectX-8
     0xa2d2,  # BlueField integrated ConnectX-5 network controller
     0xa2d3,  # BlueField integrated ConnectX-5 network controller VF
     0xa2d6,  # BlueField-2 integrated ConnectX-6 Dx network controller
     0xa2dc,  # BlueField-3 integrated ConnectX-7 network controller
+    0xa2df,  # BlueField-4 integrated ConnectX-8 network controller
 }
 
 DCI_TEST_GOOD_FLOW = 0
 DCI_TEST_BAD_FLOW_WITH_RESET = 1
 DCI_TEST_BAD_FLOW_WITHOUT_RESET = 2
+IB_SMP_ATTR_PORT_INFO = 0x0015
+IB_MGMT_CLASS_SUBN_LID_ROUTED = 0x01
+IB_MGMT_METHOD_GET = 0x01
+DB_BF_DBR_LESS_BUF_OFFSET = 0x600
+
+
+class PortStatus:
+    MLX5_PORT_UP = 1
+    MLX5_PORT_DOWN = 2
+
+
+class PortState:
+    NO_STATE_CHANGE = 0
+    DOWN = 1
+    INIT = 2
+    ARMED = 3
+    ACTIVE = 4
 
 
 def is_mlx5_dev(ctx):
@@ -93,7 +114,7 @@ class Mlx5RDMACMBaseTest(RDMACMBaseTest):
         skip_if_not_mlx5_dev(d.Context(name=self.dev_name))
 
 
-class Mlx5DcResources(TrafficResources):
+class Mlx5DcResources(RoCETrafficResources):
     def __init__(self, dev_name, ib_port, gid_index, send_ops_flags,
                  qp_count=1, create_flags=0):
         self.send_ops_flags = send_ops_flags
@@ -107,11 +128,6 @@ class Mlx5DcResources(TrafficResources):
             self.qps[i].to_rts(attr)
         self.dct_qp.to_rtr(attr)
 
-    def pre_run(self, rpsns, rqps_num):
-        self.rpsns = rpsns
-        self.rqps_num = rqps_num
-        self.to_rts()
-
     def create_context(self):
         mlx5dv_attr = Mlx5DVContextAttr()
         try:
@@ -122,7 +138,8 @@ class Mlx5DcResources(TrafficResources):
             raise unittest.SkipTest('Opening mlx5 context is not supported')
 
     def create_mr(self):
-        access = e.IBV_ACCESS_REMOTE_WRITE | e.IBV_ACCESS_LOCAL_WRITE
+        access = e.IBV_ACCESS_REMOTE_WRITE | e.IBV_ACCESS_LOCAL_WRITE | \
+                 e.IBV_ACCESS_REMOTE_ATOMIC | e.IBV_ACCESS_REMOTE_READ
         self.mr = MR(self.pd, self.msg_size, access)
 
     def create_qp_cap(self):
@@ -131,7 +148,8 @@ class Mlx5DcResources(TrafficResources):
     def create_qp_attr(self):
         qp_attr = QPAttr(port_num=self.ib_port)
         set_rnr_attributes(qp_attr)
-        qp_access = e.IBV_ACCESS_LOCAL_WRITE | e.IBV_ACCESS_REMOTE_WRITE
+        qp_access = e.IBV_ACCESS_LOCAL_WRITE | e.IBV_ACCESS_REMOTE_WRITE | \
+                    e.IBV_ACCESS_REMOTE_ATOMIC | e.IBV_ACCESS_REMOTE_READ
         qp_attr.qp_access_flags = qp_access
         gr = GlobalRoute(dgid=self.ctx.query_gid(self.ib_port, self.gid_index),
                          sgid_index=self.gid_index)
@@ -214,26 +232,27 @@ class Mlx5DcStreamsRes(Mlx5DcResources):
             except PyverbsRDMAError as ex:
                 self.stream_check = False
 
-    def bad_flow_handler_qp(self, qp_idx, ex, reset=False):
+    def bad_flow_handler_qp(self, qp_idx, status, reset=False):
         str_id = self.get_stream_id(qp_idx)
         bt_stream = (1 << str_id)
-        if isinstance(ex, PyverbsRDMAError):
-            if ex.error_code == e.IBV_WC_LOC_PROT_ERR:
-                self.qp_stream_errors[qp_idx][1] += 1
-                if (self.qp_stream_errors[qp_idx][0] & bt_stream) != 0:
-                    raise PyverbsError(f'Dublicate error from stream id {str_id}')
-                self.qp_stream_errors[qp_idx][0] |= bt_stream
-            if ex.error_code == e.IBV_WC_WR_FLUSH_ERR:
-                qp_attr, _ = self.qps[qp_idx].query(e.IBV_QP_STATE)
-                if qp_attr.cur_qp_state == e.IBV_QPS_ERR and reset:
-                    if self.qp_stream_errors[qp_idx][1] != self.dcis[qp_idx]['errored']:
-                        msg = f'QP {qp_idx} in ERR state with wrong number of counter'
-                        raise PyverbsError(msg)
-                    self.reset_qp(qp_idx)
-                    self.qp_stream_errors[qp_idx][2] = True
+
+        if status == e.IBV_WC_LOC_PROT_ERR:
+            self.qp_stream_errors[qp_idx][1] += 1
+            if (self.qp_stream_errors[qp_idx][0] & bt_stream) != 0:
+                raise PyverbsError(f'Dublicate error from stream id {str_id}')
+            self.qp_stream_errors[qp_idx][0] |= bt_stream
+        if status == e.IBV_WC_WR_FLUSH_ERR:
+            qp_attr, _ = self.qps[qp_idx].query(e.IBV_QP_STATE)
+            if qp_attr.cur_qp_state == e.IBV_QPS_ERR and reset:
+                if self.qp_stream_errors[qp_idx][1] != self.dcis[qp_idx]['errored']:
+                    msg = f'QP {qp_idx} in ERR state with wrong number of counter'
+                    raise PyverbsError(msg)
+                self.reset_qp(qp_idx)
+                self.qp_stream_errors[qp_idx][2] = True
+
         return True
 
-    def bad_flow_handling(self, qp_idx, ex, reset=False):
+    def bad_flow_handling(self, qp_idx, status, reset=False):
         if self.bad_flow == DCI_TEST_GOOD_FLOW:
             return False
         if self.bad_flow == DCI_TEST_BAD_FLOW_WITH_RESET:
@@ -242,7 +261,7 @@ class Mlx5DcStreamsRes(Mlx5DcResources):
                 self.dci_reset_stream_id(qp_idx)
             return True
         if self.bad_flow == DCI_TEST_BAD_FLOW_WITHOUT_RESET:
-            return self.bad_flow_handler_qp(qp_idx, ex, reset)
+            return self.bad_flow_handler_qp(qp_idx, status, reset)
         return False
 
     def set_bad_flow(self, bad_flow):
@@ -376,7 +395,7 @@ class Mlx5DcStreamsRes(Mlx5DcResources):
         :return: None
         """
         import tests.utils as u
-        send_op = e.IBV_QP_EX_WITH_SEND
+        send_op = e.IBV_WR_SEND
         ah_client = u.get_global_ah(client, gid_idx, port)
         s_recv_wr = u.get_recv_wr(server)
         c_recv_wr = u.get_recv_wr(client)
@@ -391,11 +410,16 @@ class Mlx5DcStreamsRes(Mlx5DcResources):
                 u.send(client, c_send_object, send_op, True, qp_idx,
                        ah_client, False)
                 try:
-                    u.poll_cq(client.cq)
+                    wcs = u._poll_cq(client.cq)
                 except PyverbsError as ex:
-                    if client.bad_flow_handling(qp_idx, ex, True):
+                    if client.bad_flow_handling(qp_idx, e.IBV_WC_SUCCESS, True):
                         continue
                     raise ex
+                else:
+                    if wcs[0].status != e.IBV_WC_SUCCESS and \
+                            client.bad_flow_handling(qp_idx, wcs[0].status, True):
+                        continue
+
                 u.poll_cq(server.cq)
                 u.post_recv(server, s_recv_wr, qp_idx=qp_idx)
                 msg_received = server.mr.read(server.msg_size, read_offset)
@@ -456,9 +480,12 @@ class Mlx5DevxRcResources(BaseResources):
     The class currently supports post send with immediate, but can be
     easily extended to support other opcodes in the future.
     """
-    def __init__(self, dev_name, ib_port, gid_index, msg_size=1024):
+    def __init__(self, dev_name, ib_port, gid_index, msg_size=1024, activate_port_state=False,
+                 send_dbr_mode=0):
+        from tests.mlx5_prm_structs import SendDbrMode
         super().__init__(dev_name, ib_port, gid_index)
         self.umems = {}
+        self.send_dbr_mode = send_dbr_mode
         self.msg_size = msg_size
         self.num_msgs = 1000
         self.imm = 0x03020100
@@ -468,6 +495,8 @@ class Mlx5DevxRcResources(BaseResources):
         self.pd = None
         self.dv_pd = None
         self.mr = None
+        self.msi_vector = None
+        self.eq = None
         self.cq = None
         self.qp = None
         self.qpn = None
@@ -482,22 +511,117 @@ class Mlx5DevxRcResources(BaseResources):
         self.rmac = None
         self.devx_objs = []
         self.qattr = QueueAttrs()
+        if activate_port_state:
+            start_state_t = time.perf_counter()
+            self.change_port_state_with_registers(PortStatus.MLX5_PORT_UP)
+            admin_status, oper_status = self.query_port_state_with_registers()
+            while admin_status != PortStatus.MLX5_PORT_UP or oper_status != PortStatus.MLX5_PORT_UP:
+                if time.perf_counter() - start_state_t >= PORT_STATE_TIMEOUT:
+                    raise PyverbsRDMAError('Could not change the port state to UP')
+                self.change_port_state_with_registers(PortStatus.MLX5_PORT_UP)
+                admin_status, oper_status = self.query_port_state_with_registers()
+                time.sleep(1)
+
+            mad_port_state = self.query_port_state_with_mads(ib_port)
+            while mad_port_state < PortState.ACTIVE:
+                if time.perf_counter() - start_state_t >= PORT_STATE_TIMEOUT:
+                    raise PyverbsRDMAError('Could not change the port state to UP')
+                time.sleep(1)
+                mad_port_state = self.query_port_state_with_mads(ib_port)
+        if self.send_dbr_mode != SendDbrMode.DBR_VALID:
+            self.check_cap_send_dbr_mode()
         self.init_resources()
+
+    def get_wqe_data_segment(self):
+        return WqeDataSeg(self.mr.length, self.mr.lkey, self.mr.buf)
+
+    def change_port_state_with_registers(self, state):
+        from tests.mlx5_prm_structs import PaosReg
+        paos_in = PaosReg(local_port=self.ib_port, admin_status=state, ase=1)
+        self.access_paos_register(paos_in)
+
+    def query_port_state_with_registers(self):
+        from tests.mlx5_prm_structs import PaosReg
+        paos_in = PaosReg(local_port=self.ib_port)
+        paos_out = self.access_paos_register(paos_in)
+        return paos_out.admin_status, paos_out.oper_status
+
+    def access_paos_register(self, paos_in, op_mod=0):  # op_mod: 0 - write / 1 - read
+        from tests.mlx5_prm_structs import AccessPaosRegisterIn, \
+            AccessPaosRegisterOut, DevxOps
+        paos_reg_in = AccessPaosRegisterIn(op_mod=op_mod,
+                                           register_id=DevxOps.MLX5_CMD_OP_ACCESS_REGISTER_PAOS,
+                                           data=paos_in)
+        cmd_out = self.ctx.devx_general_cmd(paos_reg_in, len(AccessPaosRegisterOut()))
+        paos_reg_out = AccessPaosRegisterOut(cmd_out)
+        if paos_reg_out.status:
+            raise PyverbsRDMAError(f'Failed to access PAOS register ({paos_reg_out.syndrome})')
+        return paos_reg_out.data
+
+    def query_port_state_with_mads(self, ib_port):
+        from tests.mlx5_prm_structs import IbSmp
+        in_mad = IbSmp(base_version=1, mgmt_class=IB_MGMT_CLASS_SUBN_LID_ROUTED,
+                       class_version=1, method=IB_MGMT_METHOD_GET,
+                       attr_id=IB_SMP_ATTR_PORT_INFO, attr_mod=ib_port)
+        ib_smp_out = IbSmp(self._send_mad_cmd(ib_port, in_mad, 0x3))
+        return ib_smp_out.data[32] & 0xf
+
+    def _send_mad_cmd(self, ib_port, in_mad, op_mod):
+        from tests.mlx5_prm_structs import MadIfcIn, MadIfcOut
+        mad_ifc_in = MadIfcIn(op_mod=op_mod, port=ib_port, mad=in_mad)
+        cmd_out = self.ctx.devx_general_cmd(mad_ifc_in, len(MadIfcOut()))
+        mad_ifc_out = MadIfcOut(cmd_out)
+        if mad_ifc_out.status:
+            raise PyverbsRDMAError(f'Failed to send MAD with syndrome ({mad_ifc_out.syndrome})')
+        return mad_ifc_out.mad
+
+    def check_cap_send_dbr_mode(self):
+        """
+        Check the capability of the dbr less.
+        If the HCA cap have HCA cap 2, check if in HCA cap2 0x20(HCA CAP 2) + 0x1(current)
+        have the send_dbr_mode_no_dbr_ext.
+        """
+        from tests.mlx5_prm_structs import QueryCmdHcaCap2Out, \
+            QueryHcaCapIn, QueryCmdHcaCapOut, QueryHcaCapOp, QueryHcaCapMod, SendDbrMode
+        self.create_context()
+        query_cap_in = QueryHcaCapIn(op_mod=0x1)
+        query_cap_out = QueryCmdHcaCapOut(self.ctx.devx_general_cmd(
+            query_cap_in, len(QueryCmdHcaCapOut())))
+        if query_cap_out.status:
+            raise PyverbsRDMAError('Failed to query general HCA CAPs with syndrome '
+                                   f'({query_cap_out.syndrome}')
+
+        if not query_cap_out.capability.hca_cap_2:
+            raise unittest.SkipTest("The device doesn't support general HCA CAPs 2")
+        query_cap2_in = QueryHcaCapIn(op_mod=(QueryHcaCapOp.HCA_CAP_2 << 0x1) | \
+                                              QueryHcaCapMod.CURRENT)
+        query_cap2_out = QueryCmdHcaCap2Out(self.ctx.devx_general_cmd(
+            query_cap2_in, len(QueryCmdHcaCap2Out())))
+        if self.send_dbr_mode == SendDbrMode.NO_DBR_EXT and \
+                not query_cap2_out.capability.send_dbr_mode_no_dbr_ext:
+            raise unittest.SkipTest("The device doesn't support send_dbr_mode_no_dbr_ext cap")
+
+        if self.send_dbr_mode == SendDbrMode.NO_DBR_INT and \
+                not query_cap2_out.capability.send_dbr_mode_no_dbr_int:
+            raise unittest.SkipTest("The device doesn't support send_dbr_mode_no_dbr_int cap")
 
     def init_resources(self):
         if not self.is_eth():
             self.query_lid()
         else:
+            is_gid_available(self.gid_index)
             self.query_gid()
         self.create_pd()
         self.create_mr()
         self.query_eqn()
         self.create_uar()
         self.create_queue_attrs()
+        self.create_eq()
         self.create_cq()
         self.create_qp()
         # Objects closure order is important, and must be done manually in DevX
-        self.devx_objs = [self.qp, self.cq] + list(self.uar.values()) + list(self.umems.values())
+        self.devx_objs = [self.qp, self.cq] + list(self.uar.values()) + list(self.umems.values()) + [self.msi_vector, self.eq]
+
 
     def query_lid(self):
         from tests.mlx5_prm_structs import QueryHcaVportContextIn, \
@@ -629,11 +753,14 @@ class Mlx5DevxRcResources(BaseResources):
                     log_rq_size=log_rq_size, log_sq_size=log_sq_size, ts_format=0x1,
                     log_rq_stride=log_rq_stride, uar_page=self.uar['qp'].page_id,
                     cqn_snd=cqn, cqn_rcv=cqn, dbr_umem_id=self.umems['qp_dbr'].umem_id,
-                    dbr_umem_valid=1)
+                    dbr_umem_valid=1, send_dbr_mode=self.send_dbr_mode)
         cmd_in = CreateQpIn(sw_qpc=qpc, wq_umem_id=self.umems['qp'].umem_id,
                             wq_umem_valid=1)
         self.qp = Mlx5DevxObj(self.ctx, cmd_in, len(CreateQpOut()))
         self.qpn = CreateQpOut(self.qp.out_view).qpn
+
+    def create_eq(self):
+        pass
 
     def to_rts(self):
         """
@@ -706,26 +833,33 @@ class Mlx5DevxRcResources(BaseResources):
         building the control/data segments, updating and ringing the dbr,
         updating the producer indexes, etc.
         """
+        from tests.mlx5_prm_structs import SendDbrMode
+        buffer_address = self.uar['qp'].reg_addr
+        if self.send_dbr_mode == SendDbrMode.NO_DBR_EXT:
+            # Address of DB blueflame register
+            buffer_address = self.uar['qp'].base_addr + DB_BF_DBR_LESS_BUF_OFFSET
+
         idx = self.qattr.sq.post_idx if self.qattr.sq.post_idx < self.qattr.sq.wqe_num else 0
         buf_offset = self.qattr.sq.offset + (idx << dve.MLX5_SEND_WQE_SHIFT)
         # Prepare WQE
         imm_be32 = struct.unpack("<I", struct.pack(">I", self.imm + self.qattr.sq.post_idx))[0]
         ctrl_seg = WqeCtrlSeg(imm=imm_be32, fm_ce_se=dve.MLX5_WQE_CTRL_CQ_UPDATE)
-        data_seg = WqeDataSeg(self.mr.length, self.mr.lkey, self.mr.buf)
+        data_seg = self.get_wqe_data_segment()
         ctrl_seg.opmod_idx_opcode = (self.qattr.sq.post_idx & 0xffff) << 8 | dve.MLX5_OPCODE_SEND_IMM
-        size_in_octowords = int((ctrl_seg.sizeof() +  data_seg.sizeof()) / 16)
+        size_in_octowords = int((ctrl_seg.sizeof() + data_seg.sizeof()) / 16)
         ctrl_seg.qpn_ds = self.qpn << 8 | size_in_octowords
         Wqe([ctrl_seg, data_seg], self.umems['qp'].umem_addr + buf_offset)
         self.qattr.sq.post_idx += int((size_in_octowords * 16 +
                                        dve.MLX5_SEND_WQE_BB - 1) / dve.MLX5_SEND_WQE_BB)
         # Make sure descriptors are written
         dma.udma_to_dev_barrier()
-        # Update the doorbell record
-        mem.writebe32(self.umems['qp_dbr'].umem_addr,
-                      self.qattr.sq.post_idx & 0xffff, dve.MLX5_SND_DBR)
-        dma.udma_to_dev_barrier()
+        if not self.send_dbr_mode:
+            # Update the doorbell record
+            mem.writebe32(self.umems['qp_dbr'].umem_addr,
+                          self.qattr.sq.post_idx & 0xffff, dve.MLX5_SND_DBR)
+            dma.udma_to_dev_barrier()
         # Ring the doorbell and post the WQE
-        dma.mmio_write64_as_be(self.uar['qp'].reg_addr, mem.read64(ctrl_seg.addr))
+        dma.mmio_write64_as_be(buffer_address, mem.read64(ctrl_seg.addr))
 
     def post_recv(self):
         """
@@ -735,7 +869,7 @@ class Mlx5DevxRcResources(BaseResources):
         """
         buf_offset = self.qattr.rq.offset + self.qattr.rq.wqe_size * self.qattr.rq.head
         # Prepare WQE
-        data_seg = WqeDataSeg(self.mr.length, self.mr.lkey, self.mr.buf)
+        data_seg = self.get_wqe_data_segment()
         Wqe([data_seg], self.umems['qp'].umem_addr + buf_offset)
         # Update indexes
         self.qattr.rq.post_idx += 1
@@ -820,7 +954,7 @@ class Mlx5DevxTrafficBase(Mlx5RDMATestCase):
                             self.server.lid, self.mac_addr)
 
     def send_imm_traffic(self):
-        self.client.mr.write('c' * self.client.msg_size, self.client.msg_size)
+        self.client.mem_write('c' * self.client.msg_size, self.client.msg_size)
         for _ in range(self.client.num_msgs):
             cons_idx = self.client.qattr.cq.cons_idx
             self.server.post_recv()
@@ -833,7 +967,7 @@ class Mlx5DevxTrafficBase(Mlx5RDMATestCase):
             recv_cqe = self.server.poll_cq()
             self.assertEqual(recv_cqe.opcode, dve.MLX5_CQE_RESP_SEND_IMM,
                              'Unexpected CQE opcode')
-            msg_received = self.server.mr.read(self.server.msg_size, 0)
+            msg_received = self.server.mem_read()
             # Validate data (of received message and immediate value)
             tests.utils.validate(msg_received, True, self.server.msg_size)
             imm_inval_pkey = recv_cqe.imm_inval_pkey
@@ -841,8 +975,7 @@ class Mlx5DevxTrafficBase(Mlx5RDMATestCase):
                 imm_inval_pkey = int.from_bytes(
                     imm_inval_pkey.to_bytes(4, byteorder='big'), 'little')
             self.assertEqual(imm_inval_pkey, self.client.imm + cons_idx)
-            self.server.mr.write('s' * self.server.msg_size,
-                                 self.server.msg_size)
+            self.server.mem_write('s' * self.server.msg_size, self.server.msg_size)
 
 
 class Mlx5RcResources(RCResources):

@@ -89,7 +89,7 @@ struct ib_uverbs_ioctl_hdr {
 	__u32 driver_id;
 	__u32 reserved2;
 	/*指向attr数组(内存连续）*/
-	struct ib_uverbs_attr  attrs[0];
+	struct ib_uverbs_attr  attrs[];
 };
 
 #endif

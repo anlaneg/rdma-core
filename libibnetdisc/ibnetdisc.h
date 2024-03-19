@@ -72,7 +72,7 @@ typedef struct ibnd_node {
 	/* use libibmad decoder functions for info */
 	uint8_t info[IB_SMP_DATA_SIZE];
 
-	char nodedesc[IB_SMP_DATA_SIZE];
+	char nodedesc[IB_SMP_DATA_SIZE + 1];
 
 	struct ibnd_port **ports;	/* array of ports, indexed by port number
 					   ports[1] == port 1,
@@ -238,6 +238,17 @@ char *ibnd_get_chassis_slot_str(ibnd_node_t *node, char *str, size_t size);
 int ibnd_is_xsigo_guid(uint64_t guid);
 int ibnd_is_xsigo_tca(uint64_t guid);
 int ibnd_is_xsigo_hca(uint64_t guid);
+
+int ibnd_get_agg_linkspeedext_field(void *cap_info, void *info,
+		enum MAD_FIELDS efield, enum MAD_FIELDS e2field);
+int ibnd_get_agg_linkspeedext(void *cap_info, void *info);
+int ibnd_get_agg_linkspeedexten(void *cap_info, void *info);
+int ibnd_get_agg_linkspeedextsup(void *cap_info, void *info);
+
+char *ibnd_dump_agg_linkspeedext_bits(char *buf, int bufsz, int speed);
+char *ibnd_dump_agg_linkspeedext(char *buf, int bufsz, int speed);
+char *ibnd_dump_agg_linkspeedexten(char *buf, int bufsz, int speed);
+char *ibnd_dump_agg_linkspeedextsup(char *buf, int bufsz, int speed);
 
 #ifdef __cplusplus
 }
