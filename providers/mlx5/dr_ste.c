@@ -719,6 +719,7 @@ int dr_ste_alloc_modify_hdr(struct mlx5dv_dr_action *action)
 				    DR_CHUNK_SIZE_8);
 
 	if (action->rewrite.dmn->modify_header_ptrn_mngr)
+		/*通过此函数申请modify hdr*/
 		return action->rewrite.dmn->ste_ctx->alloc_modify_hdr_chunk(action, dynamic_chunck_size);
 
 	return dr_ste_alloc_modify_hdr_chunk(action, dynamic_chunck_size);

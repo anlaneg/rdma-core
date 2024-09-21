@@ -147,7 +147,7 @@ unsigned int __ioctl_final_num_attrs(unsigned int num_attrs,
 	((struct ibv_command_buffer){                                          \
 		.hdr =                                                         \
 			{                                                      \
-	            /*设置obj与method*/\
+	            /*设置obj与method id*/\
 				.object_id = (_object_id),                     \
 				.method_id = (_method_id),                     \
 			},                                                     \
@@ -332,11 +332,12 @@ fill_attr_in_uint64(struct ibv_command_buffer *cmd, uint16_t attr_id,
 	struct ib_uverbs_attr *attr = _ioctl_next_attr(cmd, attr_id);
 
 	attr->len = sizeof(data);
-	attr->data = data;
+	attr->data = data;/*属性值*/
 
 	return attr;
 }
 
+/*增加一个属性(attr_id)*/
 #define fill_attr_const_in(cmd, attr_id, _data) \
 	fill_attr_in_uint64(cmd, attr_id, _data)
 

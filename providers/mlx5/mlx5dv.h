@@ -1903,8 +1903,9 @@ static inline uint32_t _devx_get(const void *p, size_t bit_off, size_t bit_sz)
 		__devx_mask(bit_sz));
 }
 
+/*将指定p看做类型typ,取其成员fld的值*/
 #define DEVX_GET(typ, p, fld)                                                  \
-	_devx_get(p, __devx_bit_off(typ, fld), __devx_bit_sz(typ, fld))
+	_devx_get(p, __devx_bit_off(typ/*类型*/, fld/*字段*/)/*字段的偏移量*/, __devx_bit_sz(typ, fld)/*字段的bits大小*/)
 
 static inline void _devx_set64(void *p, uint64_t v, size_t bit_off)
 {

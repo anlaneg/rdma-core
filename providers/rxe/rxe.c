@@ -733,6 +733,7 @@ static int rxe_destroy_srq(struct ibv_srq *ibsrq)
 	return ret;
 }
 
+/*向rq中填充可接收数据的recv_wr*/
 static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 {
 	int i;
@@ -749,6 +750,7 @@ static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 		goto out;
 	}
 
+	/*当前recv_wr中要求的num_sge大于队列支持的数量，报错*/
 	if (num_sge > rq->max_sge) {
 		rc = EINVAL;
 		goto out;
@@ -763,13 +765,14 @@ static int rxe_post_one_recv(struct rxe_wq *rq, struct ibv_recv_wr *recv_wr)
 	memcpy(wqe->dma.sge, recv_wr->sg_list,
 	       num_sge*sizeof(*wqe->dma.sge));
 
+	/*获得可填充的总长度*/
 	for (i = 0; i < num_sge; i++)
 		length += wqe->dma.sge[i].length;
 
-	wqe->dma.length = length;
+	wqe->dma.length = length;/*可接受的内存总长度*/
 	wqe->dma.resid = length;
 	wqe->dma.cur_sge = 0;
-	wqe->dma.num_sge = num_sge;
+	wqe->dma.num_sge = num_sge;/*sge总数量*/
 	wqe->dma.sge_offset = 0;
 
 	/*更新生产者指针*/
@@ -779,6 +782,7 @@ out:
 	return rc;
 }
 
+/*向srq->rq队列中填充可接收数据的buffer*/
 static int rxe_post_srq_recv(struct ibv_srq *ibsrq,
 			     struct ibv_recv_wr *recv_wr,
 			     struct ibv_recv_wr **bad_recv_wr)
@@ -788,6 +792,7 @@ static int rxe_post_srq_recv(struct ibv_srq *ibsrq,
 
 	pthread_spin_lock(&srq->rq.lock);
 
+	/*recv_wr是一组work request,这里拆开一个一个进行调用*/
 	while (recv_wr) {
 		rc = rxe_post_one_recv(&srq->rq, recv_wr);
 		if (rc) {
@@ -1697,8 +1702,9 @@ static int post_send_db(struct ibv_qp *ibqp)
 /* this API does not make a distinction between
  * restartable and non-restartable errors
  */
+/*为sq队列提供需要发送数据的buffer*/
 static int rxe_post_send(struct ibv_qp *ibqp,
-			 struct ibv_send_wr *wr_list,
+			 struct ibv_send_wr *wr_list/*需要发送的wr buffer*/,
 			 struct ibv_send_wr **bad_wr/*出参，处理失败的wr，其后的wr也均未处理*/)
 {
 	int rc = 0;
@@ -1736,28 +1742,31 @@ static int rxe_post_send(struct ibv_qp *ibqp,
 	return err ? err : rc;
 }
 
+/*为rq队列提供可接收数据的buffer*/
 static int rxe_post_recv(struct ibv_qp *ibqp,
-			 struct ibv_recv_wr *recv_wr,
-			 struct ibv_recv_wr **bad_wr)
+			 struct ibv_recv_wr *recv_wr/*可接收数据的buffer*/,
+			 struct ibv_recv_wr **bad_wr/*出参，指向首个失败调用的recv_wr*/)
 {
 	int rc = 0;
-	struct rxe_qp *qp = to_rqp(ibqp);
+	struct rxe_qp *qp = to_rqp(ibqp);/*取对应的qp*/
 	struct rxe_wq *rq = &qp->rq;/*使用接收队列*/
 
 	if (!bad_wr)
 		return EINVAL;
 
-	*bad_wr = NULL;
+	*bad_wr = NULL;/*记录发送失败的wr*/
 
 	if (!rq || !recv_wr || !rq->queue)
 		return EINVAL;
 
 	/* see C10-97.2.1 */
 	if (ibqp->state == IBV_QPS_RESET)
+		/*状态有误*/
 		return EINVAL;
 
 	pthread_spin_lock(&rq->lock);
 
+	/*wr是支持一组wqe的，这里遍历接收*/
 	while (recv_wr) {
 		rc = rxe_post_one_recv(rq, recv_wr);
 		if (rc) {
@@ -1898,14 +1907,14 @@ static const struct verbs_context_ops rxe_ctx_ops = {
 	.modify_srq = rxe_modify_srq,
 	.query_srq = rxe_query_srq,
 	.destroy_srq = rxe_destroy_srq,
-	.post_srq_recv = rxe_post_srq_recv,
+	.post_srq_recv = rxe_post_srq_recv,/*向srq->rq队列中填充可接收数据的buffer*/
 	.create_qp = rxe_create_qp,/*处理qp的创建*/
 	.create_qp_ex = rxe_create_qp_ex,
 	.query_qp = rxe_query_qp,
 	.modify_qp = rxe_modify_qp,/*变更qp*/
 	.destroy_qp = rxe_destroy_qp,
-	.post_send = rxe_post_send,/*向外发送报文*/
-	.post_recv = rxe_post_recv,
+	.post_send = rxe_post_send,/*填充sq,知会kernel向外发送报文*/
+	.post_recv = rxe_post_recv,/*填充rq,使kernel可以填充收到的报文*/
 	.create_ah = rxe_create_ah,/*创建ah*/
 	.destroy_ah = rxe_destroy_ah,
 	.attach_mcast = ibv_cmd_attach_mcast,

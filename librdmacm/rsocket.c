@@ -564,10 +564,12 @@ static void rs_configure(void)
 	static int init;
 
 	if (init)
+		/*已初始化，退出*/
 		return;
 
 	pthread_mutex_lock(&mut);
 	if (init)
+		/*加锁确认，已初始化，退出*/
 		goto out;
 
 	if (ucma_init())
@@ -575,31 +577,37 @@ static void rs_configure(void)
 	ucma_ib_init();
 
 	if ((f = fopen(RS_CONF_DIR "/polling_time", "r"))) {
+		/*读取polling_time*/
 		failable_fscanf(f, "%u", &polling_time);
 		fclose(f);
 	}
 
 	f = fopen(RS_CONF_DIR "/wake_up_interval", "r");
 	if (f) {
+		/*读取wake_up_interval*/
 		failable_fscanf(f, "%d", &wake_up_interval);
 		fclose(f);
 	}
 	if ((f = fopen(RS_CONF_DIR "/inline_default", "r"))) {
+		/*读取inline_default*/
 		failable_fscanf(f, "%hu", &def_inline);
 		fclose(f);
 	}
 
 	if ((f = fopen(RS_CONF_DIR "/sqsize_default", "r"))) {
+		/*读取sqsize_default*/
 		failable_fscanf(f, "%hu", &def_sqsize);
 		fclose(f);
 	}
 
 	if ((f = fopen(RS_CONF_DIR "/rqsize_default", "r"))) {
+		/*读取rqsize_default*/
 		failable_fscanf(f, "%hu", &def_rqsize);
 		fclose(f);
 	}
 
 	if ((f = fopen(RS_CONF_DIR "/mem_default", "r"))) {
+		/*读取mem_default*/
 		failable_fscanf(f, "%u", &def_mem);
 		fclose(f);
 
@@ -608,6 +616,7 @@ static void rs_configure(void)
 	}
 
 	if ((f = fopen(RS_CONF_DIR "/wmem_default", "r"))) {
+		/*读取wmem_default*/
 		failable_fscanf(f, "%u", &def_wmem);
 		fclose(f);
 		if (def_wmem < RS_SNDLOWAT)
@@ -615,6 +624,7 @@ static void rs_configure(void)
 	}
 
 	if ((f = fopen(RS_CONF_DIR "/iomap_size", "r"))) {
+		/*读取iomap_size文件*/
 		failable_fscanf(f, "%hu", &def_iomap_size);
 		fclose(f);
 
@@ -1198,8 +1208,8 @@ int rsocket(int domain, int type, int protocol)
 	struct rsocket *rs;
 	int index, ret;
 
-	if ((domain != AF_INET && domain != AF_INET6 && domain != AF_IB) ||
-	    ((type != SOCK_STREAM) && (type != SOCK_DGRAM)) ||
+	if ((domain != AF_INET && domain != AF_INET6 && domain != AF_IB)/*仅支持以上三种domain*/ ||
+	    ((type != SOCK_STREAM) && (type != SOCK_DGRAM)) /*仅支持以上二种type*/||
 	    (type == SOCK_STREAM && protocol && protocol != IPPROTO_TCP) ||
 	    (type == SOCK_DGRAM && protocol && protocol != IPPROTO_UDP))
 		return ERR(ENOTSUP);

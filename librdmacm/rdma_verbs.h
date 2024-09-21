@@ -68,7 +68,8 @@ void rdma_destroy_srq(struct rdma_cm_id *id);
 static inline struct ibv_mr *
 rdma_reg_msgs(struct rdma_cm_id *id, void *addr, size_t length)
 {
-	return ibv_reg_mr(id->pd, addr, length, IBV_ACCESS_LOCAL_WRITE);
+	/*注册mr*/
+	return ibv_reg_mr(id->pd, addr, length/*mr长度*/, IBV_ACCESS_LOCAL_WRITE);
 }
 
 static inline struct ibv_mr *
@@ -97,11 +98,12 @@ rdma_dereg_mr(struct ibv_mr *mr)
  * Support multiple scatter-gather entries.
  */
 static inline int
-rdma_post_recvv(struct rdma_cm_id *id, void *context, struct ibv_sge *sgl,
+rdma_post_recvv(struct rdma_cm_id *id, void *context, struct ibv_sge *sgl/*要发送的sge*/,
 		int nsge)
 {
 	struct ibv_recv_wr wr, *bad;
 
+	/*将sgl转换为recv_wr*/
 	wr.wr_id = (uintptr_t) context;
 	wr.next = NULL;
 	wr.sg_list = sgl;
@@ -110,6 +112,7 @@ rdma_post_recvv(struct rdma_cm_id *id, void *context, struct ibv_sge *sgl,
 	if (id->srq)
 		return rdma_seterrno(ibv_post_srq_recv(id->srq, &wr, &bad));
 	else
+		/*无srq,通过ibv_post_recv接口提供可接收用的buffer*/
 		return rdma_seterrno(ibv_post_recv(id->qp, &wr, &bad));
 }
 
@@ -172,15 +175,16 @@ static inline int
 rdma_post_recv(struct rdma_cm_id *id, void *context, void *addr,
 	       size_t length, struct ibv_mr *mr)
 {
+	/*向rq提供可接收数据的buffer*/
 	struct ibv_sge sge;
 
 	assert((addr >= mr->addr) &&
 		(((uint8_t *) addr + length) <= ((uint8_t *) mr->addr + mr->length)));
-	sge.addr = (uint64_t) (uintptr_t) addr;
-	sge.length = (uint32_t) length;
-	sge.lkey = mr->lkey;
+	sge.addr = (uint64_t) (uintptr_t) addr;/*buffer地址*/
+	sge.length = (uint32_t) length;/*buffer长度*/
+	sge.lkey = mr->lkey;/*sge对应的local key*/
 
-	return rdma_post_recvv(id, context, &sge, 1);
+	return rdma_post_recvv(id, context, &sge, 1/*vector长度为1*/);
 }
 
 static inline int
@@ -288,6 +292,7 @@ rdma_get_recv_comp(struct rdma_cm_id *id, struct ibv_wc *wc)
 	int ret;
 
 	do {
+		/*自cq中获取一个wc(write complete)*/
 		ret = ibv_poll_cq(id->recv_cq, 1, wc);
 		if (ret)
 			break;
@@ -305,6 +310,7 @@ rdma_get_recv_comp(struct rdma_cm_id *id, struct ibv_wc *wc)
 			return ret;
 
 		assert(cq == id->recv_cq && context == id);
+		/*ack recv_cq事件*/
 		ibv_ack_cq_events(id->recv_cq, 1);
 	} while (1);
 

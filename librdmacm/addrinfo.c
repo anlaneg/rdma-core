@@ -148,8 +148,10 @@ static int ucma_convert_to_rai(struct rdma_addrinfo *rai,
 	int ret;
 
 	if (hints->ai_qp_type) {
+		/*使用hints指定的qp type*/
 		rai->ai_qp_type = hints->ai_qp_type;
 	} else {
+		/*按照socket type,设置qp type*/
 		switch (ai->ai_socktype) {
 		case SOCK_STREAM:
 			rai->ai_qp_type = IBV_QPT_RC;
@@ -163,6 +165,7 @@ static int ucma_convert_to_rai(struct rdma_addrinfo *rai,
 	if (hints->ai_port_space) {
 		rai->ai_port_space = hints->ai_port_space;
 	} else {
+		/*依据protocol，设置port*/
 		switch (ai->ai_protocol) {
 		case IPPROTO_TCP:
 			rai->ai_port_space = RDMA_PS_TCP;
@@ -242,12 +245,15 @@ int rdma_getaddrinfo(const char *node, const char *service,
 	int ret;
 
 	if (!service && !node && !hints)
+		/*三者均为NULL，参数无效*/
 		return ERR(EINVAL);
 
+	/*ucma初始化*/
 	ret = ucma_init();
 	if (ret)
 		return ret;
 
+	/*申请结构体*/
 	rai = calloc(1, sizeof(*rai));
 	if (!rai)
 		return ERR(ENOMEM);

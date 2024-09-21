@@ -184,6 +184,7 @@ int __lib_query_port(struct ibv_context *context, uint8_t port_num/*port编号*/
 		struct ibv_port_attr tmp_attr = {};
 		int rc;
 
+		/*触发回调，查询port属性*/
 		rc = get_ops(context)->query_port(context, port_num,
 						    &tmp_attr);
 		if (rc)

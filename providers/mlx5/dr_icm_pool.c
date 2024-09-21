@@ -480,6 +480,7 @@ struct dr_icm_chunk *dr_icm_alloc_chunk(struct dr_icm_pool *pool,
 	pthread_spin_lock(&pool->lock);
 
 	if (chunk_size > pool->max_log_chunk_sz) {
+		/*chunk_size过大，报错*/
 		errno = EINVAL;
 		goto out;
 	}

@@ -48,6 +48,7 @@ int ibv_cmd_alloc_dm(struct ibv_context *ctx,
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_ALLOC_DM_ALIGNMENT,
 			    dm_attr->log_align_req);
 
+	/*向kernel发送ioctl消息*/
 	ret = execute_ioctl(ctx, cmdb);
 	if (ret)
 		return errno;

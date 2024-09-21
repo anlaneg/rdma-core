@@ -77,7 +77,7 @@ enum ibv_gid_type {
 
 struct ibv_gid_entry {
 	union ibv_gid gid;
-	uint32_t gid_index;
+	uint32_t gid_index;/*gid索引*/
 	uint32_t port_num;
 	uint32_t gid_type; /* enum ibv_gid_type */
 	uint32_t ndev_ifindex;
@@ -424,10 +424,11 @@ enum ibv_port_cap_flags2 {
 };
 
 struct ibv_port_attr {
+	/*port状态*/
 	enum ibv_port_state	state;
 	enum ibv_mtu		max_mtu;
 	enum ibv_mtu		active_mtu;
-	int			gid_tbl_len;
+	int			gid_tbl_len;/*指明gid有多少种*/
 	uint32_t		port_cap_flags;
 	uint32_t		max_msg_sz;
 	uint32_t		bad_pkey_cntr;
@@ -587,6 +588,7 @@ enum ibv_wc_flags {
 	IBV_WC_TM_DATA_VALID	= 1 << 6,
 };
 
+/*描述write complete*/
 struct ibv_wc {
 	uint64_t		wr_id;
 	enum ibv_wc_status	status;
@@ -1227,6 +1229,7 @@ struct ibv_send_wr {
 struct ibv_recv_wr {
 	uint64_t		wr_id;
 	struct ibv_recv_wr     *next;
+	/*num_sge指定的一组ibv_sge*/
 	struct ibv_sge	       *sg_list;
 	int			num_sge;
 };
@@ -1310,8 +1313,8 @@ struct ibv_qp {
 	struct ibv_context     *context;
 	void		       *qp_context;
 	struct ibv_pd	       *pd;
-	struct ibv_cq	       *send_cq;
-	struct ibv_cq	       *recv_cq;
+	struct ibv_cq	       *send_cq;/*send对应的complete queue*/
+	struct ibv_cq	       *recv_cq;/*recv对应的complete queue*/
 	struct ibv_srq	       *srq;
 	uint32_t		handle;
 	uint32_t		qp_num;
@@ -1718,6 +1721,7 @@ static inline int ibv_post_wq_recv(struct ibv_wq *wq,
 				   struct ibv_recv_wr *recv_wr,
 				   struct ibv_recv_wr **bad_recv_wr)
 {
+	/*在wq上调用post_recv接口，提供一组接收数据所要使用的*/
 	return wq->post_recv(wq, recv_wr, bad_recv_wr);
 }
 
@@ -2059,8 +2063,10 @@ struct ibv_context_ops {
 	void *(*_compat_query_qp)(void);
 	void *(*_compat_modify_qp)(void);
 	void *(*_compat_destroy_qp)(void);
+	/*为sq队列提供可发送数据的buffer*/
 	int			(*post_send)(struct ibv_qp *qp, struct ibv_send_wr *wr,
 					     struct ibv_send_wr **bad_wr);
+	/*为rq队列提供可接收数据的buffer*/
 	int			(*post_recv)(struct ibv_qp *qp, struct ibv_recv_wr *wr,
 					     struct ibv_recv_wr **bad_wr);
 	void *(*_compat_create_ah)(void);
@@ -2503,7 +2509,7 @@ static inline ssize_t ibv_query_gid_table(struct ibv_context *context,
 					  size_t max_entries, uint32_t flags)
 {
 	return _ibv_query_gid_table(context, entries, max_entries, flags,
-				    sizeof(*entries));
+				    sizeof(*entries)/*entries结构体大小*/);
 }
 
 /**
@@ -3437,7 +3443,7 @@ static inline int ibv_destroy_rwq_ind_table(struct ibv_rwq_ind_table *rwq_ind_ta
 static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
 				struct ibv_send_wr **bad_wr/*出参，损坏的wr*/)
 {
-    /*调用context ops向qp中发送数据*/
+    /*调用context ops向qp中填充要发送的数据buffer*/
 	return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 
@@ -3447,7 +3453,7 @@ static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
 static inline int ibv_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr,
 				struct ibv_recv_wr **bad_wr)
 {
-    /*调用context ops接收数据*/
+    /*调用context ops向qp中填充要接收的数据buffer*/
 	return qp->context->ops.post_recv(qp, wr, bad_wr);
 }
 

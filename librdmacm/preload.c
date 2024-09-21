@@ -92,8 +92,8 @@ struct socket_calls {
 	int (*fxstat)(int ver, int fd, struct stat *buf);
 };
 
-static struct socket_calls real;
-static struct socket_calls rs;
+static struct socket_calls real;/*记录socket相关的函数*/
+static struct socket_calls rs;/*记录rdma相关的socket函数*/
 
 static struct index_map idm;
 static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
@@ -157,12 +157,14 @@ static void scan_config(void)
 	FILE *fp;
 	char line[120], prog[64], dom[16], type[16], proto[16];
 
+	/*读取preload_config文件*/
 	fp = fopen(RS_CONF_DIR "/preload_config", "r");
 	if (!fp)
 		return;
 
 	while (fgets(line, sizeof(line), fp)) {
 		if (line[0] == '#')
+			/*跳过注释行*/
 			continue;
 
 		if (sscanf(line, "%63s%15s%15s%15s", prog, dom, type, proto) != 4)
@@ -358,11 +360,11 @@ static void getenv_options(void)
 
 	var = getenv("RS_SQ_SIZE");
 	if (var)
-		sq_size = atoi(var);
+		sq_size = atoi(var);/*确定sq的大小*/
 
 	var = getenv("RS_RQ_SIZE");
 	if (var)
-		rq_size = atoi(var);
+		rq_size = atoi(var);/*确定rq的大小*/
 
 	var = getenv("RS_INLINE");
 	if (var)
@@ -379,12 +381,15 @@ static void init_preload(void)
 
 	/* Quick check without lock */
 	if (init)
+		/*函数已初始化，退出*/
 		return;
 
 	pthread_mutex_lock(&mut);
 	if (init)
+		/*加锁确认已初始化，退出*/
 		goto out;
 
+	/*查找so确认socket接口函数*/
 	real.socket = dlsym(RTLD_NEXT, "socket");
 	real.bind = dlsym(RTLD_NEXT, "bind");
 	real.listen = dlsym(RTLD_NEXT, "listen");
@@ -412,6 +417,7 @@ static void init_preload(void)
 	real.sendfile = dlsym(RTLD_NEXT, "sendfile");
 	real.fxstat = dlsym(RTLD_NEXT, "__fxstat");
 
+	/*查找so确认rdma socket接口函数*/
 	rs.socket = dlsym(RTLD_DEFAULT, "rsocket");
 	rs.bind = dlsym(RTLD_DEFAULT, "rbind");
 	rs.listen = dlsym(RTLD_DEFAULT, "rlisten");
@@ -486,10 +492,10 @@ static int transpose_socket(int socket, enum fd_type new_type)
 
 	sfd = fd_getd(socket);
 	if (new_type == fd_rsocket) {
-		dapi = &rs;
+		dapi = &rs;/*使用rdma对应的接口*/
 		sapi = &real;
 	} else {
-		dapi = &real;
+		dapi = &real;/*使用原有的socket接口*/
 		sapi = &rs;
 	}
 
@@ -520,6 +526,7 @@ err:
 static void set_rsocket_options(int rsocket)
 {
 	if (sq_size)
+		/*设置sq size*/
 		rsetsockopt(rsocket, SOL_RDMA, RDMA_SQSIZE, &sq_size, sizeof sq_size);
 
 	if (rq_size)

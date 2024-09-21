@@ -67,12 +67,13 @@ static int run(void)
 	init_attr.cap.max_send_sge = init_attr.cap.max_recv_sge = 1;
 	init_attr.cap.max_inline_data = 16;
 	init_attr.sq_sig_all = 1;
-	ret = rdma_create_ep(&listen_id, res, NULL, &init_attr);
+	ret = rdma_create_ep(&listen_id/*出参*/, res, NULL, &init_attr);
 	if (ret) {
 		perror("rdma_create_ep");
 		goto out_free_addrinfo;
 	}
 
+	/*监听*/
 	ret = rdma_listen(listen_id, 0);
 	if (ret) {
 		perror("rdma_listen");
@@ -88,7 +89,7 @@ static int run(void)
 	memset(&qp_attr, 0, sizeof qp_attr);
 	memset(&init_attr, 0, sizeof init_attr);
 	ret = ibv_query_qp(id->qp, &qp_attr, IBV_QP_CAP,
-			   &init_attr);
+			   &init_attr);/*取qp属性*/
 	if (ret) {
 		perror("ibv_query_qp");
 		goto out_destroy_accept_ep;
@@ -99,6 +100,7 @@ static int run(void)
 		printf("rdma_server: device doesn't support IBV_SEND_INLINE, "
 		       "using sge sends\n");
 
+	/*注册mr*/
 	mr = rdma_reg_msgs(id, recv_msg, 16);
 	if (!mr) {
 		ret = -1;
@@ -106,6 +108,7 @@ static int run(void)
 		goto out_destroy_accept_ep;
 	}
 	if ((send_flags & IBV_SEND_INLINE) == 0) {
+		/*支持inline模式，注册mr*/
 		send_mr = rdma_reg_msgs(id, send_msg, 16);
 		if (!send_mr) {
 			ret = -1;
@@ -114,6 +117,7 @@ static int run(void)
 		}
 	}
 
+	//向rq提供可接收数据的buffer
 	ret = rdma_post_recv(id, NULL, recv_msg, 16, mr);
 	if (ret) {
 		perror("rdma_post_recv");
@@ -126,18 +130,21 @@ static int run(void)
 		goto out_dereg_send;
 	}
 
+	/*等待收取*/
 	while ((ret = rdma_get_recv_comp(id, &wc)) == 0);
 	if (ret < 0) {
 		perror("rdma_get_recv_comp");
 		goto out_disconnect;
 	}
 
+	/*提供需要发送的buffer*/
 	ret = rdma_post_send(id, NULL, send_msg, 16, send_mr, send_flags);
 	if (ret) {
 		perror("rdma_post_send");
 		goto out_disconnect;
 	}
 
+	/*等待发送完成*/
 	while ((ret = rdma_get_send_comp(id, &wc)) == 0);
 	if (ret < 0)
 		perror("rdma_get_send_comp");
@@ -145,9 +152,11 @@ static int run(void)
 		ret = 0;
 
 out_disconnect:
+	/*断开连接*/
 	rdma_disconnect(id);
 out_dereg_send:
 	if ((send_flags & IBV_SEND_INLINE) == 0)
+		/*解注册mr*/
 		rdma_dereg_mr(send_mr);
 out_dereg_recv:
 	rdma_dereg_mr(mr);

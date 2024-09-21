@@ -99,7 +99,7 @@ enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
 	    /*如果执行成功，则返回*/
 		return SUCCESS;
 
-	/*执行失败，尝试fallback到write接口*/
+	/*ioctl执行失败，尝试fallback到write接口*/
 	if (*ret == ENOTTY) {
 		/* ENOTTY means the ioctl framework is entirely absent */
 		bitmap_fill(priv->unsupported_ioctls, VERBS_OPS_NUM);

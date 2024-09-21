@@ -88,7 +88,7 @@ struct acm_hdr {
 #define ACM_EP_INFO_PATH        0x0010
 
 union acm_ep_info {
-	uint8_t                 addr[ACM_MAX_ADDRESS];
+	uint8_t                 addr[ACM_MAX_ADDRESS];/*v4或v6地址*/
 	uint8_t                 name[ACM_MAX_ADDRESS];
 	struct ibv_path_record  path;
 };
@@ -97,8 +97,8 @@ union acm_ep_info {
 #define ACM_EP_FLAG_DEST        (1<<1)
 
 struct acm_ep_addr_data {
-	uint32_t                flags;
-	uint16_t                type;
+	uint32_t                flags;/*指明地址类型，例如源地址*/
+	uint16_t                type;/*指明地址类型，例如ACM_EP_INFO_ADDRESS_IP*/
 	uint16_t                reserved;
 	union acm_ep_info       info;
 };

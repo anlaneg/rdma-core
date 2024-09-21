@@ -319,6 +319,7 @@ static int dr_domain_caps_init(struct ibv_context *ctx,
 
 	dmn->info.caps.dmn = dmn;
 
+	/*查询1号port的属性*/
 	ret = ibv_query_port(ctx, 1, &port_attr);
 	if (ret) {
 		dr_dbg(dmn, "Failed to query port\n");
@@ -496,6 +497,7 @@ static int dr_domain_check_icm_memory_caps(struct mlx5dv_dr_domain *dmn)
 	return 0;
 }
 
+/*创建doman结构体*/
 struct mlx5dv_dr_domain *
 mlx5dv_dr_domain_create(struct ibv_context *ctx,
 			enum mlx5dv_dr_domain_type type)
@@ -504,6 +506,7 @@ mlx5dv_dr_domain_create(struct ibv_context *ctx,
 	int ret;
 
 	if (type > MLX5DV_DR_DOMAIN_TYPE_FDB) {
+		/*无效的domain type*/
 		errno = EINVAL;
 		return NULL;
 	}
@@ -515,6 +518,7 @@ mlx5dv_dr_domain_create(struct ibv_context *ctx,
 	}
 
 	dmn->ctx = ctx;
+	/*要创建的type*/
 	dmn->type = type;
 	atomic_init(&dmn->refcount, 1);
 	list_head_init(&dmn->tbl_list);

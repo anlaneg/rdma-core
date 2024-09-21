@@ -424,8 +424,9 @@ struct verbs_context_ops {
 		struct ibv_context *context,
 		struct ibv_xrcd_init_attr *xrcd_init_attr);
 	int (*poll_cq)(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
-	int (*post_recv)(struct ibv_qp *qp, struct ibv_recv_wr *wr,
-			 struct ibv_recv_wr **bad_wr);
+	/*为rq队列提供可接收数据的buffer*/
+	int (*post_recv)(struct ibv_qp *qp, struct ibv_recv_wr *wr/*可接收数据的buffer*/,
+			 struct ibv_recv_wr **bad_wr/*出参，指向首个失败调用的recv_wr*/);
 	int (*post_send)(struct ibv_qp *qp, struct ibv_send_wr *wr,
 			 struct ibv_send_wr **bad_wr);
 	int (*post_srq_ops)(struct ibv_srq *srq, struct ibv_ops_wr *op,

@@ -75,10 +75,12 @@ void ucma_ib_init(void)
 	int ret;
 
 	if (init)
+		/*已初始化，退出*/
 		return;
 
 	pthread_mutex_lock(&acm_lock);
 	if (init)
+		/*加锁确认，已初始化，退出*/
 		goto unlock;
 
 	if (ucma_set_server_port()) {
@@ -96,6 +98,7 @@ void ucma_ib_init(void)
 			sock = -1;
 		}
 	} else {
+		/*创建unix socket*/
 		sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 		if (sock < 0)
 			goto out;
@@ -105,7 +108,7 @@ void ucma_ib_init(void)
 		BUILD_ASSERT(sizeof(IBACM_SERVER_PATH) <=
 			     sizeof(addr.unx.sun_path));
 		strcpy(addr.unx.sun_path, IBACM_SERVER_PATH);
-		ret = connect(sock, &addr.any, sizeof(addr.unx));
+		ret = connect(sock, &addr.any, sizeof(addr.unx));/*连接server socket*/
 		if (ret) {
 			close(sock);
 			sock = -1;
@@ -297,6 +300,7 @@ static void ucma_ib_save_resp(struct rdma_addrinfo *rai, struct acm_msg *msg)
 	}
 }
 
+/*设置v4或v6地址*/
 static void ucma_set_ep_addr(struct acm_ep_addr_data *data, struct sockaddr *addr)
 {
 	if (addr->sa_family == AF_INET) {
@@ -310,12 +314,14 @@ static void ucma_set_ep_addr(struct acm_ep_addr_data *data, struct sockaddr *add
 
 static int ucma_inet_addr(struct sockaddr *addr, socklen_t len)
 {
+	/*是否ipv4,ipv6地址*/
 	return len && addr && (addr->sa_family == AF_INET ||
 			       addr->sa_family == AF_INET6);
 }
 
 static int ucma_ib_addr(struct sockaddr *addr, socklen_t len)
 {
+	/*是否为ib地址*/
 	return len && addr && (addr->sa_family == AF_IB);
 }
 
@@ -332,19 +338,19 @@ void ucma_ib_resolve(struct rdma_addrinfo **rai,
 
 	memset(&msg, 0, sizeof msg);
 	msg.hdr.version = ACM_VERSION;
-	msg.hdr.opcode = ACM_OP_RESOLVE;
+	msg.hdr.opcode = ACM_OP_RESOLVE;/*指定操作码*/
 	msg.hdr.length = ACM_MSG_HDR_LENGTH;
 
 	data = &msg.resolve_data[0];
 	if (ucma_inet_addr((*rai)->ai_src_addr, (*rai)->ai_src_len)) {
-		data->flags = ACM_EP_FLAG_SOURCE;
+		data->flags = ACM_EP_FLAG_SOURCE;/*指明填充的为源地址*/
 		ucma_set_ep_addr(data, (*rai)->ai_src_addr);
-		data++;
+		data++;/*此地址填充完成，跳下一个*/
 		msg.hdr.length += ACM_MSG_EP_LENGTH;
 	}
 
 	if (ucma_inet_addr((*rai)->ai_dst_addr, (*rai)->ai_dst_len)) {
-		data->flags = ACM_EP_FLAG_DEST;
+		data->flags = ACM_EP_FLAG_DEST;/*指明目的地址*/
 		if (hints->ai_flags & (RAI_NUMERICHOST | RAI_NOROUTE))
 			data->flags |= ACM_FLAGS_NODELAY;
 		ucma_set_ep_addr(data, (*rai)->ai_dst_addr);
@@ -365,6 +371,7 @@ void ucma_ib_resolve(struct rdma_addrinfo **rai,
 			path = NULL;
 
 		if (path)
+			/*填充path*/
 			memcpy(&data->info.path, path, sizeof(*path));
 
 		if (ucma_ib_addr((*rai)->ai_src_addr, (*rai)->ai_src_len)) {

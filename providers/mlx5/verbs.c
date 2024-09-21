@@ -114,6 +114,7 @@ int mlx5_query_rt_values(struct ibv_context *context,
 	return err;
 }
 
+/*查询port属性*/
 int mlx5_query_port(struct ibv_context *context, uint8_t port,
 		     struct ibv_port_attr *attr)
 {

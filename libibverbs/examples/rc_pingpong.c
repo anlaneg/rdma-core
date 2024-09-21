@@ -702,6 +702,7 @@ static int pp_post_send(struct pingpong_context *ctx)
 	struct ibv_send_wr *bad_wr;
 
 	if (use_new_send) {
+		/*使用新的接口*/
 		ibv_wr_start(ctx->qpx);
 
 		ctx->qpx->wr_id = PINGPONG_SEND_WRID;
@@ -1050,7 +1051,7 @@ int main(int argc, char *argv[])
 	if (!ctx)
 		return 1;
 
-	/*执行post recv*/
+	/*执行post recv,准备接收用的buffer*/
 	routs = pp_post_recv(ctx, ctx->rx_depth);
 	if (routs < ctx->rx_depth) {
 		fprintf(stderr, "Couldn't post receive (%d)\n", routs);

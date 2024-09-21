@@ -174,6 +174,7 @@ struct mlx5dv_dr_table *mlx5dv_dr_table_create(struct mlx5dv_dr_domain *dmn,
 	atomic_fetch_add(&dmn->refcount, 1);
 
 	if (level && !dmn->info.supp_sw_steering) {
+		/*指定了table,但domin不支持software steering,则返回失败*/
 		errno = EOPNOTSUPP;
 		goto dec_ref;
 	}

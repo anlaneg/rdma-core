@@ -57,7 +57,7 @@ static int run(void)
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_port_space = RDMA_PS_TCP;
-	ret = rdma_getaddrinfo(server, port, &hints, &res);
+	ret = rdma_getaddrinfo(server/*服务端地址*/, port/*服务端口*/, &hints, &res);
 	if (ret) {
 		printf("rdma_getaddrinfo: %s\n", gai_strerror(ret));
 		goto out;
@@ -97,6 +97,7 @@ static int run(void)
 		}
 	}
 
+	/*提供接收数据用的buffer*/
 	ret = rdma_post_recv(id, NULL, recv_msg, 16, mr);
 	if (ret) {
 		perror("rdma_post_recv");
@@ -109,18 +110,21 @@ static int run(void)
 		goto out_dereg_send;
 	}
 
+	/*提供发送数据用的buffer*/
 	ret = rdma_post_send(id, NULL, send_msg, 16, send_mr, send_flags);
 	if (ret) {
 		perror("rdma_post_send");
 		goto out_disconnect;
 	}
 
+	/*等待发送完成*/
 	while ((ret = rdma_get_send_comp(id, &wc)) == 0);
 	if (ret < 0) {
 		perror("rdma_get_send_comp");
 		goto out_disconnect;
 	}
 
+	/*等待接收完成*/
 	while ((ret = rdma_get_recv_comp(id, &wc)) == 0);
 	if (ret < 0)
 		perror("rdma_get_recv_comp");
@@ -128,6 +132,7 @@ static int run(void)
 		ret = 0;
 
 out_disconnect:
+	/*断开连接*/
 	rdma_disconnect(id);
 out_dereg_send:
 	if ((send_flags & IBV_SEND_INLINE) == 0)

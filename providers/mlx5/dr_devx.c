@@ -339,6 +339,7 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 	caps->nic_tx_allow_address = DEVX_GET64(query_hca_cap_out, out,
 						capability.flow_table_nic_cap.
 						sw_steering_nic_tx_action_allow_icm_address);
+	/*取out中的capability.flow_table_nic_cap.flow_table_properties_nic_receive.sw_owner_v2属性值*/
 	caps->rx_sw_owner_v2 = DEVX_GET(query_hca_cap_out, out,
 					capability.flow_table_nic_cap.
 					flow_table_properties_nic_receive.sw_owner_v2);
@@ -346,6 +347,7 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 					capability.flow_table_nic_cap.
 					flow_table_properties_nic_transmit.sw_owner_v2);
 	if (!caps->rx_sw_owner_v2)
+		/*取out中的capability.flow_table_nic_cap.flow_table_properties_nic_receive.sw_owner属性值*/
 		caps->rx_sw_owner = DEVX_GET(query_hca_cap_out, out,
 					     capability.flow_table_nic_cap.
 					     flow_table_properties_nic_receive.sw_owner);

@@ -2259,11 +2259,12 @@ static int dr_action_create_modify_action(struct mlx5dv_dr_domain *dmn,
 		goto free_hw_actions;
 
 	action->rewrite.param.data = (uint8_t *)hw_actions;
-	action->rewrite.param.num_of_actions = num_hw_actions;
+	action->rewrite.param.num_of_actions = num_hw_actions;/*设置action数目*/
 
 	if (num_hw_actions == 1 &&
 	    (dmn->ste_ctx->actions_caps &
 	     DR_STE_CTX_ACTION_CAP_MODIFY_HDR_INLINE)) {
+		/*仅有一个action的情况*/
 		action->rewrite.single_action_opt = true;
 		return 0;
 	}
@@ -2311,6 +2312,7 @@ mlx5dv_dr_action_create_modify_header(struct mlx5dv_dr_domain *dmn,
 		goto dec_ref;
 	}
 
+	/*初始化action*/
 	action = dr_action_create_generic(DR_ACTION_TYP_MODIFY_HDR);
 	if (!action)
 		goto dec_ref;
@@ -2325,7 +2327,7 @@ mlx5dv_dr_action_create_modify_header(struct mlx5dv_dr_domain *dmn,
 							  actions,
 							  action);
 	} else {
-		action->rewrite.is_root_level = false;
+		action->rewrite.is_root_level = false;/*指明非root level*/
 		ret = dr_action_create_modify_action(dmn,
 						     actions_sz,
 						     actions,

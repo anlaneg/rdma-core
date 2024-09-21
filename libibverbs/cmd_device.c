@@ -222,6 +222,7 @@ int ibv_cmd_query_context(struct ibv_context *context,
 
 static int is_zero_gid(union ibv_gid *gid)
 {
+	/*检查gid是否为全0*/
 	const union ibv_gid zgid = {};
 
 	return !memcmp(gid, &zgid, sizeof(*gid));
@@ -237,22 +238,25 @@ static int query_sysfs_gid_ndev_ifindex(struct ibv_context *context,
 	if (ibv_read_ibdev_sysfs_file(buff, sizeof(buff), verbs_device->sysfs,
 				      "ports/%d/gid_attrs/ndevs/%d", port_num,
 				      gid_index) <= 0) {
+		/*读取失败，设置ifindex为0*/
 		*ndev_ifindex = 0;
 		return 0;
 	}
 
+	/*更新Ifindex*/
 	*ndev_ifindex = if_nametoindex(buff);
 	return *ndev_ifindex ? 0 : errno;
 }
 
 static int query_sysfs_gid(struct ibv_context *context, uint8_t port_num, int index,
-			   union ibv_gid *gid)
+			   union ibv_gid *gid/*出参，index号gid内容*/)
 {
 	struct verbs_device *verbs_device = verbs_get_device(context->device);
 	char attr[41];
 	uint16_t val;
 	int i;
 
+	/*读取index号gid*/
 	if (ibv_read_ibdev_sysfs_file(attr, sizeof(attr), verbs_device->sysfs,
 				      "ports/%d/gids/%d", port_num, index) < 0)
 		return -1;
@@ -285,6 +289,7 @@ static int query_sysfs_gid_type(struct ibv_context *context, uint8_t port_num,
 	if (ibv_read_ibdev_sysfs_file(buff, sizeof(buff), verbs_device->sysfs,
 				      "ports/%d/gid_attrs/types/%d", port_num,
 				      index) <= 0) {
+		/*读取index号gid type失败，处理为ib-roce-v1*/
 		char *dir_path;
 		DIR *dir;
 
@@ -295,13 +300,16 @@ static int query_sysfs_gid_type(struct ibv_context *context, uint8_t port_num,
 			*type = IBV_GID_TYPE_SYSFS_IB_ROCE_V1;
 			return 0;
 		}
+		/*构造目录路径，例如：/sys/class/infiniband/mlx5_9/ports/1/gid_attrs/*/
 		if (asprintf(&dir_path, "%s/%s/%d/%s/",
 			     verbs_device->sysfs->ibdev_path, "ports", port_num,
 			     "gid_attrs") < 0)
 			return -1;
+		/*打开这个目录*/
 		dir = opendir(dir_path);
 		free(dir_path);
 		if (!dir) {
+			/*此目录存在，则定为IBV_GID_TYPE_SYSFS_IB_ROCE_V1*/
 			if (errno == ENOENT)
 				/* Assuming that if gid_attrs doesn't exist,
 				 * we have an old kernel and all GIDs are
@@ -311,11 +319,13 @@ static int query_sysfs_gid_type(struct ibv_context *context, uint8_t port_num,
 			else
 				return -1;
 		} else {
+			/*此目录存在，直接返回-1*/
 			closedir(dir);
 			errno = EFAULT;
 			return -1;
 		}
 	} else {
+		/*types读取成功，自buff中进行解析，确定type*/
 		if (!strcmp(buff, V1_TYPE)) {
 			*type = IBV_GID_TYPE_SYSFS_IB_ROCE_V1;
 		} else if (!strcmp(buff, V2_TYPE)) {
@@ -342,18 +352,21 @@ static int query_sysfs_gid_entry(struct ibv_context *context, uint32_t port_num,
 	entry->port_num = port_num;
 
 	if (attr_mask & VERBS_QUERY_GID_ATTR_GID) {
+		/*通过sysfs查询gid_index号gid*/
 		ret = query_sysfs_gid(context, port_num, gid_index, &entry->gid);
 		if (ret)
 			return EINVAL;
 	}
 
 	if (attr_mask & VERBS_QUERY_GID_ATTR_TYPE) {
+		/*通过sysfs查询gid_index号对应的gid_type*/
 		ret = query_sysfs_gid_type(context, port_num, gid_index, &gid_type);
 		if (ret)
 			return EINVAL;
 
 		if (gid_type == IBV_GID_TYPE_SYSFS_IB_ROCE_V1) {
 			if (link_layer < 0) {
+				/*更新link_layer*/
 				ret = ibv_query_port(context, port_num,
 						     &port_attr);
 				if (ret)
@@ -362,6 +375,7 @@ static int query_sysfs_gid_entry(struct ibv_context *context, uint32_t port_num,
 				link_layer = port_attr.link_layer;
 			}
 
+			/*依据link_layer确定gid_type*/
 			if (link_layer == IBV_LINK_LAYER_INFINIBAND) {
 				entry->gid_type = IBV_GID_TYPE_IB;
 			} else if (link_layer == IBV_LINK_LAYER_ETHERNET) {
@@ -376,6 +390,7 @@ static int query_sysfs_gid_entry(struct ibv_context *context, uint32_t port_num,
 	}
 
 	if (attr_mask & VERBS_QUERY_GID_ATTR_NDEV_IFINDEX)
+		/*通过sysfs查询gid_index号对应的netdev_ifindex*/
 		ret = query_sysfs_gid_ndev_ifindex(context, port_num, gid_index,
 						   &entry->ndev_ifindex);
 
@@ -395,6 +410,7 @@ static int query_gid_table_fb(struct ibv_context *context,
 	int i, j;
 	int ret;
 
+	/*先取设备的属性*/
 	ret = ibv_query_device(context, &dev_attr);
 	if (ret)
 		goto out;
@@ -404,6 +420,7 @@ static int query_gid_table_fb(struct ibv_context *context,
 	attr_mask = VERBS_QUERY_GID_ATTR_GID | VERBS_QUERY_GID_ATTR_TYPE |
 		    VERBS_QUERY_GID_ATTR_NDEV_IFINDEX;
 	for (i = 0; i < dev_attr.phys_port_cnt; i++) {
+		/*取i+1设备对应的port属性*/
 		ret = ibv_query_port(context, i + 1, &port_attr);
 		if (ret)
 			goto out;
@@ -414,7 +431,10 @@ static int query_gid_table_fb(struct ibv_context *context,
 			 * API should succceed.
 			 */
 			if (*num_entries == max_entries)
+				/*达到最大值，使用tmp变量*/
 				tmp = &entry;
+
+			/*通过sysfs查询（j)号gid,并填充tmp*/
 			ret = query_sysfs_gid_entry(context, i + 1, j,
 						    tmp,
 						    attr_mask,
@@ -422,6 +442,7 @@ static int query_gid_table_fb(struct ibv_context *context,
 			if (ret)
 				goto out;
 			if (is_zero_gid(&((struct ibv_gid_entry *)tmp)->gid))
+				/*忽略全零gid*/
 				continue;
 			if (*num_entries == max_entries) {
 				ret = EINVAL;
@@ -429,7 +450,7 @@ static int query_gid_table_fb(struct ibv_context *context,
 			}
 
 			(*num_entries)++;
-			tmp += entry_size;
+			tmp += entry_size;/*跳到下一个entry*/
 		}
 	}
 
@@ -502,6 +523,7 @@ ssize_t _ibv_query_gid_table(struct ibv_context *context,
 	uint64_t num_entries;
 	int ret;
 
+	/*添加以下4个属性，完成cmd设置*/
 	fill_attr_const_in(cmdb, UVERBS_ATTR_QUERY_GID_TABLE_ENTRY_SIZE,
 			   entry_size);
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_QUERY_GID_TABLE_FLAGS, flags);
@@ -516,6 +538,7 @@ ssize_t _ibv_query_gid_table(struct ibv_context *context,
 		if (flags)
 			return -EOPNOTSUPP;
 
+		/*回退到函数获取*/
 		ret = query_gid_table_fb(context, entries, max_entries,
 					 &num_entries, entry_size);
 		break;

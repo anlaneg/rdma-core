@@ -135,7 +135,7 @@ enum write_fallback _execute_ioctl_fallback(struct ibv_context *ctx,
 					    int *ret);
 
 #define execute_ioctl_fallback(ctx, cmd_name/*命令名称*/, cmdb/*命令buffer*/, ret)                       \
-	_execute_ioctl_fallback(ctx, _CMD_BIT(cmd_name)/*命令id*/, cmdb, ret)
+	_execute_ioctl_fallback(ctx, _CMD_BIT(cmd_name)/*命令id，通过检查cmd_name在verbs_context_ops中的位置来确定*/, cmdb, ret)
 
 /*
  * For write() only commands that have fixed core structures and may take uhw
