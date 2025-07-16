@@ -1035,6 +1035,7 @@ static int mlx5_vfio_get_iommu_info(struct mlx5_vfio_context *ctx)
 	}
 
 	info->argsz = sizeof(*info);
+	/*取iommu info信息*/
 	ret = ioctl(ctx->container_fd, VFIO_IOMMU_GET_INFO, info);
 	if (ret)
 		goto end;

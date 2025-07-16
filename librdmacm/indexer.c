@@ -133,11 +133,12 @@ nomem:
 	return -1;
 }
 
-int idm_set(struct index_map *idm, int index, void *item)
+int idm_set(struct index_map *idm, int index/*索引*/, void *item/*要保存的value*/)
 {
 	void **entry;
 
 	if (index > IDX_MAX_INDEX) {
+		/*索引过大*/
 		errno = ENOMEM;
 		return -1;
 	}

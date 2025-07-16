@@ -613,7 +613,7 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	//列出系统所有可用ib设备(通过netlink socket)
 	ret = find_sysfs_devs_nl(&sysfs_list);
 	if (ret) {
-	    //通过netlink获取失败，通过sysfs进行获取
+	    //通过netlink获取仅失败时，才通过sysfs进行获取
 		ret = find_sysfs_devs(&sysfs_list);
 		if (ret)
 			return -ret;

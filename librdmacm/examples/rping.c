@@ -368,7 +368,7 @@ static void rping_init_conn_param(struct rping_cb *cb,
 	memset(conn_param, 0, sizeof(*conn_param));
 	conn_param->responder_resources = 1;
 	conn_param->initiator_depth = 1;
-	conn_param->retry_count = 7;
+	conn_param->retry_count = 7;/*重试次数*/
 	conn_param->rnr_retry_count = 7;
 	if (cb->self_create_qp)
 		conn_param->qp_num = cb->qp->qp_num;

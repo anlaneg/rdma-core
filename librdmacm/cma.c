@@ -737,6 +737,7 @@ static void ucma_remove_id(struct cma_id_private *id_priv)
 
 static struct cma_id_private *ucma_lookup_id(int handle)
 {
+	/*利用handle查询cma_id_private*/
 	return idm_lookup(&ucma_idm, handle);
 }
 
@@ -860,6 +861,7 @@ static int ucma_destroy_kern_id(int fd, uint32_t handle)
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, DESTROY_ID, &resp, sizeof resp);
 	cmd.id = handle;
 
+	/*写destroy_id,获得响应id*/
 	ret = write(fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
@@ -1850,7 +1852,7 @@ static void ucma_copy_ece_param_to_kern_req(struct cma_id_private *id_priv,
 /*执行connect*/
 int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 {
-	uint32_t qp_num = conn_param ? conn_param->qp_num : 0;
+	uint32_t qp_num = conn_param ? conn_param->qp_num : 0;/*如未提供参数，qp_num为0*/
 	uint8_t srq = conn_param ? conn_param->srq : 0;
 	struct ucma_abi_connect cmd;
 	struct cma_id_private *id_priv;
@@ -1871,7 +1873,7 @@ int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 		id_priv->responder_resources = id_priv->cma_dev->max_responder_resources;
 
 	/*向kernel发送connect命令*/
-	CMA_INIT_CMD(&cmd, sizeof cmd, CONNECT);
+	CMA_INIT_CMD(&cmd, sizeof cmd, CONNECT);/*初始化cmd*/
 	cmd.id = id_priv->handle;
 	if (id->qp) {
 		qp_num = id->qp->qp_num;
@@ -1883,7 +1885,7 @@ int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 
 	ucma_copy_ece_param_to_kern_req(id_priv, &cmd.ece);
 
-	ret = write(id->channel->fd, &cmd, sizeof cmd);
+	ret = write(id->channel->fd, &cmd, sizeof cmd);/*发送cmd*/
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
@@ -2580,7 +2582,7 @@ retry:
 	**/
 	memset(evt, 0, sizeof(*evt));
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT/*请求获取event*/, &resp, sizeof resp);
-	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令*/
+	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令,并获得响应*/
 	if (ret != sizeof cmd) {
 		free(evt);
 		return (ret >= 0) ? ERR(ENODATA) : -1;
