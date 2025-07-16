@@ -62,7 +62,7 @@ struct bnxt_re_work_compl {
 
 static inline uint8_t bnxt_re_get_psne_size(struct bnxt_re_context *cntx)
 {
-	return (BNXT_RE_HW_RETX(cntx)) ? sizeof(struct bnxt_re_msns) :
+	return (BNXT_RE_MSN_TBL_EN(cntx)) ? sizeof(struct bnxt_re_msns) :
 					      (cntx->cctx.gen_p5_p7) ?
 					      sizeof(struct bnxt_re_psns_ext) :
 					      sizeof(struct bnxt_re_psns);
@@ -96,6 +96,8 @@ int bnxt_re_arm_cq(struct ibv_cq *ibvcq, int flags);
 
 struct ibv_qp *bnxt_re_create_qp(struct ibv_pd *ibvpd,
 				 struct ibv_qp_init_attr *attr);
+struct ibv_qp *bnxt_re_create_qp_ex(struct ibv_context *cntx,
+				    struct ibv_qp_init_attr_ex *attr);
 int bnxt_re_modify_qp(struct ibv_qp *ibvqp, struct ibv_qp_attr *attr,
 		      int ibv_qp_attr_mask);
 int bnxt_re_query_qp(struct ibv_qp *ibvqp, struct ibv_qp_attr *attr,

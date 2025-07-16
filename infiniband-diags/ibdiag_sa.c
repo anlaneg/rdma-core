@@ -48,17 +48,19 @@
  * the saquery tool and provides it to other utilities.
  */
 
-struct sa_handle * sa_get_handle(void)
+struct sa_handle *sa_get_handle(char *ca_name)
 {
-	struct sa_handle * handle;
+	struct sa_handle *handle;
 	handle = calloc(1, sizeof(*handle));
 	if (!handle)
 		IBPANIC("calloc failed");
 
-	resolve_sm_portid(ibd_ca, ibd_ca_port, &handle->dport);
+	char *name = ca_name ? ca_name : ibd_ca;
+
+	resolve_sm_portid(name, ibd_ca_port, &handle->dport);
 	if (!handle->dport.lid) {
 		IBWARN("No SM/SA found on port %s:%d",
-			ibd_ca ? "" : ibd_ca,
+			name ? "" : name,
 			ibd_ca_port);
 		goto err;
 	}
@@ -67,16 +69,17 @@ struct sa_handle * sa_get_handle(void)
 	if (!handle->dport.qkey)
 		handle->dport.qkey = IB_DEFAULT_QP1_QKEY;
 
-	if ((handle->fd = umad_open_port(ibd_ca, ibd_ca_port)) < 0) {
+	handle->fd = umad_open_port(name, ibd_ca_port);
+	if (handle->fd < 0) {
 		IBWARN("umad_open_port on port %s:%d failed",
-			ibd_ca ? "" : ibd_ca,
+			name ? "" : name,
 			ibd_ca_port);
 		goto err;
 	}
 	if ((handle->agent = umad_register(handle->fd, IB_SA_CLASS, 2, 1, NULL)) < 0) {
 		umad_close_port(handle->fd);
 		IBWARN("umad_register for SA class failed on port %s:%d",
-		       ibd_ca ? "" : ibd_ca,
+		       name ? "" : name,
 		       ibd_ca_port);
 		goto err;
 	}
@@ -101,7 +104,7 @@ int sa_query(struct sa_handle * h, uint8_t method,
 		    struct sa_query_result *result)
 {
 	ib_rpc_t rpc;
-	void *umad, *mad;
+	void *umad, *mad, *new_umad;
 	int ret, offset, len = 256;
 
 	memset(&rpc, 0, sizeof(rpc));
@@ -136,7 +139,13 @@ recv_mad:
 	ret = umad_recv(h->fd, umad, &len, ibd_timeout);
 	if (ret < 0) {
 		if (errno == ENOSPC) {
-			umad = realloc(umad, umad_size() + len);
+			new_umad = realloc(umad, umad_size() + len);
+			if (!new_umad) {
+				IBWARN("Failed to reallocate memory for umad: %s\n", strerror(errno));
+				free(umad);
+				return (-ret);
+			}
+			umad = new_umad;
 			goto recv_mad;
 		}
 		IBWARN("umad_recv failed: attr 0x%x: %s\n", attr,

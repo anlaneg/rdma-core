@@ -115,7 +115,7 @@ static struct verbs_context *ocrdma_alloc_context(struct ibv_device *ibdev,
 {
 	struct ocrdma_devctx *ctx;
 	struct uocrdma_get_context cmd;
-	struct uocrdma_get_context_resp resp;
+	struct uocrdma_get_context_resp resp = {};
 
 	ctx = verbs_init_and_alloc_context(ibdev, cmd_fd, ctx, ibv_ctx,
 					   RDMA_DRIVER_OCRDMA);
@@ -124,7 +124,7 @@ static struct verbs_context *ocrdma_alloc_context(struct ibv_device *ibdev,
 
 	if (ibv_cmd_get_context(&ctx->ibv_ctx,
 				(struct ibv_get_context *)&cmd, sizeof cmd,
-				&resp.ibv_resp, sizeof(resp)))
+				NULL, &resp.ibv_resp, sizeof(resp)))
 		goto cmd_err;
 
 	verbs_set_ops(&ctx->ibv_ctx, &ocrdma_ctx_ops);

@@ -36,9 +36,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netdb.h>
+#include <unistd.h>
 
 #include <rdma/rdma_cma.h>
 #include "common.h"
@@ -51,15 +55,17 @@ int get_rdma_addr(const char *src, const char *dst, const char *port,
 	struct rdma_addrinfo rai_hints, *res;
 	int ret;
 
-	if (hints->ai_flags & RAI_PASSIVE)
-		return rdma_getaddrinfo(src, port, hints, rai);
+	if (hints->ai_flags & RAI_PASSIVE) {
+		ret = rdma_getaddrinfo(src, port, hints, rai);
+		goto out;
+	}
 
 	rai_hints = *hints;
 	if (src) {
 		rai_hints.ai_flags |= RAI_PASSIVE;
 		ret = rdma_getaddrinfo(src, NULL, &rai_hints, &res);
 		if (ret)
-			return ret;
+			goto out;
 
 		rai_hints.ai_src_addr = res->ai_src_addr;
 		rai_hints.ai_src_len = res->ai_src_len;
@@ -70,6 +76,9 @@ int get_rdma_addr(const char *src, const char *dst, const char *port,
 	if (src)
 		rdma_freeaddrinfo(res);
 
+out:
+	if (ret)
+		printf("rdma_getaddrinfo error: %s\n", gai_strerror(ret));
 	return ret;
 }
 
@@ -163,7 +172,7 @@ int do_poll(struct pollfd *fds, int timeout)
 }
 
 /*打开event channel*/
-struct rdma_event_channel *create_first_event_channel(void)
+struct rdma_event_channel *create_event_channel(void)
 {
 	struct rdma_event_channel *channel;
 
@@ -175,4 +184,337 @@ struct rdma_event_channel *create_first_event_channel(void)
 			perror("failed to create RDMA CM event channel");
 	}
 	return channel;
+}
+
+static int oob_init_root(struct oob_root *root, int cnt)
+{
+	int i;
+
+	root->sock = malloc(sizeof(*root->sock) * cnt);
+	if (!root->sock)
+		return -1;
+
+	root->cnt = cnt;
+	for (i = 0; i < cnt; i++)
+		root->sock[i] = -1;
+
+	return 0;
+}
+
+void oob_close_root(struct oob_root *root)
+{
+	int i;
+
+	for (i = 0; i < root->cnt; i++) {
+		if (root->sock[i] != -1)
+			close(root->sock[i]);
+	}
+	free(root->sock);
+}
+
+int oob_try_bind(const char *src_addr, const char *port)
+{
+	struct addrinfo hint = {}, *ai;
+	int listen_sock;
+	int optval = 1;
+	int ret;
+
+	hint.ai_flags = AI_PASSIVE;
+	hint.ai_socktype = SOCK_STREAM;
+	ret = getaddrinfo(src_addr, port, &hint, &ai);
+	if (ret) {
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(ret));
+		return ret;
+	}
+
+	listen_sock = socket(ai->ai_family, ai->ai_socktype, 0);
+	if (listen_sock == -1) {
+		ret = -errno;
+		goto free;
+	}
+
+	setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+	ret = bind(listen_sock, ai->ai_addr, ai->ai_addrlen);
+	if (ret) {
+		ret = errno == EADDRNOTAVAIL || errno == EADDRINUSE ? 0 : -errno;
+		if (ret)
+			fprintf(stderr, "unexpected bind error: %s (%d)\n",
+				strerror(errno), errno);
+		close(listen_sock);
+		goto free;
+	}
+
+	ret = listen_sock;
+free:
+	freeaddrinfo(ai);
+	return ret;
+}
+
+int oob_root_setup(int listen_sock, struct oob_root *root, int cnt)
+{
+	int optval = 1;
+	int i, ret;
+
+	ret = oob_init_root(root, cnt);
+	if (ret)
+		goto close;
+
+	ret = listen(listen_sock, 1);
+	if (ret) {
+		ret = -errno;
+		goto close;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		root->sock[i] = accept(listen_sock, NULL, NULL);
+		if (root->sock[i] == -1) {
+			ret = -errno;
+			break;
+		}
+		setsockopt(root->sock[i], IPPROTO_TCP, TCP_NODELAY,
+			   &optval, sizeof(optval));
+	}
+
+close:
+	close(listen_sock);
+	if (ret)
+		oob_close_root(root);
+	return ret;
+}
+
+int oob_leaf_setup(const char *dst_addr, const char *port, int *sock)
+{
+	struct addrinfo hint = {}, *ai;
+	int nodelay = 1;
+	int ret;
+
+	hint.ai_family = AF_INET;
+	hint.ai_socktype = SOCK_STREAM;
+	ret = getaddrinfo(dst_addr, port, &hint, &ai);
+	if (ret) {
+		printf("getaddrinfo error: %s\n", gai_strerror(ret));
+		return ret;
+	}
+
+	*sock = socket(ai->ai_family, ai->ai_socktype, 0);
+	if (*sock == -1) {
+		ret = -errno;
+		goto out;
+	}
+	setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+	ret = connect(*sock, ai->ai_addr, ai->ai_addrlen);
+out:
+	freeaddrinfo(ai);
+	return ret;
+}
+
+int oob_syncup(int sock, char val)
+{
+	char c = val;
+	ssize_t ret;
+
+	ret = send(sock, (void *) &c, sizeof(c), 0);
+	if (ret != sizeof(c))
+		return -errno;
+
+	ret = recv(sock, (void *) &c, sizeof(c), 0);
+	if (ret != sizeof(c))
+		return -errno;
+
+	if (c != val)
+		return -EINVAL;
+	return 0;
+}
+
+int sock_recvdata(int sock, void *data, size_t size)
+{
+	ssize_t ret, bytes;
+
+	bytes = 0;
+	do {
+		ret = recv(sock, (char *) data + bytes, size - bytes, 0);
+		if (ret <= 0)
+			return -errno;
+		bytes += ret;
+	} while (bytes < size);
+
+	return 0;
+}
+
+int sock_senddata(int sock, void *data, size_t size)
+{
+	ssize_t ret, bytes;
+
+	bytes = 0;
+	do {
+		ret = send(sock, (char *) data + bytes, size - bytes, 0);
+		if (ret < 0)
+			return -errno;
+		bytes += ret;
+	} while (bytes < size);
+
+	return 0;
+}
+
+int oob_gather(struct oob_root *root, void *data, size_t size_per_leaf)
+{
+	int ret, i;
+
+	for (i = 0; i < root->cnt; i++) {
+		ret = sock_recvdata(root->sock[i],
+				    (char *) data + i * size_per_leaf,
+				    size_per_leaf);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int oob_senddown(struct oob_root *root, void *data, size_t size)
+{
+	int ret, i;
+
+	for (i = 0; i < root->cnt; i++) {
+		ret = sock_senddata(root->sock[i], data, size);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int oob_syncdown(struct oob_root *root, char val)
+{
+	ssize_t ret;
+	char c;
+	int i;
+
+	for (i = 0; i < root->cnt; i++) {
+		c = 0;
+		ret = recv(root->sock[i], (void *) &c, sizeof(c), 0);
+		if (ret != sizeof(c))
+			return -errno;
+
+		if (c != val)
+			return -EINVAL;
+	}
+
+	ret = oob_senddown(root, &val, sizeof(val));
+	return ret;
+}
+
+static void *wq_handler(void *arg);
+
+int wq_init(struct work_queue *wq, int thread_cnt)
+{
+	int ret, i;
+
+	wq->head = NULL;
+	wq->tail = NULL;
+
+	ret = pthread_mutex_init(&wq->lock, NULL);
+	if (ret) {
+		perror("pthread_mutex_init");
+		return ret;
+	}
+
+	ret = pthread_cond_init(&wq->cond, NULL);
+	if (ret) {
+		perror("pthread_cond_init");
+		return ret;
+	}
+
+	wq->thread_cnt = thread_cnt;
+	wq->thread = calloc(thread_cnt, sizeof(*wq->thread));
+	if (!wq->thread)
+		return -ENOMEM;
+
+	wq->running = true;
+	for (i = 0; i < thread_cnt; i++) {
+		ret = pthread_create(&wq->thread[i], NULL, wq_handler, wq);
+		if (ret) {
+			perror("pthread_create");
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+void wq_cleanup(struct work_queue *wq)
+{
+	int i;
+
+	pthread_mutex_lock(&wq->lock);
+	wq->running = false;
+	pthread_cond_broadcast(&wq->cond);
+	pthread_mutex_unlock(&wq->lock);
+
+	for (i = 0; i < wq->thread_cnt; i++)
+		pthread_join(wq->thread[i], NULL);
+	pthread_cond_destroy(&wq->cond);
+	pthread_mutex_destroy(&wq->lock);
+}
+
+void wq_insert(struct work_queue *wq, struct work_item *item,
+	       void (*work_handler)(struct work_item *item))
+{
+	bool empty;
+
+	item->next = NULL;
+	item->work_handler = work_handler;
+	pthread_mutex_lock(&wq->lock);
+	if (wq->head) {
+		wq->tail->next = item;
+		empty = false;
+	} else {
+		wq->head = item;
+		empty = true;
+	}
+	wq->tail = item;
+	pthread_mutex_unlock(&wq->lock);
+
+	if (empty)
+		pthread_cond_signal(&wq->cond);
+}
+
+struct work_item *wq_remove(struct work_queue *wq)
+{
+	struct work_item *item;
+
+	item = wq->head;
+	wq->head = wq->head->next;
+	item->next = NULL;
+	return item;
+}
+
+static void *wq_handler(void *arg)
+{
+	struct work_queue *wq = arg;
+	struct work_item *item;
+
+	pthread_mutex_lock(&wq->lock);
+	while (wq->running) {
+		while (!wq->head) {
+			pthread_cond_wait(&wq->cond, &wq->lock);
+			if (!wq->running)
+				goto out;
+		}
+
+		item = wq_remove(wq);
+		if (wq->head)
+			pthread_cond_signal(&wq->cond);
+		pthread_mutex_unlock(&wq->lock);
+
+		item->work_handler(item);
+		pthread_mutex_lock(&wq->lock);
+	}
+
+out:
+	if (wq->head)
+		pthread_cond_signal(&wq->cond);
+	pthread_mutex_unlock(&wq->lock);
+	return NULL;
 }

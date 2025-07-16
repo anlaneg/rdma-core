@@ -58,16 +58,13 @@ static const struct verbs_match_ent hca_table[] = {
 };
 
 static const struct verbs_context_ops hns_common_ops = {
-	.alloc_mw = hns_roce_u_alloc_mw,
 	.alloc_pd = hns_roce_u_alloc_pd,
-	.bind_mw = hns_roce_u_bind_mw,
 	.cq_event = hns_roce_u_cq_event,
 	.create_cq = hns_roce_u_create_cq,
 	.create_cq_ex = hns_roce_u_create_cq_ex,
 	.create_qp = hns_roce_u_create_qp,
 	.create_qp_ex = hns_roce_u_create_qp_ex,
-	.dealloc_mw = hns_roce_u_dealloc_mw,
-	.dealloc_pd = hns_roce_u_free_pd,
+	.dealloc_pd = hns_roce_u_dealloc_pd,
 	.dereg_mr = hns_roce_u_dereg_mr,
 	.destroy_cq = hns_roce_u_destroy_cq,
 	.modify_cq = hns_roce_u_modify_cq,
@@ -88,6 +85,9 @@ static const struct verbs_context_ops hns_common_ops = {
 	.close_xrcd = hns_roce_u_close_xrcd,
 	.open_qp = hns_roce_u_open_qp,
 	.get_srq_num = hns_roce_u_get_srq_num,
+	.alloc_td = hns_roce_u_alloc_td,
+	.dealloc_td = hns_roce_u_dealloc_td,
+	.alloc_parent_domain = hns_roce_u_alloc_pad,
 };
 
 static uint32_t calc_table_shift(uint32_t entry_count, uint32_t size_shift)
@@ -145,6 +145,47 @@ static int set_context_attr(struct hns_roce_device *hr_dev,
 	return 0;
 }
 
+static int hns_roce_init_context_lock(struct hns_roce_context *context)
+{
+	int ret;
+
+	ret = pthread_spin_init(&context->uar_lock, PTHREAD_PROCESS_PRIVATE);
+	if (ret)
+		return ret;
+
+	ret = pthread_mutex_init(&context->qp_table_mutex, NULL);
+	if (ret)
+		goto destroy_uar_lock;
+
+	ret = pthread_mutex_init(&context->srq_table_mutex, NULL);
+	if (ret)
+		goto destroy_qp_mutex;
+
+	ret = pthread_mutex_init(&context->db_list_mutex, NULL);
+	if (ret)
+		goto destroy_srq_mutex;
+
+	return 0;
+
+destroy_srq_mutex:
+	pthread_mutex_destroy(&context->srq_table_mutex);
+
+destroy_qp_mutex:
+	pthread_mutex_destroy(&context->qp_table_mutex);
+
+destroy_uar_lock:
+	pthread_spin_destroy(&context->uar_lock);
+	return ret;
+}
+
+static void hns_roce_destroy_context_lock(struct hns_roce_context *context)
+{
+	pthread_spin_destroy(&context->uar_lock);
+	pthread_mutex_destroy(&context->qp_table_mutex);
+	pthread_mutex_destroy(&context->srq_table_mutex);
+	pthread_mutex_destroy(&context->db_list_mutex);
+}
+
 static struct verbs_context *hns_roce_alloc_context(struct ibv_device *ibdev,
 						    int cmd_fd,
 						    void *private_data)
@@ -162,27 +203,30 @@ static struct verbs_context *hns_roce_alloc_context(struct ibv_device *ibdev,
 	cmd.config |= HNS_ROCE_EXSGE_FLAGS | HNS_ROCE_RQ_INLINE_FLAGS |
 		      HNS_ROCE_CQE_INLINE_FLAGS;
 	if (ibv_cmd_get_context(&context->ibv_ctx, &cmd.ibv_cmd, sizeof(cmd),
-				&resp.ibv_resp, sizeof(resp)))
-		goto err_free;
+				NULL, &resp.ibv_resp, sizeof(resp)))
+		goto err_ibv_cmd;
+
+	if (hns_roce_init_context_lock(context))
+		goto err_ibv_cmd;
 
 	if (set_context_attr(hr_dev, context, &resp))
-		goto err_free;
+		goto err_set_attr;
 
 	context->uar = mmap(NULL, hr_dev->page_size, PROT_READ | PROT_WRITE,
 			    MAP_SHARED, cmd_fd, 0);
-	if (context->uar == MAP_FAILED)
-		goto err_free;
-
-	pthread_mutex_init(&context->qp_table_mutex, NULL);
-	pthread_mutex_init(&context->srq_table_mutex, NULL);
-	pthread_spin_init(&context->uar_lock, PTHREAD_PROCESS_PRIVATE);
+	if (context->uar == MAP_FAILED) {
+		verbs_err(&context->ibv_ctx, "failed to mmap uar page.\n");
+		goto err_set_attr;
+	}
 
 	verbs_set_ops(&context->ibv_ctx, &hns_common_ops);
 	verbs_set_ops(&context->ibv_ctx, &hr_dev->u_hw->hw_ops);
 
 	return &context->ibv_ctx;
 
-err_free:
+err_set_attr:
+	hns_roce_destroy_context_lock(context);
+err_ibv_cmd:
 	verbs_uninit_context(&context->ibv_ctx);
 	free(context);
 	return NULL;
@@ -194,6 +238,7 @@ static void hns_roce_free_context(struct ibv_context *ibctx)
 	struct hns_roce_context *context = to_hr_ctx(ibctx);
 
 	munmap(context->uar, hr_dev->page_size);
+	hns_roce_destroy_context_lock(context);
 	verbs_uninit_context(&context->ibv_ctx);
 	free(context);
 }

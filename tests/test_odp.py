@@ -1,12 +1,16 @@
 from pyverbs.mem_alloc import mmap, munmap, madvise, MAP_ANONYMOUS_, MAP_PRIVATE_, \
     MAP_HUGETLB_
 from tests.base import RCResources, UDResources, XRCResources
+from pyverbs.qp import QPCap, QPAttr, QPInitAttr
 from pyverbs.wr import SGE, SendWR, RecvWR
-from pyverbs.qp import QPAttr, QPInitAttr
 from tests.base import RDMATestCase
 from pyverbs.mr import MR
-import pyverbs.enums as e
+from pyverbs.libibverbs_enums import ibv_odp_transport_cap_bits, ibv_access_flags, ibv_odp_transport_cap_bits, \
+    ibv_qp_type, ibv_placement_type, ibv_selectivity_level, ibv_qp_create_send_ops_flags, ibv_wr_opcode, \
+    ibv_wc_status, _IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE, _IBV_ADVISE_MR_ADVICE_PREFETCH, \
+    _IBV_ADVISE_MR_ADVICE_PREFETCH_NO_FAULT
 import tests.utils as u
+import unittest
 
 HUGE_PAGE_SIZE = 0x200000
 
@@ -17,22 +21,25 @@ class OdpUD(UDResources):
         self.user_addr = None
         super(OdpUD, self).__init__(**kwargs)
 
-    @u.requires_odp('ud', e.IBV_ODP_SUPPORT_SEND)
+    @u.requires_odp('ud', ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SEND)
     def create_mr(self):
         if self.request_user_addr:
             self.user_addr = mmap(length=self.msg_size,
                                   flags=MAP_ANONYMOUS_ | MAP_PRIVATE_)
         self.send_mr = MR(self.pd, self.msg_size + u.GRH_SIZE,
-                          e.IBV_ACCESS_LOCAL_WRITE | e.IBV_ACCESS_ON_DEMAND, address=self.user_addr)
+                          ibv_access_flags.IBV_ACCESS_LOCAL_WRITE | ibv_access_flags.IBV_ACCESS_ON_DEMAND,
+                          address=self.user_addr)
         self.recv_mr = MR(self.pd, self.msg_size + u.GRH_SIZE,
-                          e.IBV_ACCESS_LOCAL_WRITE)
+                          ibv_access_flags.IBV_ACCESS_LOCAL_WRITE)
 
 
 class OdpRC(RCResources):
     def __init__(self, dev_name, ib_port, gid_index, is_huge=False,
                  request_user_addr=False, use_mr_prefetch=None, is_implicit=False,
-                 prefetch_advice=e._IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
-                 msg_size=1024, odp_caps=e.IBV_ODP_SUPPORT_SEND | e.IBV_ODP_SUPPORT_RECV):
+                 prefetch_advice=_IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
+                 msg_size=1024,
+                 odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SEND | ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_RECV,
+                 use_mixed_mr=False):
         """
         Initialize an OdpRC object.
         :param dev_name: Device name to be used
@@ -47,22 +54,25 @@ class OdpRC(RCResources):
         :param is_implicit: If True, register implicit MR.
         :param prefetch_advice: The advice of the prefetch request (ignored
                                 if use_mr_prefetch is None).
+        :param use_mixed_mr: If True, create a non-ODP MR in addition to the ODP MR.
         """
         self.is_huge = is_huge
         self.request_user_addr = request_user_addr
         self.is_implicit = is_implicit
         self.odp_caps = odp_caps
-        self.access = e.IBV_ACCESS_LOCAL_WRITE | e.IBV_ACCESS_ON_DEMAND | \
-            e.IBV_ACCESS_REMOTE_ATOMIC | e.IBV_ACCESS_REMOTE_READ | \
-            e.IBV_ACCESS_REMOTE_WRITE
+        self.access = ibv_access_flags.IBV_ACCESS_LOCAL_WRITE | ibv_access_flags.IBV_ACCESS_ON_DEMAND | \
+            ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC | ibv_access_flags.IBV_ACCESS_REMOTE_READ | \
+            ibv_access_flags.IBV_ACCESS_REMOTE_WRITE
         self.user_addr = None
+        self.use_mixed_mr = use_mixed_mr
+        self.non_odp_mr = None
         super(OdpRC, self).__init__(dev_name=dev_name, ib_port=ib_port,
                                     gid_index=gid_index)
         self.use_mr_prefetch = use_mr_prefetch
         self.prefetch_advice = prefetch_advice
         self.msg_size = msg_size
 
-    @u.requires_odp('rc', e.IBV_ODP_SUPPORT_SEND | e.IBV_ODP_SUPPORT_RECV)
+    @u.requires_odp('rc', ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SEND | ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_RECV)
     def create_mr(self):
         u.odp_supported(self.ctx, 'rc', self.odp_caps)
         if self.request_user_addr:
@@ -74,18 +84,25 @@ class OdpRC(RCResources):
             self.user_addr = mmap(length=length, flags=mmap_flags)
         access = self.access
         if self.is_huge:
-            access |= e.IBV_ACCESS_HUGETLB
+            access |= ibv_access_flags.IBV_ACCESS_HUGETLB
         self.mr = MR(self.pd, self.msg_size, access, address=self.user_addr,
                      implicit=self.is_implicit)
+        if self.use_mixed_mr:
+            self.non_odp_mr = MR(self.pd, self.msg_size, ibv_access_flags.IBV_ACCESS_LOCAL_WRITE)
 
     def create_qp_init_attr(self):
-        return QPInitAttr(qp_type=e.IBV_QPT_RC, scq=self.cq, sq_sig_all=0,
+        return QPInitAttr(qp_type=ibv_qp_type.IBV_QPT_RC, scq=self.cq, sq_sig_all=0,
                           rcq=self.cq, srq=self.srq, cap=self.create_qp_cap())
 
     def create_qp_attr(self):
         qp_attr = QPAttr(port_num=self.ib_port)
         qp_attr.qp_access_flags = self.access
         return qp_attr
+
+    def create_qp_cap(self):
+        if self.use_mixed_mr:
+            return QPCap(max_recv_wr=self.num_msgs, max_send_sge=2, max_recv_sge=2)
+        return super().create_qp_cap()
 
 
 class OdpXRC(XRCResources):
@@ -94,13 +111,68 @@ class OdpXRC(XRCResources):
         self.user_addr = None
         super(OdpXRC, self).__init__(**kwargs)
 
-    @u.requires_odp('xrc',  e.IBV_ODP_SUPPORT_SEND | e.IBV_ODP_SUPPORT_SRQ_RECV)
+    @u.requires_odp('xrc',  ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SEND | ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SRQ_RECV)
     def create_mr(self):
         if self.request_user_addr:
             self.user_addr = mmap(length=self.msg_size,
                                   flags=MAP_ANONYMOUS_| MAP_PRIVATE_)
-        self.mr = u.create_custom_mr(self, e.IBV_ACCESS_ON_DEMAND, user_addr=self.user_addr)
+        self.mr = u.create_custom_mr(self, ibv_access_flags.IBV_ACCESS_ON_DEMAND, user_addr=self.user_addr)
 
+class OdpQpExRC(RCResources):
+    def __init__(self, dev_name, ib_port, gid_index, is_huge=False,
+                 request_user_addr=False, use_mr_prefetch=None, is_implicit=False,
+                 prefetch_advice=_IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
+                 msg_size=8,
+                 odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_SEND | ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_RECV,
+                 use_mixed_mr=False):
+
+        ''' For object descriptions, refer to OdpRC class '''
+        self.request_user_addr = request_user_addr
+        self.is_implicit = is_implicit
+        self.odp_caps = odp_caps
+        self.access = ibv_access_flags.IBV_ACCESS_LOCAL_WRITE | ibv_access_flags.IBV_ACCESS_ON_DEMAND | \
+            ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC | ibv_access_flags.IBV_ACCESS_REMOTE_READ | \
+            ibv_access_flags.IBV_ACCESS_REMOTE_WRITE
+        self.user_addr = None
+        super(OdpQpExRC, self).__init__(dev_name=dev_name, ib_port=ib_port,
+                                         gid_index=gid_index)
+        self.msg_size = msg_size
+
+        if self.odp_caps & ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_FLUSH:
+            self.ptype = ibv_placement_type.IBV_FLUSH_GLOBAL
+            self.level = ibv_selectivity_level.IBV_FLUSH_RANGE
+
+    def create_qps(self):
+        if self.odp_caps & ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_ATOMIC_WRITE:
+            u.create_qp_ex(self, ibv_qp_type.IBV_QPT_RC, ibv_qp_create_send_ops_flags.IBV_QP_EX_WITH_ATOMIC_WRITE)
+        elif self.odp_caps & ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_FLUSH:
+            u.create_qp_ex(self, ibv_qp_type.IBV_QPT_RC,
+                           ibv_qp_create_send_ops_flags.IBV_QP_EX_WITH_FLUSH | \
+                           ibv_qp_create_send_ops_flags.IBV_QP_EX_WITH_RDMA_WRITE)
+        else:
+            raise unittest.SkipTest('There is no qpex test for the specified ODP caps.')
+
+    def create_mr(self):
+        u.odp_supported(self.ctx, 'rc', self.odp_caps)
+        if self.odp_caps & ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_ATOMIC_WRITE:
+            access = self.access
+            if self.request_user_addr:
+                mmap_flags = MAP_ANONYMOUS_| MAP_PRIVATE_
+                length = self.msg_size
+                self.user_addr = mmap(length=length, flags=mmap_flags)
+            self.mr = MR(self.pd, self.msg_size, access, address=self.user_addr,
+                         implicit=self.is_implicit)
+        elif self.odp_caps & ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_FLUSH:
+            try:
+                self.mr = u.create_custom_mr(self, ibv_access_flags.IBV_ACCESS_FLUSH_GLOBAL | \
+                                                   ibv_access_flags.IBV_ACCESS_REMOTE_WRITE | \
+                                                   ibv_access_flags.IBV_ACCESS_ON_DEMAND)
+            except PyverbsRDMAError as ex:
+                if ex.error_code == errno.EINVAL:
+                    raise unittest.SkipTest('Create mr with IBV_ACCESS_FLUSH_GLOBAL access flag is not supported in kernel')
+                raise ex
+        else:
+            raise unittest.SkipTest('There is no qpex test for the specified ODP caps.')
 
 class OdpTestCase(RDMATestCase):
     def setUp(self):
@@ -134,32 +206,57 @@ class OdpTestCase(RDMATestCase):
         self.create_players(OdpRC, request_user_addr=self.force_page_faults)
         u.traffic(**self.traffic_args)
 
-    def test_odp_rc_atomic_cmp_and_swp(self):
-        self.force_page_faults = False
+    def test_odp_rc_mixed_mr(self):
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
-                            msg_size=8, odp_caps=e.IBV_ODP_SUPPORT_ATOMIC)
+                            use_mixed_mr=True)
+        u.traffic(**self.traffic_args)
+
+    def test_odp_qp_ex_rc_atomic_write(self):
+        super().create_players(OdpQpExRC, request_user_addr=self.force_page_faults,
+                               msg_size=8, odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_ATOMIC_WRITE)
+        self.client.msg_size = 8
+        self.server.msg_size = 8
+        u.rdma_traffic(**self.traffic_args,
+                       new_send=True, send_op=ibv_wr_opcode.IBV_WR_ATOMIC_WRITE)
+
+    def test_odp_qp_ex_rc_flush(self):
+        super().create_players(OdpQpExRC, request_user_addr=self.force_page_faults,
+                               odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_FLUSH)
+        wcs = u.flush_traffic(**self.traffic_args, new_send=True,
+                              send_op=ibv_wr_opcode.IBV_WR_FLUSH)
+        if wcs[0].status != ibv_wc_status.IBV_WC_SUCCESS:
+            raise PyverbsError(f'Unexpected {wc_status_to_str(wcs[0].status)}')
+
+        self.client.level = ibv_selectivity_level.IBV_FLUSH_MR
+        wcs = u.flush_traffic(**self.traffic_args, new_send=True,
+                              send_op=ibv_wr_opcode.IBV_WR_FLUSH)
+        if wcs[0].status != ibv_wc_status.IBV_WC_SUCCESS:
+            raise PyverbsError(f'Unexpected {wc_status_to_str(wcs[0].status)}')
+
+    def test_odp_rc_atomic_cmp_and_swp(self):
+        self.create_players(OdpRC, request_user_addr=self.force_page_faults,
+                            msg_size=8, odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_ATOMIC)
         u.atomic_traffic(**self.traffic_args,
-                         send_op=e.IBV_WR_ATOMIC_CMP_AND_SWP)
+                         send_op=ibv_wr_opcode.IBV_WR_ATOMIC_CMP_AND_SWP)
         u.atomic_traffic(**self.traffic_args, receiver_val=1, sender_val=1,
-                         send_op=e.IBV_WR_ATOMIC_CMP_AND_SWP)
+                         send_op=ibv_wr_opcode.IBV_WR_ATOMIC_CMP_AND_SWP)
 
     def test_odp_rc_atomic_fetch_and_add(self):
-        self.force_page_faults = False
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
-                            msg_size=8, odp_caps=e.IBV_ODP_SUPPORT_ATOMIC)
+                            msg_size=8, odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_ATOMIC)
         u.atomic_traffic(**self.traffic_args,
-                         send_op=e.IBV_WR_ATOMIC_FETCH_AND_ADD)
+                         send_op=ibv_wr_opcode.IBV_WR_ATOMIC_FETCH_AND_ADD)
 
     def test_odp_rc_rdma_read(self):
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
-                            odp_caps=e.IBV_ODP_SUPPORT_READ)
+                            odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_READ)
         self.server.mr.write('s' * self.server.msg_size, self.server.msg_size)
-        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_READ)
+        u.rdma_traffic(**self.traffic_args, send_op=ibv_wr_opcode.IBV_WR_RDMA_READ)
 
     def test_odp_rc_rdma_write(self):
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
-                            odp_caps=e.IBV_ODP_SUPPORT_WRITE)
-        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
+                            odp_caps=ibv_odp_transport_cap_bits.IBV_ODP_SUPPORT_WRITE)
+        u.rdma_traffic(**self.traffic_args, send_op=ibv_wr_opcode.IBV_WR_RDMA_WRITE)
 
     def test_odp_implicit_rc_traffic(self):
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
@@ -203,15 +300,15 @@ class OdpTestCase(RDMATestCase):
         u.traffic(**self.traffic_args)
 
     def test_odp_sync_prefetch_rc_traffic(self):
-        for advice in [e._IBV_ADVISE_MR_ADVICE_PREFETCH,
-                       e._IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE]:
+        for advice in [_IBV_ADVISE_MR_ADVICE_PREFETCH,
+                       _IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE]:
             self.create_players(OdpRC, request_user_addr=self.force_page_faults,
                                 use_mr_prefetch='sync', prefetch_advice=advice)
             u.traffic(**self.traffic_args)
 
     def test_odp_async_prefetch_rc_traffic(self):
-        for advice in [e._IBV_ADVISE_MR_ADVICE_PREFETCH,
-                       e._IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE]:
+        for advice in [_IBV_ADVISE_MR_ADVICE_PREFETCH,
+                       _IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE]:
             self.create_players(OdpRC, request_user_addr=self.force_page_faults,
                                 use_mr_prefetch='async', prefetch_advice=advice)
             u.traffic(**self.traffic_args)
@@ -227,13 +324,13 @@ class OdpTestCase(RDMATestCase):
         u.traffic(**self.traffic_args)
 
     def test_odp_prefetch_sync_no_page_fault_rc_traffic(self):
-        prefetch_advice = e._IBV_ADVISE_MR_ADVICE_PREFETCH_NO_FAULT
+        prefetch_advice = _IBV_ADVISE_MR_ADVICE_PREFETCH_NO_FAULT
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
                             use_mr_prefetch='sync', prefetch_advice=prefetch_advice)
         u.traffic(**self.traffic_args)
 
     def test_odp_prefetch_async_no_page_fault_rc_traffic(self):
-        prefetch_advice = e._IBV_ADVISE_MR_ADVICE_PREFETCH_NO_FAULT
+        prefetch_advice = _IBV_ADVISE_MR_ADVICE_PREFETCH_NO_FAULT
         self.create_players(OdpRC, request_user_addr=self.force_page_faults,
                             use_mr_prefetch='async', prefetch_advice=prefetch_advice)
         u.traffic(**self.traffic_args)

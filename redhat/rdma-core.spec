@@ -1,5 +1,5 @@
 Name: rdma-core
-Version: 51.0
+Version: 59.0
 Release: 1%{?dist}
 Summary: RDMA core userspace libraries and daemons
 
@@ -363,6 +363,18 @@ if [ -x /sbin/udevadm ]; then
 /sbin/udevadm trigger --subsystem-match=net --action=change || true
 /sbin/udevadm trigger --subsystem-match=infiniband_mad --action=change || true
 fi
+%systemd_post rdma-load-modules@rdma.service
+%systemd_post rdma-load-modules@infiniband.service
+%systemd_post rdma-load-modules@roce.service
+
+%preun -n rdma-core
+%systemd_preun rdma-load-modules@rdma.service
+%systemd_preun rdma-load-modules@infiniband.service
+%systemd_preun rdma-load-modules@roce.service
+%postun -n rdma-core
+%systemd_postun_with_restart rdma-load-modules@rdma.service
+%systemd_postun_with_restart rdma-load-modules@infiniband.service
+%systemd_postun_with_restart rdma-load-modules@roce.service
 
 %post -n infiniband-diags -p /sbin/ldconfig
 %postun -n infiniband-diags -p /sbin/ldconfig

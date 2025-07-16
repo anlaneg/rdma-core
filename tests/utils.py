@@ -30,7 +30,12 @@ from pyverbs.cq import PollCqAttr, CQEX
 from pyverbs.mr import MW, MWBindInfo
 from pyverbs.mem_alloc import madvise
 import pyverbs.device as d
-import pyverbs.enums as e
+from pyverbs.libibverbs_enums import ibv_access_flags, ibv_odp_general_caps, ibv_device_cap_flags, \
+    ibv_atomic_cap, ibv_qp_init_attr_mask, ibv_raw_packet_caps, ibv_qp_create_flags, ibv_qp_type, \
+    ibv_wr_opcode, ibv_send_flags, ibv_mw_type, ibv_wc_status, ibv_wc_flags, ibv_wc_opcode, \
+    ibv_selectivity_level, ibv_odp_general_caps, ibv_qp_state, ibv_qp_attr_mask, ibv_qp_create_send_ops_flags, \
+    IBV_LINK_LAYER_ETHERNET, _IBV_DEVICE_RAW_SCATTER_FCS, _IBV_DEVICE_PCI_WRITE_END_PADDING, \
+    _IBV_ADVISE_MR_FLAG_FLUSH, _IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE
 from pyverbs.mr import MR
 
 
@@ -133,8 +138,8 @@ def filter_illegal_access_flags(element):
     :param element: A list of access flags to check
     :return: True if this list is legal, else False
     """
-    if e.IBV_ACCESS_REMOTE_ATOMIC in element or e.IBV_ACCESS_REMOTE_WRITE in element:
-        if not e.IBV_ACCESS_LOCAL_WRITE in element:
+    if ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC in element or ibv_access_flags.IBV_ACCESS_REMOTE_WRITE in element:
+        if not ibv_access_flags.IBV_ACCESS_LOCAL_WRITE in element:
             return False
     return True
 
@@ -153,13 +158,13 @@ def get_access_flags(ctx):
     """
     attr = ctx.query_device()
     attr_ex = ctx.query_device_ex()
-    vals = list(e.ibv_access_flags)
-    if not attr_ex.odp_caps.general_caps & e.IBV_ODP_SUPPORT:
-        vals.remove(e.IBV_ACCESS_ON_DEMAND)
-    if not attr.device_cap_flags & e.IBV_DEVICE_MEM_WINDOW:
-        vals.remove(e.IBV_ACCESS_MW_BIND)
-    if not attr.atomic_caps & e.IBV_ATOMIC_HCA:
-        vals.remove(e.IBV_ACCESS_REMOTE_ATOMIC)
+    vals = list(ibv_access_flags)
+    if not attr_ex.odp_caps.general_caps & ibv_odp_general_caps.IBV_ODP_SUPPORT:
+        vals.remove(ibv_access_flags.IBV_ACCESS_ON_DEMAND)
+    if not attr.device_cap_flags & ibv_device_cap_flags.IBV_DEVICE_MEM_WINDOW:
+        vals.remove(ibv_access_flags.IBV_ACCESS_MW_BIND)
+    if not attr.atomic_caps & ibv_atomic_cap.IBV_ATOMIC_HCA:
+        vals.remove(ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC)
     arr = []
     for i in range(1, len(vals)):
         tmp = list(com(vals, i))
@@ -180,11 +185,11 @@ def get_dmabuf_access_flags(ctx):
     :return: A random legal value for MR flags
     """
     attr = ctx.query_device()
-    vals = [e.IBV_ACCESS_LOCAL_WRITE, e.IBV_ACCESS_REMOTE_WRITE,
-            e.IBV_ACCESS_REMOTE_READ, e.IBV_ACCESS_REMOTE_ATOMIC,
-            e.IBV_ACCESS_RELAXED_ORDERING]
-    if not attr.atomic_caps & e.IBV_ATOMIC_HCA:
-        vals.remove(e.IBV_ACCESS_REMOTE_ATOMIC)
+    vals = [ibv_access_flags.IBV_ACCESS_LOCAL_WRITE, ibv_access_flags.IBV_ACCESS_REMOTE_WRITE,
+            ibv_access_flags.IBV_ACCESS_REMOTE_READ, ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC,
+            ibv_access_flags.IBV_ACCESS_RELAXED_ORDERING]
+    if not attr.atomic_caps & ibv_atomic_cap.IBV_ATOMIC_HCA:
+        vals.remove(ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC)
     arr = []
     for i in range(1, len(vals)):
         tmp = list(com(vals, i))
@@ -248,13 +253,13 @@ def random_qp_create_mask(qpt, attr_ex):
     """
     has_tso = attr_ex.tso_caps.max_tso > 0 and \
         attr_ex.tso_caps.supported_qpts & 1 << qpt
-    supp_flags = [e.IBV_QP_INIT_ATTR_CREATE_FLAGS,
-                  e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER]
+    supp_flags = [ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_CREATE_FLAGS,
+                  ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER]
     # Either PD or XRCD flag is needed, XRCD is not supported yet
     selected = sample(supp_flags)
-    selected.append(e.IBV_QP_INIT_ATTR_PD)
-    if e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER in selected and not has_tso:
-        selected.remove(e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER)
+    selected.append(ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_PD)
+    if ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER in selected and not has_tso:
+        selected.remove(ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER)
     mask = 0
     for s in selected:
         mask += s.value
@@ -268,18 +273,17 @@ def get_create_qp_flags_raw_packet(attr_ex):
     :param attr_ex: Device extended attributes to check capabilities
     :return: A random combination of QP creation flags
     """
-    has_fcs = attr_ex.device_cap_flags_ex & e._IBV_DEVICE_RAW_SCATTER_FCS
-    has_cvlan = attr_ex.raw_packet_caps & e.IBV_RAW_PACKET_CAP_CVLAN_STRIPPING
-    has_padding = attr_ex.device_cap_flags_ex & \
-        e._IBV_DEVICE_PCI_WRITE_END_PADDING
-    l = list(e.ibv_qp_create_flags)
-    l.remove(e.IBV_QP_CREATE_SOURCE_QPN)  # UD only
+    has_fcs = attr_ex.device_cap_flags_ex & _IBV_DEVICE_RAW_SCATTER_FCS
+    has_cvlan = attr_ex.raw_packet_caps & ibv_raw_packet_caps.IBV_RAW_PACKET_CAP_CVLAN_STRIPPING
+    has_padding = attr_ex.device_cap_flags_ex & _IBV_DEVICE_PCI_WRITE_END_PADDING
+    l = list(ibv_qp_create_flags)
+    l.remove(ibv_qp_create_flags.IBV_QP_CREATE_SOURCE_QPN)  # UD only
     if not has_fcs:
-        l.remove(e.IBV_QP_CREATE_SCATTER_FCS)
+        l.remove(ibv_qp_create_flags.IBV_QP_CREATE_SCATTER_FCS)
     if not has_cvlan:
-        l.remove(e.IBV_QP_CREATE_CVLAN_STRIPPING)
+        l.remove(ibv_qp_create_flags.IBV_QP_CREATE_CVLAN_STRIPPING)
     if not has_padding:
-        l.remove(e.IBV_QP_CREATE_PCI_WRITE_END_PADDING)
+        l.remove(ibv_qp_create_flags.IBV_QP_CREATE_PCI_WRITE_END_PADDING)
     flags = sample(l)
     val = 0
     for i in flags:
@@ -298,9 +302,9 @@ def random_valid_qp_create_flags(qpt, attr, attr_ex):
     if attr.vendor_id != MLNX_VENDOR_ID:
         return 0
 
-    if qpt == e.IBV_QPT_RAW_PACKET:
+    if qpt == ibv_qp_type.IBV_QPT_RAW_PACKET:
         return get_create_qp_flags_raw_packet(attr_ex)
-    elif qpt == e.IBV_QPT_UD:
+    elif qpt == ibv_qp_type.IBV_QPT_UD:
         # IBV_QP_CREATE_SOURCE_QPN is only supported by mlx5 driver and is not
         # to be check in unittests.
         return random.choice([0, 2])  # IBV_QP_CREATE_BLOCK_SELF_MCAST_LB
@@ -320,27 +324,27 @@ def random_qp_init_attr_ex(attr_ex, attr, qpt=None):
     """
     max_tso = 0
     if qpt is None:
-        qpt = random.choice([e.IBV_QPT_RC, e.IBV_QPT_UC, e.IBV_QPT_UD,
-                             e.IBV_QPT_RAW_PACKET])
+        qpt = random.choice([ibv_qp_type.IBV_QPT_RC, ibv_qp_type.IBV_QPT_UC, ibv_qp_type.IBV_QPT_UD,
+                             ibv_qp_type.IBV_QPT_RAW_PACKET])
     qp_cap = random_qp_cap(attr)
-    if qpt == e.IBV_QPT_RAW_PACKET and \
+    if qpt == ibv_qp_type.IBV_QPT_RAW_PACKET and \
        qp_cap.max_send_wr > MAX_RAW_PACKET_SEND_WR:
         qp_cap.max_send_wr = MAX_RAW_PACKET_SEND_WR
     sig = random.randint(0, 1)
     mask = random_qp_create_mask(qpt, attr_ex)
-    if mask & e.IBV_QP_INIT_ATTR_CREATE_FLAGS:
+    if mask & ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_CREATE_FLAGS:
         cflags = random_valid_qp_create_flags(qpt, attr, attr_ex)
     else:
         cflags = 0
-    if mask & e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER:
-        if qpt != e.IBV_QPT_RAW_PACKET:
-            mask -= e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER
+    if mask & ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER:
+        if qpt != ibv_qp_type.IBV_QPT_RAW_PACKET:
+            mask -= ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER
         else:
             max_tso = \
                 random.randint(16, int(attr_ex.tso_caps.max_tso / 800))
     qia = QPInitAttrEx(qp_type=qpt, cap=qp_cap, sq_sig_all=sig, comp_mask=mask,
                        create_flags=cflags, max_tso_header=max_tso)
-    if mask & e.IBV_QP_INIT_ATTR_MAX_TSO_HEADER:
+    if mask & ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_MAX_TSO_HEADER:
         # TSO increases send WQE size, let's be on the safe side
         qia.cap.max_send_sge = 2
     return qia
@@ -357,6 +361,42 @@ def get_qp_init_attr(cq, attr):
     qp_cap = random_qp_cap(attr)
     sig = random.randint(0, 1)
     return QPInitAttr(scq=cq, rcq=cq, cap=qp_cap, sq_sig_all=sig)
+
+
+def create_qp_ex(agr_obj, qp_type, send_flags):
+    if qp_type == ibv_qp_type.IBV_QPT_XRC_SEND:
+        cap = QPCap(max_send_wr=agr_obj.num_msgs, max_recv_wr=0, max_recv_sge=0,
+                    max_send_sge=1)
+    else:
+        cap = QPCap(max_send_wr=agr_obj.num_msgs, max_recv_wr=agr_obj.num_msgs,
+                    max_recv_sge=1, max_send_sge=1)
+    qia = QPInitAttrEx(cap=cap, qp_type=qp_type, scq=agr_obj.cq,
+                       rcq=agr_obj.cq, pd=agr_obj.pd, send_ops_flags=send_flags,
+                       comp_mask=ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_PD |
+                                 ibv_qp_init_attr_mask.IBV_QP_INIT_ATTR_SEND_OPS_FLAGS)
+    qp_attr = QPAttr(port_num=agr_obj.ib_port)
+    if qp_type == ibv_qp_type.IBV_QPT_UD:
+        qp_attr.qkey = agr_obj.UD_QKEY
+        qp_attr.pkey_index = agr_obj.UD_PKEY_INDEX
+    if qp_type == ibv_qp_type.IBV_QPT_RC:
+        qp_attr.qp_access_flags = ibv_access_flags.IBV_ACCESS_REMOTE_WRITE | \
+                                  ibv_access_flags.IBV_ACCESS_REMOTE_READ | \
+                                  ibv_access_flags.IBV_ACCESS_REMOTE_ATOMIC | \
+                                  ibv_access_flags.IBV_ACCESS_FLUSH_GLOBAL | \
+                                  ibv_access_flags.IBV_ACCESS_FLUSH_PERSISTENT
+    try:
+        # We don't have capability bits for this
+        qp = QPEx(agr_obj.ctx, qia, qp_attr)
+    except PyverbsRDMAError as ex:
+        if ex.error_code == errno.EOPNOTSUPP:
+            raise unittest.SkipTest('Extended QP is not supported on this device')
+        raise ex
+    if qp_type != ibv_qp_type.IBV_QPT_XRC_SEND:
+        agr_obj.qps.append(qp)
+        agr_obj.qps_num.append(qp.qp_num)
+        agr_obj.psns.append(random.getrandbits(24))
+    else:
+        return qp
 
 
 def wc_status_to_str(status):
@@ -391,7 +431,7 @@ def create_custom_mr(agr_obj, additional_access_flags=0, size=None, user_addr=No
     mr_length = size if size else agr_obj.msg_size
     try:
         return MR(agr_obj.pd, mr_length,
-                  e.IBV_ACCESS_LOCAL_WRITE | additional_access_flags, address=user_addr)
+                  ibv_access_flags.IBV_ACCESS_LOCAL_WRITE | additional_access_flags, address=user_addr)
     except PyverbsRDMAError as ex:
         if ex.error_code == errno.EOPNOTSUPP:
                 raise unittest.SkipTest(f'Create custom mr with additional access flags {additional_access_flags} is not supported')
@@ -399,7 +439,7 @@ def create_custom_mr(agr_obj, additional_access_flags=0, size=None, user_addr=No
 
 # Traffic helpers
 
-def get_send_elements(agr_obj, is_server, opcode=e.IBV_WR_SEND):
+def get_send_elements(agr_obj, is_server, opcode=ibv_wr_opcode.IBV_WR_SEND):
     """
     Creates a single SGE and a single Send WR for agr_obj's QP type. The content
     of the message is either 's' for server side or 'c' for client side.
@@ -407,34 +447,60 @@ def get_send_elements(agr_obj, is_server, opcode=e.IBV_WR_SEND):
     :param is_server: Indicates whether this is server or client side
     :return: send wr and its SGE
     """
-    if opcode == e.IBV_WR_ATOMIC_WRITE:
+    if hasattr(agr_obj, 'use_mixed_mr') and agr_obj.use_mixed_mr:
+        return get_send_elements_mixed_mr(agr_obj, is_server, opcode)
+    if opcode == ibv_wr_opcode.IBV_WR_ATOMIC_WRITE:
         atomic_wr = agr_obj.msg_size * (b's' if is_server else b'c')
         return None, atomic_wr
 
     qp_type = agr_obj.sqp_lst[0].qp_type if isinstance(agr_obj, XRCResources) \
                 else agr_obj.qp.qp_type
-    offset = GRH_SIZE if qp_type == e.IBV_QPT_UD else 0
+    offset = GRH_SIZE if qp_type == ibv_qp_type.IBV_QPT_UD else 0
     msg = (agr_obj.msg_size + offset) * ('s' if is_server else 'c')
     agr_obj.mem_write(msg, agr_obj.msg_size + offset)
     sge = SGE(agr_obj.mr.buf + offset, agr_obj.msg_size, agr_obj.mr_lkey)
     send_wr = SendWR(opcode=opcode, num_sge=1, sg=[sge])
-    if opcode in [e.IBV_WR_RDMA_WRITE, e.IBV_WR_RDMA_WRITE_WITH_IMM, e.IBV_WR_RDMA_READ]:
+    if opcode in [ibv_wr_opcode.IBV_WR_RDMA_WRITE, ibv_wr_opcode.IBV_WR_RDMA_WRITE_WITH_IMM, ibv_wr_opcode.IBV_WR_RDMA_READ]:
         send_wr.set_wr_rdma(int(agr_obj.rkey), int(agr_obj.raddr))
     return send_wr, sge
 
+
+def get_send_elements_mixed_mr(agr_obj, is_server, opcode=ibv_wr_opcode.IBV_WR_SEND):
+    """
+    Creates 2 SGEs and a single Send WR for agr_obj's QP type. There are 2 messages,
+    one for each MR. The content of the message is either 's' for server side or 'c'
+    for client side.
+    :param agr_obj: Aggregation object which contains all resources necessary
+    :param is_server: Indicates whether this is server or client side
+    :param opcode: send WR opcode
+    :return: send wr and its SG list
+    """
+    msg = (agr_obj.msg_size) * ('s' if is_server else 'c')
+    agr_obj.mr.write(msg, agr_obj.msg_size)
+    agr_obj.non_odp_mr.write(msg, agr_obj.msg_size)
+    sge1 = SGE(agr_obj.mr.buf, agr_obj.msg_size, agr_obj.mr.lkey)
+    sge2 = SGE(agr_obj.non_odp_mr.buf, agr_obj.msg_size, agr_obj.non_odp_mr.lkey)
+    send_wr = SendWR(opcode=opcode, num_sge=2, sg=[sge1, sge2])
+    return send_wr, [sge1, sge2]
+
+
 def get_recv_wr(agr_obj):
     """
-    Creates a single SGE Recv WR for agr_obj's QP type.
+    Creates a single SGE Recv WR for agr_obj's QP type. In case of mixed MRs,
+    creates 2 SGEs accordingly.
     :param agr_obj: Aggregation object which contains all resources necessary
     :return: recv wr
     """
     qp_type = agr_obj.rqp_lst[0].qp_type if isinstance(agr_obj, XRCResources) \
         else agr_obj.qp.qp_type if isinstance(agr_obj.qp, QP) else None
     mr = agr_obj.mr
-    length = agr_obj.msg_size + GRH_SIZE if qp_type == e.IBV_QPT_UD \
+    length = agr_obj.msg_size + GRH_SIZE if qp_type == ibv_qp_type.IBV_QPT_UD \
              else agr_obj.msg_size
-    recv_sge = SGE(mr.buf, length, mr.lkey)
-    return RecvWR(sg=[recv_sge], num_sge=1)
+    recv_sgl = [SGE(mr.buf, length, mr.lkey)]
+    if hasattr(agr_obj, 'use_mixed_mr') and agr_obj.use_mixed_mr:
+        sec_mr = agr_obj.non_odp_mr
+        recv_sgl.append(SGE(sec_mr.buf,length,sec_mr.lkey))
+    return RecvWR(sg=recv_sgl, num_sge=len(recv_sgl))
 
 
 def get_global_ah(agr_obj, gid_index, port):
@@ -475,43 +541,43 @@ def post_send_ex(agr_obj, send_object, send_op=None, qp_idx=0, ah=None, **kwargs
     qp_type = qp.qp_type
     qp.wr_start()
     qp.wr_id = 0x123
-    qp.wr_flags = e.IBV_SEND_SIGNALED
-    if send_op == e.IBV_WR_SEND:
+    qp.wr_flags = ibv_send_flags.IBV_SEND_SIGNALED
+    if send_op == ibv_wr_opcode.IBV_WR_SEND:
         qp.wr_send()
-    elif send_op == e.IBV_WR_RDMA_WRITE:
+    elif send_op == ibv_wr_opcode.IBV_WR_RDMA_WRITE:
         qp.wr_rdma_write(agr_obj.rkey, agr_obj.raddr)
-    elif send_op == e.IBV_WR_SEND_WITH_IMM:
+    elif send_op == ibv_wr_opcode.IBV_WR_SEND_WITH_IMM:
         qp.wr_send_imm(IMM_DATA)
-    elif send_op == e.IBV_WR_RDMA_WRITE_WITH_IMM:
+    elif send_op == ibv_wr_opcode.IBV_WR_RDMA_WRITE_WITH_IMM:
         qp.wr_rdma_write_imm(agr_obj.rkey, agr_obj.raddr, IMM_DATA)
-    elif send_op == e.IBV_WR_ATOMIC_WRITE:
+    elif send_op == ibv_wr_opcode.IBV_WR_ATOMIC_WRITE:
         qp.wr_atomic_write(agr_obj.rkey, agr_obj.raddr, send_object)
-    elif send_op == e.IBV_WR_FLUSH:
+    elif send_op == ibv_wr_opcode.IBV_WR_FLUSH:
         qp.wr_flush(agr_obj.rkey, agr_obj.raddr, agr_obj.msg_size,
                     agr_obj.ptype, agr_obj.level)
-    elif send_op == e.IBV_WR_RDMA_READ:
+    elif send_op == ibv_wr_opcode.IBV_WR_RDMA_READ:
         qp.wr_rdma_read(agr_obj.rkey, agr_obj.raddr)
-    elif send_op == e.IBV_WR_ATOMIC_CMP_AND_SWP:
+    elif send_op == ibv_wr_opcode.IBV_WR_ATOMIC_CMP_AND_SWP:
         cmp_add = kwargs.get('cmp_add')
         swp = kwargs.get('swap')
         qp.wr_atomic_cmp_swp(agr_obj.rkey, agr_obj.raddr,
                              int8b_from_int(cmp_add), int8b_from_int(swp))
-    elif send_op == e.IBV_WR_ATOMIC_FETCH_AND_ADD:
+    elif send_op == ibv_wr_opcode.IBV_WR_ATOMIC_FETCH_AND_ADD:
         cmp_add = kwargs.get('cmp_add')
         qp.wr_atomic_fetch_add(agr_obj.rkey, agr_obj.raddr,
                                int8b_from_int(cmp_add))
-    elif send_op == e.IBV_WR_BIND_MW:
+    elif send_op == ibv_wr_opcode.IBV_WR_BIND_MW:
         bind_info = MWBindInfo(agr_obj.mr, agr_obj.mr.buf, agr_obj.mr.rkey,
-                               e.IBV_ACCESS_REMOTE_WRITE)
-        mw = MW(agr_obj.pd, mw_type=e.IBV_MW_TYPE_2)
+                               ibv_access_flags.IBV_ACCESS_REMOTE_WRITE)
+        mw = MW(agr_obj.pd, mw_type=ibv_mw_type.IBV_MW_TYPE_2)
         # A new rkey is needed to be set into bind_info, modify rkey
         qp.wr_bind_mw(mw, agr_obj.mr.rkey + 12, bind_info)
         qp.wr_send()
-    if qp_type == e.IBV_QPT_UD:
+    if qp_type == ibv_qp_type.IBV_QPT_UD:
         qp.wr_set_ud_addr(ah, agr_obj.rqps_num[qp_idx], agr_obj.UD_QKEY)
     if isinstance(agr_obj, SRDResources):
         qp.wr_set_ud_addr(ah, agr_obj.rqps_num[qp_idx], agr_obj.SRD_QKEY)
-    if qp_type == e.IBV_QPT_XRC_SEND:
+    if qp_type == ibv_qp_type.IBV_QPT_XRC_SEND:
         qp.wr_set_xrc_srqn(agr_obj.remote_srqn)
     if hasattr(agr_obj, 'remote_dct_num'):
         if isinstance(agr_obj, Mlx5DcStreamsRes):
@@ -521,8 +587,8 @@ def post_send_ex(agr_obj, send_object, send_op=None, qp_idx=0, ah=None, **kwargs
                                      stream_id)
         else:
             qp.wr_set_dc_addr(ah, agr_obj.remote_dct_num, DCT_KEY)
-    if send_op != e.IBV_WR_ATOMIC_WRITE and \
-            send_op != e.IBV_WR_FLUSH:
+    if send_op != ibv_wr_opcode.IBV_WR_ATOMIC_WRITE and \
+            send_op != ibv_wr_opcode.IBV_WR_FLUSH:
         qp.wr_set_sge(send_object)
     qp.wr_complete()
 
@@ -542,7 +608,7 @@ def post_send(agr_obj, send_wr, qp_idx=0, ah=None, is_imm=False):
     qp_type = agr_obj.qp.qp_type
     if is_imm:
         send_wr.imm_data = socket.htonl(IMM_DATA)
-    if qp_type == e.IBV_QPT_UD:
+    if qp_type == ibv_qp_type.IBV_QPT_UD:
         send_wr.set_wr_ud(ah, agr_obj.rqps_num[qp_idx], agr_obj.UD_QKEY)
     if isinstance(agr_obj, SRDResources):
         send_wr.set_wr_ud(ah, agr_obj.rqps_num[qp_idx], agr_obj.SRD_QKEY)
@@ -589,11 +655,11 @@ def _poll_cq(cq, count=1, data=None):
             cq.req_notify()
         nc, tmp_wcs = cq.poll(count)
         for wc in tmp_wcs:
-            if wc.status != e.IBV_WC_SUCCESS:
+            if wc.status != ibv_wc_status.IBV_WC_SUCCESS:
                 wcs.append(wc)
                 return wcs
             if data:
-                if wc.wc_flags & e.IBV_WC_WITH_IMM == 0:
+                if wc.wc_flags & ibv_wc_flags.IBV_WC_WITH_IMM == 0:
                     raise PyverbsRDMAError('Completion without immediate')
                 assert socket.ntohl(wc.imm_data) == data
         count -= nc
@@ -619,7 +685,7 @@ def poll_cq(cq, count=1, data=None):
              when events are used
     """
     wcs = _poll_cq(cq, count, data)
-    if wcs[0].status != e.IBV_WC_SUCCESS:
+    if wcs[0].status != ibv_wc_status.IBV_WC_SUCCESS:
         raise PyverbsRDMAError(f'Completion status is {wc_status_to_str(wcs[0].status)}')
 
     return wcs
@@ -631,11 +697,14 @@ def poll_cq_ex(cqex, count=1, data=None, sgid=None):
     :param cq: CQEX to poll from
     :param count: How many completions to poll
     :param data: In case of a work request with immediate, the immediate data
-                 to be compared after poll
+                 to be compared after poll, either a list of immediate data or
+                 one value
     :param sgid: In case of EFA receive completion, the sgid to be compared
                  after poll
-    :return: None
+    :return: WR id order received
     """
+    wr_id_order = []
+    iters = count
     try:
         start_poll_t = time.perf_counter()
         poll_attr = PollCqAttr()
@@ -644,15 +713,17 @@ def poll_cq_ex(cqex, count=1, data=None, sgid=None):
             ret = cqex.start_poll(poll_attr)
         if ret != 0:
             raise PyverbsRDMAErrno('Failed to poll CQ')
+        wr_id_order.append(cqex.wr_id)
         count -= 1
-        if cqex.status != e.IBV_WC_SUCCESS:
+        if cqex.status != ibv_wc_status.IBV_WC_SUCCESS:
             raise PyverbsRDMAErrno('Completion status is {s}'.
                                    format(s=cqex.status))
         if data:
-            assert data == socket.ntohl(cqex.read_imm_data())
+            imm_data = data if not isinstance(data, list) else data[iters - count - 1]
+            assert imm_data == socket.ntohl(cqex.read_imm_data())
 
         if isinstance(cqex, EfaCQ):
-            if sgid is not None and cqex.read_opcode() == e.IBV_WC_RECV:
+            if sgid is not None and cqex.read_opcode() == ibv_wc_opcode.IBV_WC_RECV:
                 assert sgid.gid == cqex.read_sgid().gid
         # Now poll the rest of the packets
         while count > 0 and (time.perf_counter() - start_poll_t < POLL_CQ_TIMEOUT):
@@ -661,21 +732,23 @@ def poll_cq_ex(cqex, count=1, data=None, sgid=None):
                 ret = cqex.poll_next()
             if ret != 0:
                 raise PyverbsRDMAErrno('Failed to poll CQ')
-            count -= 1
-            if cqex.status != e.IBV_WC_SUCCESS:
+            if cqex.status != ibv_wc_status.IBV_WC_SUCCESS:
                 raise PyverbsRDMAErrno('Completion status is {s}'.
                                        format(s=cqex.status))
+            count -= 1
+            wr_id_order.append(cqex.wr_id)
             if data:
-                assert data == socket.ntohl(cqex.read_imm_data())
+                imm_data = data if not isinstance(data, list) else data[iters - count - 1]
+                assert imm_data == socket.ntohl(cqex.read_imm_data())
 
             if isinstance(cqex, EfaCQ):
-                if sgid is not None and cqex.read_opcode() == e.IBV_WC_RECV:
+                if sgid is not None and cqex.read_opcode() == ibv_wc_opcode.IBV_WC_RECV:
                     assert sgid.gid == cqex.read_sgid().gid
-            count -= 1
         if count > 0:
             raise PyverbsError(f'Got timeout on polling ({count} CQEs remaining)')
     finally:
         cqex.end_poll()
+    return wr_id_order
 
 
 def validate(received_str, is_server, msg_size):
@@ -711,7 +784,52 @@ def send(agr_obj, send_object, send_op=None, new_send=False, qp_idx=0, ah=None, 
     return post_send(agr_obj, send_object, qp_idx, ah, is_imm)
 
 
-def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_WR_SEND,
+def traffic_poll_at_once(test, msg_size, iterations=10, opcode=ibv_wr_opcode.IBV_WR_SEND):
+    """
+    Execute traffic between two peers iterations times:
+    - Create receive resources and then post recv
+    - Create send resources and then post send
+    - Poll client and server all cqes at once
+    - Compare received buffer with the expected one and validate
+    :param test: Test object with client and server.
+    :param msg_size: Size of a packet.
+    :param iterations: Number of packets to send/recv.
+    :param opcode: Send opcode. Currently it supports SEND and
+                   RDMA_WRITE_WITH_IMM opcodes only.
+    """
+    imm_data_exp = []
+
+    for i in range(iterations):
+        recv_sge = SGE(test.server.mr.buf + (msg_size * i), msg_size, test.server.mr.lkey)
+        recv_wr = RecvWR(sg=[recv_sge], num_sge=1, wr_id=i)
+        test.server.mr.write(str(iterations - i - 1) * msg_size, msg_size, i * msg_size)
+        test.server.qp.post_recv(recv_wr)
+
+    for i in range(iterations):
+        send_sge = SGE(test.client.mr.buf + (msg_size * i), msg_size, test.client.mr.lkey)
+        send_wr = SendWR(opcode=opcode, num_sge=1, sg=[send_sge], wr_id=i)
+        if opcode == ibv_wr_opcode.IBV_WR_RDMA_WRITE_WITH_IMM:
+            send_wr.imm_data = socket.htonl(i + iterations)
+            imm_data_exp.append(i + iterations)
+            send_wr.set_wr_rdma(int(test.client.rkey), int(test.client.raddr + i * msg_size))
+        test.client.mr.write(str(i % 10) * msg_size, msg_size, i * msg_size)
+        test.client.qp.post_send(send_wr)
+
+    send_id_order = poll_cq_ex(test.client.cq, iterations)
+    recv_id_order = poll_cq_ex(test.server.cq, iterations, data=imm_data_exp)
+    # With opcodes that don't consume Recv WQEs (e.g. WRITE and WRITE_WITH_IMM) the buffer
+    # scattering offsets are defined by the sender.
+    recv_id_order = send_id_order if opcode == ibv_wr_opcode.IBV_WR_RDMA_WRITE_WITH_IMM else recv_id_order
+
+    for i, j in zip(recv_id_order, send_id_order):
+        exp_buff = bytearray((str(j % 10) * msg_size), 'utf-8')
+        recv_buff = test.server.mr.read(msg_size, i * msg_size)
+        if recv_buff != exp_buff:
+            raise PyverbsRDMAError(f'Data validation failed: expected {exp_buff},'
+                                   f' received {recv_buff}')
+
+
+def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=ibv_wr_opcode.IBV_WR_SEND,
             new_send=False, force_page_faults=False):
     """
     Runs basic traffic between two sides
@@ -736,7 +854,7 @@ def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_
     poll = poll_cq_ex if is_cq_ex else poll_cq
 
     imm_data = None
-    if send_op in [e.IBV_WR_SEND_WITH_IMM, e.IBV_WR_RDMA_WRITE_WITH_IMM]:
+    if send_op in [ibv_wr_opcode.IBV_WR_SEND_WITH_IMM, ibv_wr_opcode.IBV_WR_RDMA_WRITE_WITH_IMM]:
         imm_data = IMM_DATA
 
     s_recv_wr = get_recv_wr(server)
@@ -745,7 +863,7 @@ def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_
         # prepare the receive queue with RecvWR
         post_recv(client, c_recv_wr, qp_idx=qp_idx)
         post_recv(server, s_recv_wr, qp_idx=qp_idx)
-    read_offset = GRH_SIZE if client.qp.qp_type == e.IBV_QPT_UD else 0
+    read_offset = GRH_SIZE if client.qp.qp_type == ibv_qp_type.IBV_QPT_UD else 0
     for _ in range(iters):
         for qp_idx in range(server.qp_count):
             if force_page_faults:
@@ -753,7 +871,7 @@ def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_
                 madvise(server.mr.buf, server.msg_size)
             c_send_wr, c_sg = get_send_elements(client, False, send_op)
             if client.use_mr_prefetch:
-                flags = e._IBV_ADVISE_MR_FLAG_FLUSH
+                flags = _IBV_ADVISE_MR_FLAG_FLUSH
                 if client.use_mr_prefetch == 'async':
                     flags = 0
                 prefetch_mrs(client, [c_sg], advice=client.prefetch_advice,
@@ -764,11 +882,12 @@ def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_
             poll(client.cq)
             poll(server.cq, data=imm_data)
             post_recv(server, s_recv_wr, qp_idx=qp_idx)
-            msg_received = server.mr.read(server.msg_size, read_offset)
-            validate(msg_received, True, server.msg_size)
+            msg_received_list = get_msg_received(server, read_offset)
+            for msg in msg_received_list:
+                validate(msg, True, server.msg_size)
             s_send_wr, s_sg = get_send_elements(server, True, send_op)
             if server.use_mr_prefetch:
-                flags = e._IBV_ADVISE_MR_FLAG_FLUSH
+                flags = _IBV_ADVISE_MR_FLAG_FLUSH
                 if server.use_mr_prefetch == 'async':
                     flags = 0
                 prefetch_mrs(server, [s_sg], advice=server.prefetch_advice,
@@ -779,8 +898,16 @@ def traffic(client, server, iters, gid_idx, port, is_cq_ex=False, send_op=e.IBV_
             poll(server.cq)
             poll(client.cq, data=imm_data)
             post_recv(client, c_recv_wr, qp_idx=qp_idx)
-            msg_received = client.mr.read(client.msg_size, read_offset)
-            validate(msg_received, False, client.msg_size)
+            msg_received_list = get_msg_received(client,read_offset)
+            for msg in msg_received_list:
+                validate(msg, False, server.msg_size)
+
+
+def get_msg_received(agr_obj, read_offset):
+    msg_received_list = [agr_obj.mr.read(agr_obj.msg_size, read_offset)]
+    if hasattr(agr_obj, 'use_mixed_mr') and agr_obj.use_mixed_mr:
+        msg_received_list.append(agr_obj.non_odp_mr.read(agr_obj.msg_size, read_offset))
+    return msg_received_list
 
 
 def gen_ethernet_header(dst_mac=PacketConsts.DST_MAC, src_mac=PacketConsts.SRC_MAC,
@@ -960,7 +1087,7 @@ def get_send_elements_raw_qp(agr_obj, l3=PacketConsts.IP_V4,
         gen_packet(agr_obj.msg_size, l3, l4, with_vlan, **packet_args)
     mr.write(msg, agr_obj.msg_size)
     sge = SGE(mr.buf, agr_obj.msg_size, mr.lkey)
-    send_wr = SendWR(opcode=e.IBV_WR_SEND, num_sge=1, sg=[sge])
+    send_wr = SendWR(opcode=ibv_wr_opcode.IBV_WR_SEND, num_sge=1, sg=[sge])
     return send_wr, sge, msg
 
 
@@ -991,7 +1118,7 @@ def sampler_traffic(client, server, iters, l3=PacketConsts.IP_V4, l4=PacketConst
     for _ in range(iters):
         for qp_idx in range(server.qp_count):
             c_send_wr, c_sg, msg = get_send_elements_raw_qp(client, l3, l4, False)
-            send(client, c_send_wr, e.IBV_WR_SEND, False, qp_idx)
+            send(client, c_send_wr, ibv_wr_opcode.IBV_WR_SEND, False, qp_idx)
             poll(client.cq)
 
 
@@ -1025,7 +1152,7 @@ def raw_traffic(client, server, iters, l3=PacketConsts.IP_V4,
         for qp_idx in range(server.qp_count):
             c_send_wr, c_sg, msg = get_send_elements_raw_qp(client, l3, l4, with_vlan,
                                                             packet_to_send=packet_to_send)
-            send(client, c_send_wr, e.IBV_WR_SEND, False, qp_idx)
+            send(client, c_send_wr, ibv_wr_opcode.IBV_WR_SEND, False, qp_idx)
             poll(client.cq)
             poll(server.cq)
             post_recv(server, s_recv_wr, qp_idx=qp_idx)
@@ -1059,7 +1186,7 @@ def raw_rss_traffic(client, server, iters, l3=PacketConsts.IP_V4,
                 c_send_wr, c_sg, msg = get_send_elements_raw_qp(
                     client, l3, l4, with_vlan,
                     src_ipv4='.'.join([str(num) for num in range(i, i + 4)]))
-                send(client, c_send_wr, e.IBV_WR_SEND, False, qp_idx)
+                send(client, c_send_wr, ibv_wr_opcode.IBV_WR_SEND, False, qp_idx)
                 poll_cq(client.cq)
             completions = 0
             start_poll_t = time.perf_counter()
@@ -1068,7 +1195,7 @@ def raw_rss_traffic(client, server, iters, l3=PacketConsts.IP_V4,
                 for cq in server.cqs:
                     n, wcs = cq.poll()
                     if n > 0:
-                        if wcs[0].status != e.IBV_WC_SUCCESS:
+                        if wcs[0].status != ibv_wc_status.IBV_WC_SUCCESS:
                             raise PyverbsRDMAError(
                                 f'Completion status is {wc_status_to_str(wcs[0].status)}',
                                 wcs[0].status)
@@ -1095,13 +1222,13 @@ def flush_traffic(client, server, iters, gid_idx, port, new_send=False,
     :param send_op: The send_wr opcode.
     :return:
     """
-    rdma_traffic(client, server, iters, gid_idx, port, new_send, e.IBV_WR_RDMA_WRITE)
+    rdma_traffic(client, server, iters, gid_idx, port, new_send, ibv_wr_opcode.IBV_WR_RDMA_WRITE)
     for i in range(iters):
-        if client.level == e.IBV_FLUSH_MR:
+        if client.level == ibv_selectivity_level.IBV_FLUSH_MR:
             client.msg_size = 0 if i == 0 else random.randint(0, 12345678)
         send(client, None, send_op, new_send)
         wcs = _poll_cq(client.cq)
-        if (wcs[0].status != e.IBV_WC_SUCCESS):
+        if (wcs[0].status != ibv_wc_status.IBV_WC_SUCCESS):
             break
     return wcs
 
@@ -1138,9 +1265,9 @@ def rdma_traffic(client, server, iters, gid_idx, port, new_send=False,
         ah_client = None
         ah_server = None
     send_element_idx = 1 if new_send else 0
-    same_side_check =  send_op in [e.IBV_WR_RDMA_READ,
-                                   e.IBV_WR_ATOMIC_CMP_AND_SWP,
-                                   e.IBV_WR_ATOMIC_FETCH_AND_ADD]
+    same_side_check =  send_op in [ibv_wr_opcode.IBV_WR_RDMA_READ,
+                                   ibv_wr_opcode.IBV_WR_ATOMIC_CMP_AND_SWP,
+                                   ibv_wr_opcode.IBV_WR_ATOMIC_FETCH_AND_ADD]
     for _ in range(iters):
         if force_page_faults:
             madvise(client.mr.buf, client.msg_size)
@@ -1241,12 +1368,12 @@ def validate_atomic(opcode, recv_player, send_player, receiver_val,
                      swap.
     """
     send_expected = receiver_val
-    if opcode in [e.IBV_WR_ATOMIC_CMP_AND_SWP,
-                  e.IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP]:
+    if opcode in [ibv_wr_opcode.IBV_WR_ATOMIC_CMP_AND_SWP,
+                  ibv_qp_create_send_ops_flags.IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP]:
         recv_expected = send_swp if receiver_val == send_cmp_add \
             else receiver_val
-    if opcode in [e.IBV_WR_ATOMIC_FETCH_AND_ADD,
-                  e.IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD]:
+    if opcode in [ibv_wr_opcode.IBV_WR_ATOMIC_FETCH_AND_ADD,
+                  ibv_qp_create_send_ops_flags.IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD]:
         recv_expected = receiver_val + send_cmp_add
     send_actual = int.from_bytes(send_player.mr.read(length=8, offset=0),
                                  byteorder='big')
@@ -1343,9 +1470,31 @@ def xrc_traffic(client, server, is_cq_ex=False, send_op=None, force_page_faults=
 def requires_odp(qp_type, required_odp_caps):
     def outer(func):
         def inner(instance):
-            odp_supported(instance.ctx, qp_type, required_odp_caps)
+            ctx = getattr(instance, 'ctx', d.Context(name=instance.dev_name))
+            odp_supported(ctx, qp_type, required_odp_caps)
             if getattr(instance, 'is_implicit', False):
                 odp_implicit_supported(instance.ctx)
+            return func(instance)
+        return inner
+    return outer
+
+
+def requires_root():
+    def outer(func):
+        def inner(instance):
+            if not is_root():
+                raise unittest.SkipTest('Must be run by root')
+            return func(instance)
+        return inner
+    return outer
+
+
+def requires_no_sriov():
+    def outer(func):
+        def inner(instance):
+            path = '/sys/class/infiniband/{instance.dev_name}/device/sriov_totalvfs'
+            if os.path.isfile(path):
+                raise unittest.SkipTest('Virtual Functions are present on the device')
             return func(instance)
         return inner
     return outer
@@ -1399,9 +1548,33 @@ def odp_implicit_supported(ctx):
     :return: None
     """
     odp_caps = ctx.query_device_ex().odp_caps
-    has_odp_implicit = odp_caps.general_caps & e.IBV_ODP_SUPPORT_IMPLICIT
+    has_odp_implicit = odp_caps.general_caps & ibv_odp_general_caps.IBV_ODP_SUPPORT_IMPLICIT
     if has_odp_implicit == 0:
         raise unittest.SkipTest('ODP implicit is not supported')
+
+
+def odp_v2_supported(ctx):
+    """
+    ODPv2 check
+    :return: True/False if ODPv2 supported
+    """
+    from tests.mlx5_prm_structs import QueryHcaCapIn, QueryOdpCapOut, DevxOps, QueryHcaCapMod
+    query_cap_in = QueryHcaCapIn(op_mod=DevxOps.MLX5_CMD_OP_QUERY_ODP_CAP << 1 | \
+                                        QueryHcaCapMod.CURRENT)
+    cmd_res = ctx.devx_general_cmd(query_cap_in, len(QueryOdpCapOut()))
+    query_cap_out = QueryOdpCapOut(cmd_res)
+    if query_cap_out.status:
+        raise PyverbsRDMAError(f'QUERY_HCA_CAP has failed with status ({query_cap_out.status}) '
+                               f'and syndrome ({query_cap_out.syndrome})')
+    return query_cap_out.capability.mem_page_fault == 1
+
+
+def requires_odpv2(func):
+    def inner(instance):
+        if not odp_v2_supported(instance.ctx):
+            raise unittest.SkipTest('ODPv2 is not supported')
+        return func(instance)
+    return inner
 
 
 def get_pci_name(dev_name):
@@ -1527,8 +1700,8 @@ def query_nic_flow_table_caps(instance):
     return query_cap_out.capability
 
 
-def prefetch_mrs(agr_obj, sg_list, advice=e._IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
-                 flags=e._IBV_ADVISE_MR_FLAG_FLUSH):
+def prefetch_mrs(agr_obj, sg_list, advice=_IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
+                 flags=_IBV_ADVISE_MR_FLAG_FLUSH):
     """
     Pre-fetch a range of an on-demand paging MR.
     :param agr_obj: Aggregation object which contains all resources necessary
@@ -1552,11 +1725,11 @@ def is_eth(ctx, port_num):
     :param port_num: Which Context's port to query
     :return: True if the port's link layer is Ethernet, else False
     """
-    return ctx.query_port(port_num).link_layer == e.IBV_LINK_LAYER_ETHERNET
+    return ctx.query_port(port_num).link_layer == IBV_LINK_LAYER_ETHERNET
 
 
 def is_datagram_qp(agr_obj):
-    if agr_obj.qp.qp_type == e.IBV_QPT_UD or \
+    if agr_obj.qp.qp_type == ibv_qp_type.IBV_QPT_UD or \
        isinstance(agr_obj, SRDResources) or \
        isinstance(agr_obj, Mlx5DcResources):
         return True
@@ -1575,8 +1748,8 @@ def post_rq_state_bad_flow(test_obj):
     :param test_obj: An instance of RDMATestCase
     :return: None.
     """
-    qp_attr = QPAttr(qp_state=e.IBV_QPS_RESET, cur_qp_state=e.IBV_QPS_RTS)
-    test_obj.server.qps[0].modify(qp_attr, e.IBV_QP_STATE)
+    qp_attr = QPAttr(qp_state=ibv_qp_state.IBV_QPS_RESET, cur_qp_state=ibv_qp_state.IBV_QPS_RTS)
+    test_obj.server.qps[0].modify(qp_attr, ibv_qp_attr_mask.IBV_QP_STATE)
     recv_wr = get_recv_wr(test_obj.server)
     with test_obj.assertRaises(PyverbsRDMAError) as ex:
         post_recv(test_obj.server, recv_wr, qp_idx=0)
@@ -1592,12 +1765,12 @@ def post_sq_state_bad_flow(test_obj):
     :return: None.
     """
     qp_idx = 0
-    qp_attr = QPAttr(qp_state=e.IBV_QPS_RESET, cur_qp_state=e.IBV_QPS_RTS)
-    test_obj.client.qps[qp_idx].modify(qp_attr, e.IBV_QP_STATE)
+    qp_attr = QPAttr(qp_state=ibv_qp_state.IBV_QPS_RESET, cur_qp_state=ibv_qp_state.IBV_QPS_RTS)
+    test_obj.client.qps[qp_idx].modify(qp_attr, ibv_qp_attr_mask.IBV_QP_STATE)
     ah = get_global_ah(test_obj.client, test_obj.gid_index, test_obj.ib_port)
     _, sg = get_send_elements(test_obj.client, False)
     with test_obj.assertRaises(PyverbsRDMAError) as ex:
-        send(test_obj.client, sg, e.IBV_WR_SEND, new_send=True,
+        send(test_obj.client, sg, ibv_wr_opcode.IBV_WR_SEND, new_send=True,
              qp_idx=qp_idx, ah=ah)
     test_obj.assertEqual(ex.exception.error_code, errno.EINVAL)
 
@@ -1610,7 +1783,7 @@ def full_rq_bad_flow(test_obj):
     :param test_obj: An instance of RDMATestCase
     :return: None.
     """
-    qp_attr, _ = test_obj.server.qps[0].query(e.IBV_QP_CAP)
+    qp_attr, _ = test_obj.server.qps[0].query(ibv_qp_attr_mask.IBV_QP_CAP)
     max_recv_wr = qp_attr.cap.max_recv_wr
     with test_obj.assertRaises(PyverbsRDMAError) as ex:
         for _ in range (max_recv_wr + 1):
@@ -1632,7 +1805,7 @@ def create_rq_with_larger_sgl_bad_flow(test_obj):
     qp_idx = 0
     server_mr = test_obj.server.mr
     server_mr_buf = server_mr.buf
-    qp_attr, _ = test_obj.server.qps[qp_idx].query(e.IBV_QP_CAP)
+    qp_attr, _ = test_obj.server.qps[qp_idx].query(ibv_qp_attr_mask.IBV_QP_CAP)
     max_recv_sge = qp_attr.cap.max_recv_sge
     length = test_obj.server.msg_size // (max_recv_sge + 1)
     sgl = []
@@ -1667,3 +1840,11 @@ def high_rate_send(agr_obj, packet, rate_limit, timeout=2):
     # Calculate the rate
     rate = agr_obj.msg_size * iterations / timeout / 1000000
     assert rate > rate_limit, 'Traffic rate is smaller than minimal rate for the test'
+
+
+def get_pkey_from_kernel(device, port=1, index=0):
+    path = f'/sys/class/infiniband/{device}/ports/{port}/pkeys/{index}'
+    output = subprocess.check_output(['cat', path], universal_newlines=True)
+    pkey_hex = output.strip()
+    pkey_decimal = int(pkey_hex, 16)
+    return pkey_decimal

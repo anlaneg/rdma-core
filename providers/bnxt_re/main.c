@@ -119,6 +119,8 @@ static const struct verbs_context_ops bnxt_re_cntx_ops = {
 	.create_ah     = bnxt_re_create_ah,
 	.destroy_ah    = bnxt_re_destroy_ah,
 	.free_context  = bnxt_re_free_context,
+
+	.create_qp_ex  = bnxt_re_create_qp_ex,
 };
 
 static inline bool bnxt_re_is_chip_gen_p7(struct bnxt_re_chip_ctx *cctx)
@@ -194,8 +196,9 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 		return NULL;
 
 	req.comp_mask |= BNXT_RE_COMP_MASK_REQ_UCNTX_POW2_SUPPORT;
+	req.comp_mask |= BNXT_RE_COMP_MASK_REQ_UCNTX_VAR_WQE_SUPPORT;
 	if (ibv_cmd_get_context(&cntx->ibvctx, &req.ibv_cmd, sizeof(req),
-				&resp.ibv_resp, sizeof(resp)))
+				NULL, &resp.ibv_resp, sizeof(resp)))
 		goto failed;
 
 	cntx->dev_id = resp.dev_id;
@@ -221,6 +224,8 @@ static struct verbs_context *bnxt_re_alloc_context(struct ibv_device *vdev,
 		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_DBR_PACING_ENABLED;
 	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_POW2_DISABLED)
 		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_POW2_DISABLED;
+	if (resp.comp_mask & BNXT_RE_UCNTX_CMASK_MSN_TABLE_ENABLED)
+		cntx->comp_mask |= BNXT_RE_COMP_MASK_UCNTX_MSN_TABLE_ENABLED;
 
 	/* mmap shared page. */
 	cntx->shpg = mmap(NULL, rdev->pg_size, PROT_READ | PROT_WRITE,

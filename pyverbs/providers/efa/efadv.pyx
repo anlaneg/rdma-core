@@ -7,7 +7,7 @@ cimport pyverbs.providers.efa.libefa as dv
 from pyverbs.addr cimport GID
 from pyverbs.base import PyverbsRDMAErrno, PyverbsRDMAError
 from pyverbs.cq cimport CQEX, CqInitAttrEx
-import pyverbs.enums as e
+from pyverbs.libibverbs_enums import ibv_qp_attr_mask
 cimport pyverbs.libibverbs as v
 from pyverbs.pd cimport PD
 from pyverbs.qp cimport QP, QPEx, QPInitAttr, QPInitAttrEx
@@ -20,6 +20,7 @@ def dev_cap_to_str(flags):
             dve.EFADV_DEVICE_ATTR_CAPS_RNR_RETRY: 'RNR Retry',
             dve.EFADV_DEVICE_ATTR_CAPS_CQ_WITH_SGID: 'CQ entries with source GID',
             dve.EFADV_DEVICE_ATTR_CAPS_RDMA_WRITE: 'RDMA Write',
+            dve.EFADV_DEVICE_ATTR_CAPS_UNSOLICITED_WRITE_RECV: 'Unsolicited RDMA Write receive',
     }
     return bitmask_to_str(flags, l)
 
@@ -170,8 +171,24 @@ cdef class EfaQPInitAttr(PyverbsObject):
         return self.qp_init_attr.driver_qp_type
 
     @driver_qp_type.setter
-    def driver_qp_type(self,val):
+    def driver_qp_type(self, val):
         self.qp_init_attr.driver_qp_type = val
+
+    @property
+    def flags(self):
+        return self.qp_init_attr.flags
+
+    @flags.setter
+    def flags(self, val):
+        self.qp_init_attr.flags = val
+
+    @property
+    def sl(self):
+        return self.qp_init_attr.sl
+
+    @sl.setter
+    def sl(self,val):
+        self.qp_init_attr.sl = val
 
 
 cdef class SRDQPEx(QPEx):
@@ -195,10 +212,10 @@ cdef class SRDQPEx(QPEx):
         super().__init__(ctx, attr_ex)
 
     def _get_comp_mask(self, dst):
-        srd_mask = {'INIT': e.IBV_QP_PKEY_INDEX | e.IBV_QP_PORT | e.IBV_QP_QKEY,
+        srd_mask = {'INIT': ibv_qp_attr_mask.IBV_QP_PKEY_INDEX | ibv_qp_attr_mask.IBV_QP_PORT | ibv_qp_attr_mask.IBV_QP_QKEY,
                     'RTR': 0,
-                    'RTS': e.IBV_QP_SQ_PSN}
-        return srd_mask [dst] | e.IBV_QP_STATE
+                    'RTS': ibv_qp_attr_mask.IBV_QP_SQ_PSN}
+        return srd_mask [dst] | ibv_qp_attr_mask.IBV_QP_STATE
 
 
 cdef class EfaDVCQInitAttr(PyverbsObject):
@@ -251,6 +268,12 @@ cdef class EfaCQ(CQEX):
         if err:
             return None
         return sgid
+
+    def is_unsolicited(self):
+        """
+        Check if current work completion is unsolicited.
+        """
+        return dv.efadv_wc_is_unsolicited(self.dv_cq)
 
 
 cdef class EfaDVMRAttr(PyverbsObject):

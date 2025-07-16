@@ -184,6 +184,7 @@ IBVERBS_PRIVATE_@IBVERBS_PABI_VERSION@ {
 		ibv_cmd_create_counters;
 		ibv_cmd_create_cq;
 		ibv_cmd_create_cq_ex;
+		ibv_cmd_create_cq_ex2;
 		ibv_cmd_create_flow;
 		ibv_cmd_create_flow_action_esp;
 		ibv_cmd_create_qp;
@@ -221,7 +222,6 @@ IBVERBS_PRIVATE_@IBVERBS_PABI_VERSION@ {
 		ibv_cmd_post_send;
 		ibv_cmd_post_srq_recv;
 		ibv_cmd_query_context;
-		ibv_cmd_query_device;
 		ibv_cmd_query_device_any;
 		ibv_cmd_query_mr;
 		ibv_cmd_query_port;

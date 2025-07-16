@@ -43,6 +43,7 @@
 #include <errno.h>
 #include <string.h>
 #include <linux/types.h>
+#include <linux/if_ether.h>
 #include <sys/types.h>
 #include <infiniband/verbs_api.h>
 
@@ -228,6 +229,11 @@ struct ibv_query_device_ex_input {
 	uint32_t		comp_mask;
 };
 
+enum ibv_odp_general_caps {
+	IBV_ODP_SUPPORT = 1 << 0,
+	IBV_ODP_SUPPORT_IMPLICIT = 1 << 1,
+};
+
 enum ibv_odp_transport_cap_bits {
 	IBV_ODP_SUPPORT_SEND     = 1 << 0,
 	IBV_ODP_SUPPORT_RECV     = 1 << 1,
@@ -235,6 +241,8 @@ enum ibv_odp_transport_cap_bits {
 	IBV_ODP_SUPPORT_READ     = 1 << 3,
 	IBV_ODP_SUPPORT_ATOMIC   = 1 << 4,
 	IBV_ODP_SUPPORT_SRQ_RECV = 1 << 5,
+	IBV_ODP_SUPPORT_FLUSH    = 1 << 6,
+	IBV_ODP_SUPPORT_ATOMIC_WRITE = 1 << 7,
 };
 
 struct ibv_odp_caps {
@@ -244,11 +252,6 @@ struct ibv_odp_caps {
 		uint32_t uc_odp_caps;
 		uint32_t ud_odp_caps;
 	} per_transport_caps;
-};
-
-enum ibv_odp_general_caps {
-	IBV_ODP_SUPPORT = 1 << 0,
-	IBV_ODP_SUPPORT_IMPLICIT = 1 << 1,
 };
 
 struct ibv_tso_caps {
@@ -1174,6 +1177,11 @@ struct ibv_sge {
 	uint32_t		lkey;
 };
 
+struct ibv_fd_arr {
+	int *arr;
+	uint32_t count;
+};
+
 struct ibv_send_wr {
 	uint64_t		wr_id;
 	/*指向另一个send_wr,用于串成链表*/
@@ -1770,9 +1778,10 @@ enum ibv_flow_spec_type {
 	IBV_FLOW_SPEC_ACTION_COUNT	= 0x1003,
 };
 
+#define ETHERNET_LL_SIZE ETH_ALEN
 struct ibv_flow_eth_filter {
-	uint8_t		dst_mac[6];
-	uint8_t		src_mac[6];
+	uint8_t		dst_mac[ETHERNET_LL_SIZE];
+	uint8_t		src_mac[ETHERNET_LL_SIZE];
 	uint16_t	ether_type;
 	/*
 	 * same layout as 802.1q: prio 3, cfi 1, vlan id 12
@@ -2267,7 +2276,7 @@ static inline struct verbs_context *verbs_get_ctx(struct ibv_context *ctx)
 		return NULL;
 
 	/* open code container_of to not pollute the global namespace */
-	return (struct verbs_context *)(((uint8_t *)ctx) -
+	return (struct verbs_context *)(((uintptr_t)ctx) -
 					offsetof(struct verbs_context,
 						 context));
 }
@@ -2389,13 +2398,13 @@ int ibv_close_device(struct ibv_context *context);
 struct ibv_context *ibv_import_device(int cmd_fd);
 
 /**
- * ibv_import_pd - Import a protetion domain
+ * ibv_import_pd - Import a protection domain
  */
 struct ibv_pd *ibv_import_pd(struct ibv_context *context,
 			     uint32_t pd_handle);
 
 /**
- * ibv_unimport_pd - Unimport a protetion domain
+ * ibv_unimport_pd - Unimport a protection domain
  */
 void ibv_unimport_pd(struct ibv_pd *pd);
 
@@ -2622,9 +2631,9 @@ static inline int ibv_close_xrcd(struct ibv_xrcd *xrcd)
  * ibv_reg_mr_iova2 - Register memory region with a virtual offset address
  *
  * This version will be called if ibv_reg_mr or ibv_reg_mr_iova were called
- * with at least one potential access flag from the IBV_OPTIONAL_ACCESS_RANGE
- * flags range The optional access flags will be masked if running over kernel
- * that does not support passing them.
+ * with at least one optional access flag from the IBV_ACCESS_OPTIONAL_RANGE
+ * bits flag range. The optional access flags will be masked if running over
+ * kernel that does not support passing them.
  */
 struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
 				uint64_t iova, unsigned int access);
@@ -3547,7 +3556,6 @@ const char *ibv_port_state_str(enum ibv_port_state port_state);
  */
 const char *ibv_event_type_str(enum ibv_event_type event);
 
-#define ETHERNET_LL_SIZE 6
 int ibv_resolve_eth_l2_from_gid(struct ibv_context *context,
 				struct ibv_ah_attr *attr,
 				uint8_t eth_mac[ETHERNET_LL_SIZE],
