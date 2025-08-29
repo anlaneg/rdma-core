@@ -355,7 +355,7 @@ out:
 
 /*初始化pingpong_context*/
 static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
-					    int rx_depth, int port,
+					    int rx_depth/*队列深度*/, int port,
 					    int use_event)
 {
 	struct pingpong_context *ctx;
@@ -379,7 +379,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 	/* FIXME memset(ctx->buf, 0, size); */
 	memset(ctx->buf, 0x7b, size);
 
-	/*打开ib设备，创建ibv_context*/
+	/*打开ib设备，针对ibdev创建ibv_context*/
 	ctx->context = ibv_open_device(ib_dev);
 	if (!ctx->context) {
 		fprintf(stderr, "Couldn't get context for %s\n",
@@ -501,7 +501,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 		ctx->cq_s.cq_ex = ibv_create_cq_ex(ctx->context, &attr_ex);
 	} else {
-		/*创建cq*/
+		/*利用context创建cq*/
 		ctx->cq_s.cq = ibv_create_cq(ctx->context, rx_depth + 1, NULL,
 					     ctx->channel, 0);
 	}
