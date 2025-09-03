@@ -2025,7 +2025,7 @@ struct ibv_device {
 	//传输层类型
 	enum ibv_transport_type	transport_type;
 	/* Name of underlying kernel IB device, eg "mthca0" */
-	//ib设备名称(例如rxe0）
+	//ib设备名称(例如rxe0,mlx5_0）
 	char			name[IBV_SYSFS_NAME_MAX];
 	/* Name of uverbs device, eg "uverbs0" */
 	//设备名称（例如uverbs0)

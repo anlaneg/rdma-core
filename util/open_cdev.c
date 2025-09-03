@@ -146,7 +146,7 @@ int open_cdev(const char *devname_hint, dev_t cdev)
 	fd = open_cdev_internal(devpath, cdev);
 	free(devpath);
 	if (fd == -1 && cdev != 0)
-	    //打开/dev/char下的字符设备
+	    //通过打开/dev/char下的字符设备来完成
 		return open_cdev_robust(devname_hint, cdev);
 	return fd;
 }

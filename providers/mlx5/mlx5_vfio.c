@@ -675,7 +675,7 @@ static int mlx5_vfio_post_cmd(struct mlx5_vfio_context *ctx, void *in,
 	cmd_lay->status_own = 0x1;
 
 	udma_to_device_barrier();
-	mmio_write32_be(&init_seg->cmd_dbell, htobe32(0x1 << slot));
+	mmio_write32_be(&init_seg->cmd_dbell, htobe32(0x1 << slot));/*直接写door bell*/
 	return 0;
 }
 
@@ -687,7 +687,7 @@ static int mlx5_vfio_cmd_do(struct mlx5_vfio_context *ctx, void *in,
 	struct mlx5_cmd_msg *cmd_out = &ctx->cmd.cmds[slot].out;
 	int err;
 
-	pthread_mutex_lock(&ctx->cmd.cmds[slot].lock);
+	pthread_mutex_lock(&ctx->cmd.cmds[slot].lock);/*加锁互斥*/
 	err = mlx5_vfio_post_cmd(ctx, in, ilen, out, olen, slot, false);
 	if (err)
 		goto end;
@@ -2231,12 +2231,12 @@ static struct ibv_pd *mlx5_vfio_alloc_pd(struct ibv_context *ibctx)
 	int err;
 	struct mlx5_pd *pd;
 
-	pd = calloc(1, sizeof(*pd));
+	pd = calloc(1, sizeof(*pd));/*申请pd数据结构*/
 	if (!pd)
 		return NULL;
 
 	DEVX_SET(alloc_pd_in, in, opcode, MLX5_CMD_OP_ALLOC_PD);
-	err = mlx5_vfio_cmd_exec(ctx, in, sizeof(in), out, sizeof(out), 0);
+	err = mlx5_vfio_cmd_exec(ctx, in, sizeof(in), out, sizeof(out), 0/*0号通道*/);
 
 	if (err)
 		goto err;

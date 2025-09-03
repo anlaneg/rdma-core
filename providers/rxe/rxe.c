@@ -119,7 +119,7 @@ static struct ibv_pd *rxe_alloc_pd(struct ibv_context *context)
 		return NULL;
 	}
 
-	return pd;
+	return pd;/*pd内会包含context*/
 }
 
 static int rxe_dealloc_pd(struct ibv_pd *pd)

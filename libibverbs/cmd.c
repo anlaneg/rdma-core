@@ -55,11 +55,11 @@ int ibv_cmd_alloc_pd(struct ibv_context *context, struct ibv_pd *pd,
 	int ret;
 
 	ret = execute_cmd_write(context, IB_USER_VERBS_CMD_ALLOC_PD, cmd,
-				cmd_size, resp, resp_size);
+				cmd_size, resp, resp_size);/*送kernel发送消息创建pd*/
 	if (ret)
 		return ret;
 
-	pd->handle  = resp->pd_handle;
+	pd->handle  = resp->pd_handle;/*记录pd对应的handle*/
 	pd->context = context;
 
 	return 0;

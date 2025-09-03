@@ -84,7 +84,7 @@ struct ibv_driver {
 	const struct verbs_device_ops *ops;/*驱动操作集*/
 };
 
-/*记录系统中的driver list*/
+/*记录系统用户态driver list*/
 static LIST_HEAD(driver_list);
 
 //尝试访问指定设备文件，设备必须存在,例如/dev/infiniband/uverbs13
@@ -275,7 +275,7 @@ void verbs_register_driver(const struct verbs_device_ops *ops)
 	/*此driver对应的ops*/
 	driver->ops = ops;
 
-	list_add_tail(&driver_list, &driver->entry);
+	list_add_tail(&driver_list, &driver->entry);/*注册驱动*/
 }
 
 /* Match a single modalias value */
@@ -343,7 +343,7 @@ match_name(const struct verbs_device_ops *ops,
 }
 
 /* Match the driver id we get from netlink */
-//按driver_id匹配sysfs_dev
+//按driver_id方式匹配sysfs_dev
 static const struct verbs_match_ent *
 match_driver_id(const struct verbs_device_ops *ops,
 		struct verbs_sysfs_dev *sysfs_dev)
@@ -354,7 +354,7 @@ match_driver_id(const struct verbs_device_ops *ops,
 	if (sysfs_dev->driver_id == RDMA_DRIVER_UNKNOWN)
 		return NULL;
 
-	//遍历ops的匹配table,如果按driver id匹配，则比对driver_id,若命中，返回i
+	//遍历ops的匹配table,如果指明为driver id匹配方式，则比对driver_id，否则直接失配；若命中，返回i
 	for (i = ops->match_table; i->kind != VERBS_MATCH_SENTINEL; i++)
 		if (i->kind == VERBS_MATCH_DRIVER_ID &&
 		    i->u.driver_id == sysfs_dev->driver_id)
@@ -415,7 +415,7 @@ static struct verbs_device *try_driver(const struct verbs_device_ops *ops,
 	struct verbs_device *vdev;
 	struct ibv_device *dev;
 
-	//识别sysfs_dev的驱动，如果不匹配，直接返回NULL
+	//尝试多种match方式，识别sysfs_dev的驱动，如果不匹配，直接返回NULL
 	if (!match_device(ops, sysfs_dev))
 		return NULL;
 
@@ -490,7 +490,8 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 	 * first.
 	 */
 	if (sysfs_dev->driver_id != RDMA_DRIVER_UNKNOWN) {
-	    /*kernel为设备指明了driver_id,如果与现有驱动可匹配，则创建sysfs_dev对应的verbs_devices*/
+	    /*kernel为设备指明了driver_id,按driver_id匹配，
+	     * 如果可匹配，则依据sysfs_dev创建verbs_devices*/
 		list_for_each (&driver_list, driver, entry) {
 			if (match_driver_id(driver->ops, sysfs_dev)) {
 				dev = try_driver(driver->ops, sysfs_dev);
@@ -500,7 +501,8 @@ static struct verbs_device *try_drivers(struct verbs_sysfs_dev *sysfs_dev)
 		}
 	}
 
-	//设备没有指明driver_id,遍历所有driver,检查驱动能否可匹配,如果可匹配，则创建verbs_devices
+	/*设备没有指明driver_id,遍历所有driver,多方检查驱动能否可匹配,
+	如果可匹配，则创建verbs_devices*/
 	list_for_each(&driver_list, driver, entry) {
 		dev = try_driver(driver->ops, sysfs_dev);
 		if (dev)
@@ -577,8 +579,8 @@ static int same_sysfs_dev(struct verbs_sysfs_dev *sysfs1,
  * to device_list. Once matched to a driver the entry in sysfs_list is
  * removed.
  */
-static void try_all_drivers(struct list_head *sysfs_list/*待创建verbs_device的设备列表*/,
-			    struct list_head *device_list/*出参，sysfs_dev对应的verbs_device*/,
+static void try_all_drivers(struct list_head *sysfs_list/*新增的verbs_device设备列表*/,
+			    struct list_head *device_list/*入出参，sysfs_dev对应的verbs_device*/,
 			    unsigned int *num_devices/*出参，verbs_device设备数目*/)
 {
 	struct verbs_sysfs_dev *sysfs_dev;
@@ -600,8 +602,8 @@ static void try_all_drivers(struct list_head *sysfs_list/*待创建verbs_device�
 	}
 }
 
-//收集所有ib设备,创建verbs_device,并返回设备数目
-int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来的设备verbs_device*/)
+//收集所有ib设备,创建verbs_device,并返回设备数目（非线程安全）
+int ibverbs_get_device_list(struct list_head *device_list/*入出参，识别出来的设备verbs_device*/)
 {
 	LIST_HEAD(sysfs_list);
 	struct verbs_sysfs_dev *sysfs_dev, *next_dev;
@@ -610,7 +612,7 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	unsigned int num_devices = 0;
 	int ret;
 
-	//列出系统所有可用ib设备(通过netlink socket)
+	//通过netlink socket列出系统可用ib设备
 	ret = find_sysfs_devs_nl(&sysfs_list);
 	if (ret) {
 	    //通过netlink获取仅失败时，才通过sysfs进行获取
@@ -620,7 +622,7 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	}
 
 	if (!list_empty(&sysfs_list)) {
-	    /*针对此设备显示其abi版本*/
+	    /*检查abi版本是否本lib支持*/
 		ret = check_abi_version();
 		if (ret)
 			return -ret;
@@ -630,10 +632,10 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 	 * device_list, and remove entries from the device_list that are not
 	 * present in the sysfs_list.
 	 */
-	list_for_each_safe(device_list, vdev, tmp, entry) {
+	list_for_each_safe(device_list/*上一次已识别的设备*/, vdev, tmp, entry) {
 		struct verbs_sysfs_dev *old_sysfs = NULL;
 
-		list_for_each(&sysfs_list, sysfs_dev, entry) {
+		list_for_each(&sysfs_list/*本次识别出来的设备*/, sysfs_dev, entry) {
 			if (same_sysfs_dev(vdev->sysfs, sysfs_dev)) {
 			    /*跳过已识别出来的设备*/
 				old_sysfs = sysfs_dev;
@@ -642,36 +644,36 @@ int ibverbs_get_device_list(struct list_head *device_list/*出参，识别出来
 		}
 
 		if (old_sysfs) {
-		    /*设备在device_list与sysfs_list中同时存在*/
+		    /*设备在device_list与sysfs_list中同时存在，自sysfs_list中移除，设备数增加*/
 			list_del(&old_sysfs->entry);
 			free(old_sysfs);
 			num_devices++;
 		} else {
-		    /*设备针在device_list中存在*/
+		    /*设备仅在device_list中存在（现在不存在了，自device_list中移除），设备数不增加*/
 			list_del(&vdev->entry);
-			ibverbs_device_put(&vdev->device);
+			ibverbs_device_put(&vdev->device);/*引用计数减1，如果无应用引用，则释放*/
 		}
 	}
 
-	//尝试执行driver匹配，将匹配好的构造到device_list
+	/*此时sysfs_list上存放的是本次新增的设备，且device_list上本次删除设备已移除*/
 	try_all_drivers(&sysfs_list, device_list, &num_devices/*device_list链表长度*/);
 
 	/* 如果sysfs_list为空，则所有设备均完成创建并加入到device_list
-	 * 如果drivers_loaded为真，则上次已完成device_list收集，跳过后面处理*/
+	 * 如果drivers_loaded为真，则上次已完成driver_list收集，跳过后面处理*/
 	if (list_empty(&sysfs_list) || drivers_loaded)
 		goto out;
 
-	//由于存在未被识别的sysfs_list,故加载驱动，重新尝试一次,并构造device_list
+	/*由于存在未被识别的sysfs_list,故尝试加载驱动，重新尝试一次,并构造device_list*/
 	load_drivers();
 	drivers_loaded = 1;
 
-	try_all_drivers(&sysfs_list, device_list, &num_devices);
+	try_all_drivers(&sysfs_list, device_list, &num_devices);/*驱动已加载，再尝试一次*/
 
 out:
 	/* Anything left in sysfs_list was not assoicated with a
 	 * driver.
 	 */
-    //如果仍存在未识别的sysfs_list，告警表示哪些sysfs_dev未识别到驱动，并释放这些sysfs_dev
+    //如果仍存在未识别的sysfs_list（内核态认识，但用户态不认识），告警表示哪些sysfs_dev未识别到驱动，并释放这些sysfs_dev
 	list_for_each_safe(&sysfs_list, sysfs_dev, next_dev, entry) {
 		if (getenv("IBV_SHOW_WARNINGS")) {
 			fprintf(stderr, PFX
@@ -773,6 +775,7 @@ void ibverbs_device_put(struct ibv_device *dev)
 	struct verbs_device *verbs_device = verbs_get_device(dev);
 
 	if (atomic_fetch_sub(&verbs_device->refcount, 1) == 1) {
+		/*无应用引用此值*/
 		free(verbs_device->sysfs);
 		if (verbs_device->ops->uninit_device)
 			verbs_device->ops->uninit_device(verbs_device);

@@ -192,7 +192,7 @@ struct verbs_dm {
 
 enum {
 	VERBS_MATCH_SENTINEL = 0,//标记最后一个匹配项
-	VERBS_MATCH_PCI = 1,
+	VERBS_MATCH_PCI = 1,/*标记采用pci地址进行匹配*/
 	VERBS_MATCH_MODALIAS = 2,
 	VERBS_MATCH_DRIVER_ID = 3,/*标记按driver id进行匹配*/
 };
@@ -200,7 +200,7 @@ enum {
 struct verbs_match_ent {
 	void *driver_data;
 	union {
-		const char *modalias;
+		const char *modalias;/*别名匹配时使用*/
 		uint64_t driver_id;//驱动id号，见结构rdma_driver_id
 	} u;
 	uint16_t vendor;
@@ -303,10 +303,11 @@ struct verbs_device_ops {
 
 /* Must change the PRIVATE IBVERBS_PRIVATE_ symbol if this is changed */
 struct verbs_device {
+	/*基类，将返回给用户*/
 	struct ibv_device device; /* Must be first */
 	/*verbs设备操作集*/
 	const struct verbs_device_ops *ops;
-	/*引用计数*/
+	/*引用计数,防止释放*/
 	atomic_int refcount;
 	/*用于串连verbs设备*/
 	struct list_node entry;
