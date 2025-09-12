@@ -207,19 +207,19 @@ err:
 
 /*注册memory region*/
 static struct ibv_mr *rxe_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-				 uint64_t hca_va/*待注册的地址*/, int access/*访问权限*/)
+				 uint64_t hca_va/*待注册地址对应的iova*/, int access/*访问权限*/)
 {
 	struct verbs_mr *vmr;
 	struct ibv_reg_mr cmd;
 	struct ib_uverbs_reg_mr_resp resp;
 	int ret;
 
-	/*创建verbs_mr*/
+	/*申请verbs_mr结构体*/
 	vmr = calloc(1, sizeof(*vmr));
 	if (!vmr)
 		return NULL;
 
-	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va/*待注册的地址*/, access/*权限*/, vmr/*出参，verbs_mr对象*/, &cmd,
+	ret = ibv_cmd_reg_mr(pd, addr/*待注册的地址*/, length/*待注册的地址长度*/, hca_va/*待注册地址对应的iova地址*/, access/*权限*/, vmr/*出参，verbs_mr对象*/, &cmd/*待填充的cmd*/,
 			     sizeof(cmd), &resp, sizeof(resp));
 	if (ret) {
 		free(vmr);
@@ -1463,7 +1463,7 @@ static int rxe_query_qp(struct ibv_qp *ibqp, struct ibv_qp_attr *attr,
 }
 
 static int rxe_modify_qp(struct ibv_qp *ibqp, struct ibv_qp_attr *attr,
-		  int attr_mask)
+		  int attr_mask/*需变更的属性掩码*/)
 {
 	struct ibv_modify_qp cmd = {};
 

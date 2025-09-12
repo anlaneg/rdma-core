@@ -98,16 +98,16 @@ int ibv_cmd_open_xrcd(struct ibv_context *context, struct verbs_xrcd *xrcd,
 }
 
 int ibv_cmd_reg_mr(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-		   uint64_t hca_va, int access/*访问标记*/,
-		   struct verbs_mr *vmr/*出参，待初始化的变量*/, struct ibv_reg_mr *cmd/*命令变量*/,
+		   uint64_t hca_va/*待注册的iova地址*/, int access/*访问标记*/,
+		   struct verbs_mr *vmr/*出参，待初始化的变量*/, struct ibv_reg_mr *cmd/*入参，命令变量*/,
 		   size_t cmd_size/*命令变量长度*/,
-		   struct ib_uverbs_reg_mr_resp *resp, size_t resp_size)
+		   struct ib_uverbs_reg_mr_resp *resp, size_t resp_size/*resp对应的结构体大小*/)
 {
 	int ret;
 
 	/*填充cmd*/
-	cmd->start 	  = (uintptr_t) addr;
-	cmd->length 	  = length;
+	cmd->start 	  = (uintptr_t) addr;/*起始地址*/
+	cmd->length 	  = length;/*长度*/
 	/* On demand access and entire address space means implicit.
 	 * In that case set the value in the command to what kernel expects.
 	 */
@@ -493,9 +493,9 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 				  struct ib_uverbs_modify_qp *cmd)
 {
 	cmd->qp_handle = qp->handle;
-	cmd->attr_mask = attr_mask;
+	cmd->attr_mask = attr_mask;/*指明哪些属性被设置了值*/
 
-	/*按属性设置mask设置相应字段*/
+	/*按属性设置的mask取attr中相应字段，设置cmd中相应字段*/
 	if (attr_mask & IBV_QP_STATE)
 		cmd->qp_state = attr->qp_state;
 	if (attr_mask & IBV_QP_CUR_STATE)
@@ -576,7 +576,7 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 }
 
 int ibv_cmd_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
-		      int attr_mask,
+		      int attr_mask/*attr中有效的属性掩码*/,
 		      struct ibv_modify_qp *cmd, size_t cmd_size)
 {
 	/*

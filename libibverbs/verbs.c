@@ -317,7 +317,7 @@ LATEST_SYMVER_FUNC(ibv_dealloc_pd, 1_1, "IBVERBS_1.1",
 }
 
 struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地址*/, size_t length/*待注册的地址长度*/,
-				uint64_t iova/*待注册的地址*/, unsigned int access/*访问权限*/)
+				uint64_t iova/*待注册的iova地址*/, unsigned int access/*访问权限*/)
 {
 	/*由pd获得其对应的device*/
 	struct verbs_device *device = verbs_get_device(pd->context->device);
@@ -345,14 +345,14 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地�
 			ibv_dofork_range(addr, length);
 	}
 
-	return mr;
+	return mr;/*返回mr信息*/
 }
 
-/*注册本端内存区域*/
+/*注册本端内存区域(iova地址与虚拟地址一致）*/
 #undef ibv_reg_mr
 LATEST_SYMVER_FUNC(ibv_reg_mr, 1_1, "IBVERBS_1.1",
 		   struct ibv_mr *,
-		   struct ibv_pd *pd, void *addr,
+		   struct ibv_pd *pd, void *addr/*待注册地址可以为空*/,
 		   size_t length, int access)
 {
 	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr/*待注册的起始地址（iova)*/, access/*访问权限*/);
@@ -741,7 +741,7 @@ int ibv_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 LATEST_SYMVER_FUNC(ibv_modify_qp, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_qp *qp, struct ibv_qp_attr *attr,
-		   int attr_mask)
+		   int attr_mask/*采用掩码指出哪些成员有效*/)
 {
 	int ret;
 

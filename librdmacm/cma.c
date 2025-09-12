@@ -799,7 +799,7 @@ err:	ucma_free_id(id_priv);
 
 //向kernel发消息，创建context
 static int rdma_create_id2(struct rdma_event_channel *channel,
-			   struct rdma_cm_id **id, void *context,
+			   struct rdma_cm_id **id/*出参，cma_id*/, void *context,
 			   enum rdma_port_space ps, enum ibv_qp_type qp_type/*qp类型*/)
 {
 	struct ucma_abi_create_id_resp resp;
@@ -1144,7 +1144,7 @@ int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr/*指明要绑定
 		/*如果此值为真，则走此流程，通过BIND命令来绑定*/
 		return rdma_bind_addr2(id, addr, addrlen);
 
-	/*通过cma执行bond_ip*/
+	/*通过cma向kernel发送UCMA_CMD_BIND_IP命令*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, BIND_IP);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
@@ -1334,7 +1334,7 @@ int rdma_init_qp_attr(struct rdma_cm_id *id, struct ibv_qp_attr *qp_attr,
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
 	ibv_copy_qp_attr_from_kern(qp_attr, &resp);
-	*qp_attr_mask = resp.qp_attr_mask;
+	*qp_attr_mask = resp.qp_attr_mask;/*取得qp属性*/
 	return 0;
 }
 
@@ -1350,16 +1350,16 @@ static int ucma_modify_qp_rtr(struct rdma_cm_id *id, uint8_t resp_res)
 
 	/* Need to update QP attributes from default values. */
 	qp_attr.qp_state = IBV_QPS_INIT;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*取qp状态属性*/
 	if (ret)
 		return ret;
 
-	ret = ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask);
+	ret = ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask);/*将qp置为init状态*/
 	if (ret)
 		return ERR(ret);
 
 	qp_attr.qp_state = IBV_QPS_RTR;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*将qp状态置为ready to receive*/
 	if (ret)
 		return ret;
 
@@ -1414,8 +1414,8 @@ static int ucma_modify_qp_err(struct rdma_cm_id *id)
 	if (!id->qp)
 		return 0;
 
-	qp_attr.qp_state = IBV_QPS_ERR;
-	return rdma_seterrno(ibv_modify_qp(id->qp, &qp_attr, IBV_QP_STATE));
+	qp_attr.qp_state = IBV_QPS_ERR;/*将qp状态置为error*/
+	return rdma_seterrno(ibv_modify_qp(id->qp, &qp_attr, IBV_QP_STATE)/*仅修改qp状态*/);
 }
 
 static int ucma_init_conn_qp3(struct cma_id_private *id_priv, struct ibv_qp *qp)
@@ -1903,7 +1903,7 @@ int rdma_listen(struct rdma_cm_id *id, int backlog)
 	struct cma_id_private *id_priv;
 	int ret;
 
-	/*发送listen命令*/
+	/*向kernel发送listen命令*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, LISTEN);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
@@ -2589,6 +2589,7 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
 		return ret;
 
 	if (!event)
+		/*不得为空*/
 		return ERR(EINVAL);
 
 	evt = malloc(sizeof(*evt));
@@ -2686,7 +2687,7 @@ retry:
 			goto retry;
 		}
 		ucma_copy_conn_event(evt, &resp.param.conn);
-		ucma_modify_qp_err(evt->event.id);
+		ucma_modify_qp_err(evt->event.id);/*qp状态被置为error,后续此qp只能删除了*/
 		break;
 	case RDMA_CM_EVENT_DISCONNECTED:
 		if (evt->id_priv->connect_error) {
@@ -2726,6 +2727,7 @@ retry:
 	return 0;
 }
 
+/*事件类别转字符串*/
 const char *rdma_event_str(enum rdma_cm_event_type event)
 {
 	switch (event) {

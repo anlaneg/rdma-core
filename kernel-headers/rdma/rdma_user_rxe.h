@@ -133,9 +133,9 @@ struct rxe_send_wr {
 };
 
 struct rxe_sge {
-	__aligned_u64 addr;
-	__u32	length;
-	__u32	lkey;
+	__aligned_u64 addr;/*mr地址*/
+	__u32	length;/*长度*/
+	__u32	lkey;/*本端key*/
 };
 
 struct mminfo {
