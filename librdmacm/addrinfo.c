@@ -141,7 +141,7 @@ static int ucma_convert_in6(int ps, struct sockaddr_ib **dst, socklen_t *dst_len
 	return 0;
 }
 
-static int ucma_convert_to_rai(struct rdma_addrinfo *rai,
+static int ucma_convert_to_rai(struct rdma_addrinfo *rai/*出参*/,
 			       const struct rdma_addrinfo *hints,
 			       const struct addrinfo *ai)
 {
@@ -215,7 +215,7 @@ static int ucma_convert_to_rai(struct rdma_addrinfo *rai,
 	return ret;
 }
 
-static int ucma_getaddrinfo(const char *node, const char *service,
+static int ucma_getaddrinfo(const char *node/*主机地址*/, const char *service,
 			    const struct rdma_addrinfo *hints,
 			    struct rdma_addrinfo *rai)
 {
@@ -237,7 +237,7 @@ static int ucma_getaddrinfo(const char *node, const char *service,
 	return ret;
 }
 
-int rdma_getaddrinfo(const char *node, const char *service,
+int rdma_getaddrinfo(const char *node/*主机地址*/, const char *service,
 		     const struct rdma_addrinfo *hints,
 		     struct rdma_addrinfo **res)
 {

@@ -61,18 +61,18 @@
 #include <util/rdma_nl.h>
 #include <ccan/list.h>
 
-#define CMA_INIT_CMD(req, req_size, op/*请求命令*/)		\
+#define CMA_INIT_CMD(req/*请求结构体*/, req_size/*请求结构体大小*/, op/*请求命令*/)		\
 do {						\
 	memset(req, 0, req_size);/*清空请求结构体*/		\
-	(req)->cmd = UCMA_CMD_##op;/*设置cm对应的命令*/		\
-	(req)->in  = req_size - sizeof(struct ucma_abi_cmd_hdr); \
+	(req)->cmd = UCMA_CMD_##op;/*设置请求对应的命令*/		\
+	(req)->in  = req_size - sizeof(struct ucma_abi_cmd_hdr);/*设置请求结构体长度(不含ucma_abi_cmd_hdr)*/ \
 } while (0)
 
-#define CMA_INIT_CMD_RESP(req/*入参，请求消息*/, req_size/*请求消息大小*/, op/*请求命令*/, resp/*出参，响应消息*/, resp_size/*响应消息大小*/) \
+#define CMA_INIT_CMD_RESP(req/*入参，请求消息*/, req_size/*请求消息大小*/, op/*请求命令*/, resp/*出参，响应消息地址*/, resp_size/*响应消息内存大小*/) \
 do {						\
 	CMA_INIT_CMD(req, req_size, op);	\
-	(req)->out = resp_size;			\
-	(req)->response = (uintptr_t) (resp);	\
+	(req)->out = resp_size;/*设置响应地址可填充大小*/			\
+	(req)->response = (uintptr_t) (resp);/*设置响应地址*/	\
 } while (0)
 
 #define UCMA_INVALID_IB_INDEX -1
@@ -111,7 +111,7 @@ struct cma_id_private {
 	int			sync;/*是否采用同步模型*/
 	pthread_cond_t		cond;
 	pthread_mutex_t		mut;
-	uint32_t		handle;/*cma context对应的fd*/
+	uint32_t		handle;/*cma context对应的fd(由kernel在create id时分配的ID)*/
 	struct cma_multicast	*mc_list;
 	struct ibv_qp_init_attr	*qp_init_attr;
 	uint8_t			initiator_depth;
@@ -612,7 +612,7 @@ struct rdma_event_channel *rdma_create_event_channel(void)
 	if (!channel)
 		return NULL;
 
-	//打开dev /dev/infiniband/rdma_cm
+	//打开dev /dev/infiniband/rdma_cm,见kernel代码"ucma_misc"变量
 	channel->fd = open_cdev(dev_name, dev_cdev);
 	if (channel->fd < 0) {
 		goto err;
@@ -724,26 +724,28 @@ static struct ibv_xrcd *ucma_get_xrcd(struct cma_device *cma_dev)
 static void ucma_insert_id(struct cma_id_private *id_priv)
 {
 	fastlock_acquire(&idm_lock);
-	/*记录cmd_id_private(支持多线程）*/
+	/*记录cmd_id_private与handle之间的关联,后续查询时用(支持多线程）*/
 	idm_set(&ucma_idm, id_priv->handle, id_priv);
 	fastlock_release(&idm_lock);
 }
 
+/*通过handle移除cma_id_private,仅移除关系,不负责释放*/
 static void ucma_remove_id(struct cma_id_private *id_priv)
 {
 	if (id_priv->handle <= IDX_MAX_INDEX)
 		idm_clear(&ucma_idm, id_priv->handle);
 }
 
+/*利用handle查询cma_id_private*/
 static struct cma_id_private *ucma_lookup_id(int handle)
 {
-	/*利用handle查询cma_id_private*/
+	/*利用handle查询cma_id_private,由ucma_insert_id函数加入*/
 	return idm_lookup(&ucma_idm, handle);
 }
 
 static void ucma_free_id(struct cma_id_private *id_priv)
 {
-	ucma_remove_id(id_priv);
+	ucma_remove_id(id_priv);/*移除关联*/
 	if (id_priv->cma_dev)
 		ucma_put_device(id_priv->cma_dev);
 	pthread_cond_destroy(&id_priv->cond);
@@ -766,18 +768,18 @@ static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 {
 	struct cma_id_private *id_priv;
 
-	id_priv = calloc(1, sizeof(*id_priv));
+	id_priv = calloc(1, sizeof(*id_priv));/*申请空间*/
 	if (!id_priv)
 		return NULL;
 
 	/*设置id对应的context*/
 	id_priv->id.context = context;
 	id_priv->id.ps = ps;
-	id_priv->id.qp_type = qp_type;
+	id_priv->id.qp_type = qp_type;/*设置QP类型*/
 	id_priv->handle = 0xFFFFFFFF;/*未创建，先初始化为-1*/
 
 	if (!channel) {
-	    //如果未指定channel，则打开channel
+	    //如果未指定channel，则打开channel /dev/infiniband/rdma_cm
 		id_priv->id.channel = rdma_create_event_channel();
 		if (!id_priv->id.channel)
 			goto err;
@@ -791,7 +793,7 @@ static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 	if (pthread_cond_init(&id_priv->cond, NULL))
 		goto err;
 
-	return id_priv;
+	return id_priv;/*返回申请的空间*/
 
 err:	ucma_free_id(id_priv);
 	return NULL;
@@ -800,7 +802,7 @@ err:	ucma_free_id(id_priv);
 //向kernel发消息，创建context
 static int rdma_create_id2(struct rdma_event_channel *channel,
 			   struct rdma_cm_id **id/*出参，cma_id*/, void *context,
-			   enum rdma_port_space ps, enum ibv_qp_type qp_type/*qp类型*/)
+			   enum rdma_port_space ps/*PORT space*/, enum ibv_qp_type qp_type/*qp类型*/)
 {
 	struct ucma_abi_create_id_resp resp;
 	struct ucma_abi_create_id cmd;
@@ -811,11 +813,12 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 	if (ret)
 		return ret;
 
+	/*申请id_priv*/
 	id_priv = ucma_alloc_id(channel, context, ps, qp_type);
 	if (!id_priv)
 		return ERR(ENOMEM);
 
-	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, CREATE_ID, &resp, sizeof resp);/*提明创建ID*/
+	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, CREATE_ID, &resp, sizeof resp);/*指明创建ID*/
 	cmd.uid = (uintptr_t) id_priv;/*记录id_priv*/
 	cmd.ps = ps;
 	cmd.qp_type = qp_type;
@@ -823,13 +826,14 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 	/*通过rdma_cm字符设备,创建id*/
 	ret = write(id_priv->id.channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof(cmd)) {
+		/*响应失败*/
 		ret = (ret >= 0) ? ERR(ENODATA) : -1;
 		goto err;
 	}
 
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
-	id_priv->handle = resp.id;/*记录cma context对应的fd号*/
+	id_priv->handle = resp.id;/*记录cma context对应的Id号(由kernel分配的ID)*/
 	ucma_insert_id(id_priv);
 	/*设置id*/
 	*id = &id_priv->id;
@@ -839,8 +843,9 @@ err:	ucma_free_id(id_priv);
 	return ret;
 }
 
+/**/
 int rdma_create_id(struct rdma_event_channel *channel,
-		   struct rdma_cm_id **id, void *context,
+		   struct rdma_cm_id **id/*出参,创建的rdma_cm_id*/, void *context,
 		   enum rdma_port_space ps)
 {
 	enum ibv_qp_type qp_type;
@@ -848,6 +853,7 @@ int rdma_create_id(struct rdma_event_channel *channel,
 	/*按ps,确定qp类型*/
 	qp_type = (ps == RDMA_PS_IPOIB || ps == RDMA_PS_UDP) ?
 		  IBV_QPT_UD : IBV_QPT_RC;
+	/*创建cma_id*/
 	return rdma_create_id2(channel, id, context, ps, qp_type);
 }
 
@@ -1048,6 +1054,7 @@ static int ucma_query_path(struct rdma_cm_id *id)
 	return 0;
 }
 
+/*向kernel请求查询路由*/
 static int ucma_query_route(struct rdma_cm_id *id)
 {
 	struct ucma_abi_query_route_resp resp;
@@ -1168,15 +1175,17 @@ int ucma_complete(struct rdma_cm_id *id)
 		return 0;
 
 	if (id_priv->id.event) {
+		/*有event未处理,则执行ACK*/
 		rdma_ack_cm_event(id_priv->id.event);
 		id_priv->id.event = NULL;
 	}
 
-	/*向kernel发送命令，读取cm event*/
-	ret = rdma_get_cm_event(id_priv->id.channel, &id_priv->id.event);
+	/*向kernel发送命令，请求读取cm event,并保存*/
+	ret = rdma_get_cm_event(id_priv->id.channel, &id_priv->id.event/*读取的event存入此处*/);
 	if (ret)
-		return ret;
+		return ret;/*取event失败*/
 
+	/*以读取到的event status确定返回值*/
 	if (id_priv->id.event->status) {
 		if (id_priv->id.event->event == RDMA_CM_EVENT_REJECTED)
 			ret = ERR(ECONNREFUSED);
@@ -1214,20 +1223,20 @@ static int rdma_resolve_addr2(struct rdma_cm_id *id, struct sockaddr *src_addr,
 }
 
 /*向kernel cm发送RESOLVE_IP命令*/
-int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
-		      struct sockaddr *dst_addr, int timeout_ms)
+int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr/*源地址*/,
+		      struct sockaddr *dst_addr/*目的地址*/, int timeout_ms/*超时时间*/)
 {
 	struct ucma_abi_resolve_ip cmd;
 	struct cma_id_private *id_priv;
 	int ret, dst_len, src_len;
 
-	dst_len = ucma_addrlen(dst_addr);
+	dst_len = ucma_addrlen(dst_addr);/*取地址长度*/
 	if (!dst_len)
 		return ERR(EINVAL);
 
 	src_len = ucma_addrlen(src_addr);
 	if (src_addr && !src_len)
-		/*src_addr不为空时，src_len不得为0*/
+		/*src_addr不为空时，src_len不得为0(类型不正确)*/
 		return ERR(EINVAL);
 
 	if (af_ib_support)
@@ -1235,7 +1244,7 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 					  dst_len, timeout_ms);
 
 	CMA_INIT_CMD(&cmd, sizeof cmd, RESOLVE_IP);
-	id_priv = container_of(id, struct cma_id_private, id);
+	id_priv = container_of(id, struct cma_id_private, id);/*由id获得cma_id_private*/
 	cmd.id = id_priv->handle;
 
 	/*如果指定的源地址，则设置源地址*/
@@ -1245,13 +1254,14 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 	cmd.timeout_ms = timeout_ms;/*设置超时时间*/
 
 	//与kernel进行通信（指定resolve_ip命令）
-	//此命令对应的kernel会查目的地址，确定neiboure项
+	//此命令对应的kernel会查目的地址，确定路由,neiboure项,填充srcmac,dstmac,srcip,srcport
 	ret = write(id->channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd)
-		return (ret >= 0) ? ERR(ENODATA) : -1;
+		return (ret >= 0) ? ERR(ENODATA) : -1;/*解析失败*/
 
-	memcpy(&id->route.addr.dst_storage, dst_addr, dst_len);
-	return ucma_complete(id);
+	/*执行成功*/
+	memcpy(&id->route.addr.dst_storage, dst_addr, dst_len);/*确定目的地址*/
+	return ucma_complete(id);/*取一个event*/
 }
 
 static int ucma_set_ib_route(struct rdma_cm_id *id)
@@ -1298,7 +1308,7 @@ int rdma_resolve_route(struct rdma_cm_id *id, int timeout_ms)
 	/*请求解决路由*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, RESOLVE_ROUTE);
 	cmd.id = id_priv->handle;
-	cmd.timeout_ms = timeout_ms;
+	cmd.timeout_ms = timeout_ms;/*路由超时时间*/
 
 	/*发送请求*/
 	ret = write(id->channel->fd, &cmd, sizeof cmd);
@@ -1314,8 +1324,8 @@ static int ucma_is_ud_qp(enum ibv_qp_type qp_type)
 	return (qp_type == IBV_QPT_UD);
 }
 
-int rdma_init_qp_attr(struct rdma_cm_id *id, struct ibv_qp_attr *qp_attr,
-		      int *qp_attr_mask)
+int rdma_init_qp_attr(struct rdma_cm_id *id, struct ibv_qp_attr *qp_attr/*出参,QP属性*/,
+		      int *qp_attr_mask/*出参,用于指明QP属性中哪些字段有效*/)
 {
 	struct ucma_abi_init_qp_attr cmd;
 	struct ib_uverbs_qp_attr resp;
@@ -1324,17 +1334,17 @@ int rdma_init_qp_attr(struct rdma_cm_id *id, struct ibv_qp_attr *qp_attr,
 
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, INIT_QP_ATTR, &resp, sizeof resp);
 	id_priv = container_of(id, struct cma_id_private, id);
-	cmd.id = id_priv->handle;
-	cmd.qp_state = qp_attr->qp_state;
+	cmd.id = id_priv->handle;/*指明cm_id*/
+	cmd.qp_state = qp_attr->qp_state;/*指明要查询的QP状态*/
 
-	ret = write(id->channel->fd, &cmd, sizeof cmd);
+	ret = write(id->channel->fd, &cmd, sizeof cmd);/*请求INIT_QP_ATTR状态时的QP初始化时使用的ATTR*/
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
-	ibv_copy_qp_attr_from_kern(qp_attr, &resp);
-	*qp_attr_mask = resp.qp_attr_mask;/*取得qp属性*/
+	ibv_copy_qp_attr_from_kern(qp_attr, &resp);/*取得KERNEL返回的QP属性*/
+	*qp_attr_mask = resp.qp_attr_mask;/*取得qp属性掩码(指明哪些属性有效)*/
 	return 0;
 }
 
@@ -1350,16 +1360,16 @@ static int ucma_modify_qp_rtr(struct rdma_cm_id *id, uint8_t resp_res)
 
 	/* Need to update QP attributes from default values. */
 	qp_attr.qp_state = IBV_QPS_INIT;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*取qp状态属性*/
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*查询INIT状态时qp的初始化ATTR*/
 	if (ret)
 		return ret;
 
-	ret = ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask);/*将qp置为init状态*/
+	ret = ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask);/*利用这些ATTR将qp置为init状态*/
 	if (ret)
 		return ERR(ret);
 
 	qp_attr.qp_state = IBV_QPS_RTR;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*将qp状态置为ready to receive*/
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*再查询RTR状态时QP的初始化ATTR*/
 	if (ret)
 		return ret;
 
@@ -1375,7 +1385,7 @@ static int ucma_modify_qp_rtr(struct rdma_cm_id *id, uint8_t resp_res)
 
 	if (resp_res != RDMA_MAX_RESP_RES)
 		qp_attr.max_dest_rd_atomic = resp_res;
-	return rdma_seterrno(ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask));
+	return rdma_seterrno(ibv_modify_qp(id->qp, &qp_attr, qp_attr_mask));/*利用这些ATTR将QP置为rtr状态*/
 }
 
 static int ucma_modify_qp_rts(struct rdma_cm_id *id, uint8_t init_depth)
@@ -1447,11 +1457,11 @@ static int ucma_init_conn_qp(struct cma_id_private *id_priv, struct ibv_qp *qp)
 		return ucma_init_conn_qp3(id_priv, qp);
 
 	qp_attr.qp_state = IBV_QPS_INIT;
-	ret = rdma_init_qp_attr(&id_priv->id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(&id_priv->id, &qp_attr, &qp_attr_mask);/*查询QP INIT状态时的初始化ATTR*/
 	if (ret)
 		return ret;
 
-	return rdma_seterrno(ibv_modify_qp(qp, &qp_attr, qp_attr_mask));
+	return rdma_seterrno(ibv_modify_qp(qp, &qp_attr, qp_attr_mask));/*将QP设置到INIT状态*/
 }
 
 static int ucma_init_ud_qp3(struct cma_id_private *id_priv, struct ibv_qp *qp)
@@ -1703,7 +1713,7 @@ int rdma_create_qp_ex(struct rdma_cm_id *id,
 	if (id->qp)
 		return ERR(EINVAL);
 
-	id_priv = container_of(id, struct cma_id_private, id);
+	id_priv = container_of(id, struct cma_id_private, id);/*利用RDMA_CM_ID获得cma_id_private结构体*/
 	if (!(attr->comp_mask & IBV_QP_INIT_ATTR_PD) || !attr->pd) {
 		attr->comp_mask |= IBV_QP_INIT_ATTR_PD;
 		attr->pd = id->pd;
@@ -1723,6 +1733,7 @@ int rdma_create_qp_ex(struct rdma_cm_id *id,
 		}
 	}
 
+	/*创建cq*/
 	ret = ucma_create_cqs(id, attr->send_cq || id->send_cq ? 0 : attr->cap.max_send_wr,
 				  attr->recv_cq || id->recv_cq ? 0 : attr->cap.max_recv_wr);
 	if (ret)
@@ -1734,6 +1745,7 @@ int rdma_create_qp_ex(struct rdma_cm_id *id,
 		attr->recv_cq = id->recv_cq;
 	if (id->srq && !attr->srq)
 		attr->srq = id->srq;
+	/*创建QP*/
 	qp = ibv_create_qp_ex(id->verbs, attr);
 	if (!qp) {
 		ret = -1;
@@ -1876,7 +1888,7 @@ int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 	CMA_INIT_CMD(&cmd, sizeof cmd, CONNECT);/*初始化cmd*/
 	cmd.id = id_priv->handle;
 	if (id->qp) {
-		qp_num = id->qp->qp_num;
+		qp_num = id->qp->qp_num;/*设置QP num*/
 		srq = !!id->qp->srq;
 	}
 
@@ -2312,6 +2324,7 @@ static void ucma_complete_mc_event(struct cma_multicast *mc)
 	pthread_mutex_unlock(&mc->id_priv->mut);
 }
 
+/*用于解认此event事件已处理*/
 int rdma_ack_cm_event(struct rdma_cm_event *event)
 {
 	struct cma_event *evt;
@@ -2329,6 +2342,7 @@ int rdma_ack_cm_event(struct rdma_cm_event *event)
 	return 0;
 }
 
+/*当地址解析成功,就会请求查询路由*/
 static void ucma_process_addr_resolved(struct cma_event *evt)
 {
 	struct rdma_cm_id *id = &evt->id_priv->id;
@@ -2400,6 +2414,7 @@ static int ucma_process_conn_req(struct cma_event *evt, uint32_t handle,
 	struct cma_id_private *id_priv;
 	int ret;
 
+	/*申请id_priv*/
 	id_priv = ucma_alloc_id(evt->id_priv->id.channel,
 				evt->id_priv->id.context, evt->id_priv->id.ps,
 				evt->id_priv->id.qp_type);
@@ -2576,7 +2591,7 @@ int rdma_establish(struct rdma_cm_id *id)
 }
 
 int rdma_get_cm_event(struct rdma_event_channel *channel,
-		      struct rdma_cm_event **event)
+		      struct rdma_cm_event **event/*出参,取得的event*/)
 {
 	struct ucma_abi_event_resp resp = {};
 	struct ucma_abi_get_event cmd;
@@ -2620,8 +2635,10 @@ retry:
 	 * the kernel should have done.
 	 */
 	if (resp.uid) {
+		/*取得event,取此事件对应的rdma_id_private指针*/
 		evt->id_priv = (void *) (uintptr_t) resp.uid;
 	} else {
+		/*通过ID查询rdma_id_private指针*/
 		evt->id_priv = ucma_lookup_id(resp.id);
 		if (!evt->id_priv) {
 			syslog(LOG_WARNING, PFX "Warning: discarding unmatched "
@@ -2629,17 +2646,18 @@ retry:
 			goto retry;
 		}
 		if (resp.event != RDMA_CM_EVENT_ESTABLISHED) {
+			/*非est事件不处理,直接计数完成*/
 			ucma_complete_event(evt->id_priv);
 			goto retry;
 		}
 	}
-	evt->event.id = &evt->id_priv->id;
-	evt->event.status = resp.status;
+	evt->event.id = &evt->id_priv->id;/*设置此事件对应的cma_id*/
+	evt->event.status = resp.status;/*设置状态*/
 
-	/*ucma依据event id进行处理*/
+	/*ucma依据event id先进行处理*/
 	switch (resp.event) {
 	case RDMA_CM_EVENT_ADDR_RESOLVED:
-		ucma_process_addr_resolved(evt);
+		ucma_process_addr_resolved(evt);/*地址解析成功,会触发路由查询请求*/
 		break;
 	case RDMA_CM_EVENT_ROUTE_RESOLVED:
 		/*路由解析完成*/
@@ -2723,6 +2741,7 @@ retry:
 		break;
 	}
 
+	/*CMA处理完以上事件后,将event返回,给应用处理*/
 	*event = &evt->event;
 	return 0;
 }
@@ -2775,11 +2794,12 @@ int rdma_set_option(struct rdma_cm_id *id, int level, int optname,
 	struct cma_id_private *id_priv;
 	int ret;
 
+	/*处理类似于setsocketopt调用*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, SET_OPTION);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
 	cmd.optval = (uintptr_t) optval;
-	cmd.level = level;
+	cmd.level = level;/*设置LEVEL*/
 	cmd.optname = optname;
 	cmd.optlen = optlen;
 

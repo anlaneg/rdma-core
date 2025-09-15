@@ -130,9 +130,9 @@ struct ucma_abi_resolve_ip {
 	__u32 cmd;
 	__u16 in;
 	__u16 out;
-	struct sockaddr_in6 src_addr;
-	struct sockaddr_in6 dst_addr;
-	__u32 id;
+	struct sockaddr_in6 src_addr;/*源地址*/
+	struct sockaddr_in6 dst_addr;/*目的地址*/
+	__u32 id;/*CMA_ID编号*/
 	__u32 timeout_ms;
 };
 

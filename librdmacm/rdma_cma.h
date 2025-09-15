@@ -102,7 +102,7 @@ struct rdma_addr {
 		struct sockaddr		dst_addr;
 		struct sockaddr_in	dst_sin;
 		struct sockaddr_in6	dst_sin6;
-		struct sockaddr_storage dst_storage;
+		struct sockaddr_storage dst_storage;/*目的地址*/
 	};
 	union {
 		struct rdma_ib_addr	ibaddr;
@@ -116,26 +116,26 @@ struct rdma_route {
 };
 
 struct rdma_event_channel {
-    //对应字符设备/dev/infiniband/rdma_cm的fd
-	int			fd;
+    //对应字符设备/dev/infiniband/rdma_cm的fd*/
+	int			fd;/*对此FD执行write,将导致kernel调用函数ucma_write*/
 };
 
 struct rdma_cm_id {
 	struct ibv_context	*verbs;
-	struct rdma_event_channel *channel;
+	struct rdma_event_channel *channel;/*关联的channel(rdma_cm对应的fd)*/
 	void			*context;
 	struct ibv_qp		*qp;
 	struct rdma_route	 route;
 	enum rdma_port_space	 ps;
 	uint8_t			 port_num;
-	struct rdma_cm_event	*event;
+	struct rdma_cm_event	*event;/*存放读取到的event*/
 	struct ibv_comp_channel *send_cq_channel;
 	struct ibv_cq		*send_cq;
 	struct ibv_comp_channel *recv_cq_channel;
 	struct ibv_cq		*recv_cq;
 	struct ibv_srq		*srq;
 	struct ibv_pd		*pd;
-	enum ibv_qp_type	qp_type;
+	enum ibv_qp_type	qp_type;/*QP类型*/
 };
 
 enum {
@@ -185,9 +185,9 @@ struct rdma_addrinfo {
 	int			ai_family;
 	int			ai_qp_type;
 	int			ai_port_space;
-	socklen_t		ai_src_len;
+	socklen_t		ai_src_len;/*源地址长度*/
 	socklen_t		ai_dst_len;
-	struct sockaddr		*ai_src_addr;
+	struct sockaddr		*ai_src_addr;/*源地址(例如ipv4时,采用sockaddr_in)*/
 	struct sockaddr		*ai_dst_addr;
 	char			*ai_src_canonname;
 	char			*ai_dst_canonname;
