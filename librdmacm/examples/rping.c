@@ -844,12 +844,13 @@ static int rping_bind_server(struct rping_cb *cb)
 {
 	int ret;
 
+	/*指定port*/
 	if (cb->sin.ss_family == AF_INET)
 		((struct sockaddr_in *) &cb->sin)->sin_port = cb->port;
 	else
 		((struct sockaddr_in6 *) &cb->sin)->sin6_port = cb->port;
 
-	ret = rdma_bind_addr(cb->cm_id, (struct sockaddr *) &cb->sin);
+	ret = rdma_bind_addr(cb->cm_id, (struct sockaddr *) &cb->sin);/*服务端绑定源地址*/
 	if (ret) {
 		perror("rdma_bind_addr");
 		return ret;
@@ -1322,10 +1323,10 @@ int main(int argc, char *argv[])
 	while ((op = getopt(argc, argv, "a:I:Pp:C:S:t:scvVdq")) != -1) {
 		switch (op) {
 		case 'a':
-			ret = get_addr(optarg, (struct sockaddr *) &cb->sin);
+			ret = get_addr(optarg, (struct sockaddr *) &cb->sin);/*设置目的地址*/
 			break;
 		case 'I':
-			ret = get_addr(optarg, (struct sockaddr *) &cb->ssource);
+			ret = get_addr(optarg, (struct sockaddr *) &cb->ssource);/*设置源地址*/
 			break;
 		case 'P':
 			persistent_server = 1;
@@ -1335,15 +1336,15 @@ int main(int argc, char *argv[])
 			DEBUG_LOG("port %d\n", (int) atoi(optarg));
 			break;
 		case 's':
-			cb->server = 1;
+			cb->server = 1;/*指定为服务器端*/
 			DEBUG_LOG("server\n");
 			break;
 		case 'c':
-			cb->server = 0;
+			cb->server = 0;/*指定为客户端*/
 			DEBUG_LOG("client\n");
 			break;
 		case 'S':
-			cb->size = atoi(optarg);
+			cb->size = atoi(optarg);/*ping数据长度*/
 			if ((cb->size < RPING_MIN_BUFSIZE) ||
 			    (cb->size > (RPING_BUFSIZE - 1))) {
 				fprintf(stderr, "Invalid size %d "
@@ -1354,7 +1355,7 @@ int main(int argc, char *argv[])
 				DEBUG_LOG("size %d\n", (int) atoi(optarg));
 			break;
 		case 'C':
-			cb->count = atoi(optarg);
+			cb->count = atoi(optarg);/*次数*/
 			if (cb->count < 0) {
 				fprintf(stderr, "Invalid count %d\n",
 					cb->count);
@@ -1385,7 +1386,7 @@ int main(int argc, char *argv[])
 	if (ret)
 		goto out;
 
-	/*只能是 client或 server两种模式*/
+	/*即未指明client,也未指明server模式*/
 	if (cb->server == -1) {
 		usage("rping");
 		ret = EINVAL;
@@ -1407,7 +1408,7 @@ int main(int argc, char *argv[])
 	}
 	DEBUG_LOG("created cm_id %p\n", cb->cm_id);
 
-	//创建cm线程,用于event处理
+	//创建线程,用于cm event处理
 	ret = pthread_create(&cb->cmthread, NULL, cm_thread, cb);
 	if (ret) {
 		perror("pthread_create");

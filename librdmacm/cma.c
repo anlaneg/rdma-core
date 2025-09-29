@@ -1801,7 +1801,7 @@ static int ucma_valid_param(struct cma_id_private *id_priv,
 			    struct rdma_conn_param *param)
 {
 	if (id_priv->id.ps != RDMA_PS_TCP)
-		return 0;
+		return 0;/*非TCP,直接返回*/
 
 	if (!id_priv->id.qp && !param)
 		goto err;
@@ -1823,7 +1823,7 @@ err:
 }
 
 static void ucma_copy_conn_param_to_kern(struct cma_id_private *id_priv,
-					 struct ucma_abi_conn_param *dst,
+					 struct ucma_abi_conn_param *dst/*待设置的值*/,
 					 struct rdma_conn_param *src,
 					 uint32_t qp_num, uint8_t srq)
 {
@@ -1873,32 +1873,33 @@ int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 	id_priv = container_of(id, struct cma_id_private, id);
 	ret = ucma_valid_param(id_priv, conn_param);
 	if (ret)
-		return ret;
+		return ret;/*如出错,直接返回*/
 
 	if (conn_param && conn_param->initiator_depth != RDMA_MAX_INIT_DEPTH)
-		id_priv->initiator_depth = conn_param->initiator_depth;
+		id_priv->initiator_depth = conn_param->initiator_depth;/*以设置的为准*/
 	else
-		id_priv->initiator_depth = id_priv->cma_dev->max_initiator_depth;
+		id_priv->initiator_depth = id_priv->cma_dev->max_initiator_depth;/*取最大值*/
 	if (conn_param && conn_param->responder_resources != RDMA_MAX_RESP_RES)
-		id_priv->responder_resources = conn_param->responder_resources;
+		id_priv->responder_resources = conn_param->responder_resources;/*以设置的为准*/
 	else
-		id_priv->responder_resources = id_priv->cma_dev->max_responder_resources;
+		id_priv->responder_resources = id_priv->cma_dev->max_responder_resources;/*取最大值*/
 
 	/*向kernel发送connect命令*/
 	CMA_INIT_CMD(&cmd, sizeof cmd, CONNECT);/*初始化cmd*/
-	cmd.id = id_priv->handle;
+	cmd.id = id_priv->handle;/*设置cma id*/
 	if (id->qp) {
 		qp_num = id->qp->qp_num;/*设置QP num*/
-		srq = !!id->qp->srq;
+		srq = !!id->qp->srq;/*是否share recv queue*/
 	}
 
 	ucma_copy_conn_param_to_kern(id_priv, &cmd.conn_param, conn_param,
-				     qp_num, srq);
+				     qp_num, srq);/*填充conn_param*/
 
 	ucma_copy_ece_param_to_kern_req(id_priv, &cmd.ece);
 
-	ret = write(id->channel->fd, &cmd, sizeof cmd);/*发送cmd*/
+	ret = write(id->channel->fd, &cmd, sizeof cmd);/*发送CONNECT cmd*/
 	if (ret != sizeof cmd)
+		/*出错处理*/
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
 	if (id_priv->connect_len) {
