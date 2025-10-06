@@ -83,10 +83,10 @@ struct ucma_abi_create_id {
 	__u32 cmd;
 	__u16 in;
 	__u16 out;
-	__u64 uid;
+	__u64 uid;/*用户态分配的id*/
 	__u64 response;
-	__u16 ps;
-	__u8  qp_type;
+	__u16 ps;/*port space*/
+	__u8  qp_type;/*qp类型*/
 	__u8  reserved[5];
 };
 
@@ -120,10 +120,10 @@ struct ucma_abi_bind {
 	__u32 cmd;
 	__u16 in;
 	__u16 out;
-	__u32 id;
-	__u16 addr_size;
+	__u32 id;/*kernel为ucma context分配的id*/
+	__u16 addr_size;/*addr地址长度*/
 	__u16 reserved;
-	struct sockaddr_storage addr;
+	struct sockaddr_storage addr;/*要绑定的地址*/
 };
 
 struct ucma_abi_resolve_ip {
@@ -169,7 +169,7 @@ struct ucma_abi_query {
 	__u16 out;
 	__u64 response;
 	__u32 id;
-	__u32 option;
+	__u32 option;/*指明查询选项*/
 };
 
 struct ucma_abi_query_route_resp {
@@ -247,7 +247,7 @@ struct ucma_abi_listen {
 	__u16 in;
 	__u16 out;
 	__u32 id;
-	__u32 backlog;
+	__u32 backlog;/*listen参数指定的backlog*/
 };
 
 struct ucma_abi_accept {

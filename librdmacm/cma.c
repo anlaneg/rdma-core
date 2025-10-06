@@ -78,22 +78,23 @@ do {						\
 #define UCMA_INVALID_IB_INDEX -1
 
 struct cma_port {
-	uint8_t			link_layer;
+	uint8_t			link_layer;/*port链路方式，例如IBV_LINK_LAYER_ETHERNET*/
 };
 
 struct cma_device {
 	struct ibv_device  *dev;/*对应的ib设备*/
 	struct list_node    entry;
-	/*cma设备的context*/
+	/*cma设备的ibv context*/
 	struct ibv_context *verbs;
+	/*此cma设备对应的pd*/
 	struct ibv_pd	   *pd;
 	struct ibv_xrcd    *xrcd;
-	struct cma_port    *port;
+	struct cma_port    *port;/*cma_port数组*/
 	/*ib设备对应的guid*/
 	__be64		    guid;
-	int		    port_cnt;
-	int		    refcnt;
-	int		    max_qpsize;
+	int		    port_cnt;/*port数组长度*/
+	int		    refcnt;/*引用计数*/
+	int		    max_qpsize;/*自设备中取得的sq,rq长度*/
 	uint8_t		    max_initiator_depth;
 	uint8_t		    max_responder_resources;
 	/*ib设备idx*/
@@ -102,17 +103,17 @@ struct cma_device {
 };
 
 struct cma_id_private {
-	struct rdma_cm_id	id;
-	struct cma_device	*cma_dev;
+	struct rdma_cm_id	id;/*基类*/
+	struct cma_device	*cma_dev;/*记录此结构关联的cma_device*/
 	void			*connect;
-	size_t			connect_len;
-	int			events_completed;
-	int			connect_error;
+	size_t			connect_len;/*connect指针指向的内容长度*/
+	int			events_completed;/*记录处理完成的事件数目*/
+	int			connect_error;/*真假值，用于指向连接出错*/
 	int			sync;/*是否采用同步模型*/
-	pthread_cond_t		cond;
-	pthread_mutex_t		mut;
+	pthread_cond_t		cond;/*条件变量，用于通知有cm事件处理完成。*/
+	pthread_mutex_t		mut;/*用于保护此结构中的链表，信号量等*/
 	uint32_t		handle;/*cma context对应的fd(由kernel在create id时分配的ID)*/
-	struct cma_multicast	*mc_list;
+	struct cma_multicast	*mc_list;/*记录加入的组播组*/
 	struct ibv_qp_init_attr	*qp_init_attr;
 	uint8_t			initiator_depth;
 	uint8_t			responder_resources;
@@ -140,7 +141,7 @@ struct cma_event {
 	struct cma_multicast	*mc;
 };
 
-/*记录系统中所有cma设备*/
+/*记录系统中所有cma_device*/
 static LIST_HEAD(cma_dev_list);
 /* sorted based or index or guid, depends on kernel support */
 static struct ibv_device **dev_list;
@@ -149,7 +150,8 @@ static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
 static int abi_ver = -1;
 static char dev_name[64] = "rdma_cm";
 static dev_t dev_cdev;
-int af_ib_support;/*当前是否支持af_ib*/
+/*当前是否支持af_ib（默认是支持的)*/
+int af_ib_support;
 /*保存所有cma_id_private结构体，
  * 支持通过cma_id_private->handle映射cma_id_private结构体*/
 static struct index_map ucma_idm;
@@ -271,7 +273,7 @@ static void ucma_set_af_ib_support(void)
 	sib.sib_sid = htobe64(RDMA_IB_IP_PS_TCP);
 	sib.sib_sid_mask = htobe64(RDMA_IB_IP_PS_MASK);
 
-	/*指明尝试通过af_ib进行绑定*/
+	/*先设置af_ib为支持，用于放通流程*/
 	af_ib_support = 1;
 	ret = rdma_bind_addr(id, (struct sockaddr *) &sib);
 
@@ -282,7 +284,7 @@ static void ucma_set_af_ib_support(void)
 	rdma_destroy_id(id);
 }
 
-/*通过ibv_device构造cma_device并添加到cma_dev_list链表*/
+/*为ibv_device构造一个cma_device并添加到cma_dev_list链表*/
 static struct cma_device *insert_cma_dev(struct ibv_device *dev)
 {
 	struct cma_device *cma_dev, *p;
@@ -357,7 +359,7 @@ static int sync_devices_list(void)
 	/*ib设备按名称进行排序*/
 	qsort(new_list, numb_dev, sizeof(struct ibv_device *), dev_cmp);
 
-	/*生成cma_device,并构造初始化cma_dev_list*/
+	/*为每个ib_device生成一个cma_device,并构造初始化cma_dev_list*/
 	if (unlikely(!dev_list)) {
 		/* first sync */
 		for (j = 0; new_list[j]; j++)
@@ -382,7 +384,7 @@ static int sync_devices_list(void)
 		 */
 		if ((dev_list[i] > new_list[j] && new_list[j]) ||
 		    (!dev_list[i] && new_list[j])) {
-			insert_cma_dev(new_list[j++]);
+			insert_cma_dev(new_list[j++]);/*为每个ib_device设备生成一个对应的cma设备*/
 			continue;
 		}
 		if ((dev_list[i] < new_list[j] && dev_list[i]) ||
@@ -452,7 +454,7 @@ err1:
 	return ret;
 }
 
-//打开当前系统可见ib device中首个guid相同的设备
+//打开当前系统可见cma device中与guid相同的设备
 static bool match(struct cma_device *cma_dev, __be64 guid, uint32_t idx)
 {
 	if ((idx == UCMA_INVALID_IB_INDEX) ||
@@ -469,25 +471,28 @@ static int ucma_init_device(struct cma_device *cma_dev)
 	int i, ret;
 
 	if (cma_dev->verbs)
-		return 0;
+		return 0;/*已初始化，直接返回*/
 
 	//打开设备对应的verbs context
 	cma_dev->verbs = ibv_open_device(cma_dev->dev);
 	if (!cma_dev->verbs)
 		return ERR(ENODEV);
 
+	/*查ib设备属性*/
 	ret = ibv_query_device(cma_dev->verbs, &attr);
 	if (ret) {
 		ret = ERR(ret);
 		goto err;
 	}
 
+	/*申请cma_dev->port空间*/
 	cma_dev->port = malloc(sizeof(*cma_dev->port) * attr.phys_port_cnt);
 	if (!cma_dev->port) {
 		ret = ERR(ENOMEM);
 		goto err;
 	}
 
+	/*遍历查询每个物理port属性(为什么从1开始?)，填充link_layer*/
 	for (i = 1; i <= attr.phys_port_cnt; i++) {
 		if (ibv_query_port(cma_dev->verbs, i, &port_attr))
 			cma_dev->port[i - 1].link_layer = IBV_LINK_LAYER_UNSPECIFIED;
@@ -496,7 +501,7 @@ static int ucma_init_device(struct cma_device *cma_dev)
 	}
 
 	cma_dev->port_cnt = attr.phys_port_cnt;
-	cma_dev->max_qpsize = attr.max_qp_wr;
+	cma_dev->max_qpsize = attr.max_qp_wr;/*qp队列长度*/
 	cma_dev->max_initiator_depth = (uint8_t) attr.max_qp_init_rd_atom;
 	cma_dev->max_responder_resources = (uint8_t) attr.max_qp_rd_atom;
 	return 0;
@@ -612,7 +617,8 @@ struct rdma_event_channel *rdma_create_event_channel(void)
 	if (!channel)
 		return NULL;
 
-	//打开dev /dev/infiniband/rdma_cm,见kernel代码"ucma_misc"变量
+	//打开dev /dev/infiniband/rdma_cm,对应创建ucma_file结构
+	//见kernel代码"ucma_misc"变量
 	channel->fd = open_cdev(dev_name, dev_cdev);
 	if (channel->fd < 0) {
 		goto err;
@@ -635,17 +641,17 @@ static struct cma_device *ucma_get_cma_device(__be64 guid, uint32_t idx)
 
 	list_for_each(&cma_dev_list, cma_dev, entry)
 		if (!cma_dev->is_device_dead && match(cma_dev, guid, idx))
-			goto match;
+			goto match;/*命中要查找的cma_device*/
 
 	if (sync_devices_list())
-		return NULL;
+		return NULL;/*同步失败，返回NULL*/
 	/*
 	 * Kernel informed us that we have new device and it must
 	 * be in global dev_list[], let's find the right one.
 	 */
 	list_for_each(&cma_dev_list, cma_dev, entry)
 		if (!cma_dev->is_device_dead && match(cma_dev, guid, idx))
-			goto match;
+			goto match;/*同步完成后，再查成功*/
 	cma_dev = NULL;
 match:
 	if (cma_dev)
@@ -653,7 +659,7 @@ match:
 	return cma_dev;
 }
 
-/*通过guid,idx查询cma设备*/
+/*通过ib设备的guid,idx查询cma设备*/
 static int ucma_get_device(struct cma_id_private *id_priv, __be64 guid,
 			   uint32_t idx)
 {
@@ -674,6 +680,7 @@ static int ucma_get_device(struct cma_id_private *id_priv, __be64 guid,
 		goto out;
 
 	if (!cma_dev->pd)
+		/*初始化pd*/
 		cma_dev->pd = ibv_alloc_pd(cma_dev->verbs);
 	if (!cma_dev->pd) {
 		ret = -1;
@@ -682,7 +689,7 @@ static int ucma_get_device(struct cma_id_private *id_priv, __be64 guid,
 
 	id_priv->cma_dev = cma_dev;
 	id_priv->id.verbs = cma_dev->verbs;
-	id_priv->id.pd = cma_dev->pd;
+	id_priv->id.pd = cma_dev->pd;/*设置pd*/
 out:
 	if (ret)
 		cma_dev->refcnt--;
@@ -760,7 +767,7 @@ static void ucma_free_id(struct cma_id_private *id_priv)
 	free(id_priv);
 }
 
-/*创建cma_id_private,打开rdma_cm设备*/
+/*申请结构体cma_id_private,打开rdma_cm设备，创建event_channel*/
 static struct cma_id_private *ucma_alloc_id(struct rdma_event_channel *channel,
 					    void *context,
 					    enum rdma_port_space ps,
@@ -813,13 +820,13 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 	if (ret)
 		return ret;
 
-	/*申请id_priv*/
+	/*申请cma_id_priv结构体*/
 	id_priv = ucma_alloc_id(channel, context, ps, qp_type);
 	if (!id_priv)
 		return ERR(ENOMEM);
 
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, CREATE_ID, &resp, sizeof resp);/*指明创建ID*/
-	cmd.uid = (uintptr_t) id_priv;/*记录id_priv*/
+	cmd.uid = (uintptr_t) id_priv;/*记录cma_id_priv指针*/
 	cmd.ps = ps;
 	cmd.qp_type = qp_type;
 
@@ -835,7 +842,7 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 
 	id_priv->handle = resp.id;/*记录cma context对应的Id号(由kernel分配的ID)*/
 	ucma_insert_id(id_priv);
-	/*设置id*/
+	/*设置id,用于返回*/
 	*id = &id_priv->id;
 	return 0;
 
@@ -843,14 +850,14 @@ err:	ucma_free_id(id_priv);
 	return ret;
 }
 
-/**/
+/*创建rdma_cm_id结构体*/
 int rdma_create_id(struct rdma_event_channel *channel,
 		   struct rdma_cm_id **id/*出参,创建的rdma_cm_id*/, void *context,
 		   enum rdma_port_space ps)
 {
 	enum ibv_qp_type qp_type;
 
-	/*按ps,确定qp类型*/
+	/*按port space取值,确定qp类型，如为IPOIB或者UDP,则使用UD类型qp,否则使用RC类型*/
 	qp_type = (ps == RDMA_PS_IPOIB || ps == RDMA_PS_UDP) ?
 		  IBV_QPT_UD : IBV_QPT_RC;
 	/*创建cma_id*/
@@ -895,7 +902,7 @@ int rdma_destroy_id(struct rdma_cm_id *id)
 
 	pthread_mutex_lock(&id_priv->mut);
 	while (id_priv->events_completed < ret)
-		/*等待events_completed达到ret(kernel的消息未达到完成）*/
+		/*等待events_completed达到ret(kernel的cm消息未处理完成）*/
 		pthread_cond_wait(&id_priv->cond, &id_priv->mut);
 	pthread_mutex_unlock(&id_priv->mut);
 
@@ -931,7 +938,7 @@ static int ucma_query_addr(struct rdma_cm_id *id)
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, QUERY, &resp, sizeof resp);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
-	cmd.option = UCMA_QUERY_ADDR;
+	cmd.option = UCMA_QUERY_ADDR;/*指明查询地址*/
 
 	/*
 	 * If kernel doesn't support ibdev_index, this field will
@@ -945,10 +952,12 @@ static int ucma_query_addr(struct rdma_cm_id *id)
 
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
+	/*设置源，目的地址*/
 	memcpy(&id->route.addr.src_addr, &resp.src_addr, resp.src_size);
 	memcpy(&id->route.addr.dst_addr, &resp.dst_addr, resp.dst_size);
 
 	if (!id_priv->cma_dev && resp.node_guid) {
+		/*还未关联cma_dev,且响应指明了node_guid,获取cma_dev*/
 		ret = ucma_get_device(id_priv, resp.node_guid,
 				      resp.ibdev_index);
 		if (ret)
@@ -971,7 +980,7 @@ static int ucma_query_gid(struct rdma_cm_id *id)
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, QUERY, &resp, sizeof resp);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
-	cmd.option = UCMA_QUERY_GID;
+	cmd.option = UCMA_QUERY_GID;/*指明查询gid*/
 
 	ret = write(id->channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd)
@@ -1103,7 +1112,7 @@ static int ucma_query_route(struct rdma_cm_id *id)
 	       sizeof resp.dst_addr);
 
 	if (!id_priv->cma_dev && resp.node_guid) {
-		/*没有指定采用哪个cma_dev,但指定了设备的guid,通过guid查询ib设备*/
+		/*如没有指定采用哪个cma_dev,但指定了设备的guid,通过guid查询cma设备*/
 		ret = ucma_get_device(id_priv, resp.node_guid,
 				      resp.ibdev_index);
 		if (ret)
@@ -1114,8 +1123,8 @@ static int ucma_query_route(struct rdma_cm_id *id)
 	return 0;
 }
 
-static int rdma_bind_addr2(struct rdma_cm_id *id, struct sockaddr *addr,
-			   socklen_t addrlen)
+static int rdma_bind_addr2(struct rdma_cm_id *id, struct sockaddr *addr/*要绑定的地址*/,
+			   socklen_t addrlen/*要绑定的地址长度*/)
 {
 	struct ucma_abi_bind cmd;
 	struct cma_id_private *id_priv;
@@ -1131,24 +1140,28 @@ static int rdma_bind_addr2(struct rdma_cm_id *id, struct sockaddr *addr,
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
+	/*绑定源地址成功，查询绑定后情况*/
 	ret = ucma_query_addr(id);
 	if (!ret)
+		/*查询地址成功，查询gid*/
 		ret = ucma_query_gid(id);
 	return ret;
 }
 
+/*通过绑定地址绑定cma_device（即确定将要使用的ib_device)*/
 int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr/*指明要绑定的地址*/)
 {
 	struct ucma_abi_bind_ip cmd;
 	struct cma_id_private *id_priv;
 	int ret, addrlen;
 
+	/*取得要绑定的地址长度*/
 	addrlen = ucma_addrlen(addr);
 	if (!addrlen)
 		return ERR(EINVAL);
 
 	if (af_ib_support)
-		/*如果此值为真，则走此流程，通过BIND命令来绑定*/
+		/*如果支持af_ib，则走此流程，通过BIND命令来绑定*/
 		return rdma_bind_addr2(id, addr, addrlen);
 
 	/*通过cma向kernel发送UCMA_CMD_BIND_IP命令*/
@@ -1159,6 +1172,7 @@ int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr/*指明要绑定
 
 	ret = write(id->channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd)
+		/*响应出错*/
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
 	return ucma_query_route(id);
@@ -1861,7 +1875,7 @@ static void ucma_copy_ece_param_to_kern_req(struct cma_id_private *id_priv,
 	dst->attr_mod = id_priv->local_ece.options;
 }
 
-/*执行connect*/
+/*执行connect命令（UCMA_CMD_CONNECT)*/
 int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 {
 	uint32_t qp_num = conn_param ? conn_param->qp_num : 0;/*如未提供参数，qp_num为0*/
@@ -1926,6 +1940,7 @@ int rdma_listen(struct rdma_cm_id *id, int backlog)
 	if (ret != sizeof cmd)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 
+	/*绑定成功，再查询addr/route*/
 	if (af_ib_support)
 		return ucma_query_addr(id);
 	else
@@ -2146,6 +2161,7 @@ int rdma_disconnect(struct rdma_cm_id *id)
 	return ucma_complete(id);
 }
 
+/*加入组播组*/
 static int rdma_join_multicast2(struct rdma_cm_id *id, struct sockaddr *addr,
 				socklen_t addrlen, uint16_t join_flags,
 				void *context)
@@ -2273,11 +2289,11 @@ int rdma_leave_multicast(struct rdma_cm_id *id, struct sockaddr *addr)
 	pthread_mutex_lock(&id_priv->mut);
 	for (pos = &id_priv->mc_list; *pos; pos = &(*pos)->next)
 		if (!memcmp(&(*pos)->addr, addr, addrlen))
-			break;
+			break;/*查找到要移除的组播组*/
 
 	mc = *pos;
 	if (*pos)
-		*pos = mc->next;
+		*pos = mc->next;/*移除此组播组*/
 	pthread_mutex_unlock(&id_priv->mut);
 	if (!mc)
 		return ERR(EADDRNOTAVAIL);
@@ -2307,11 +2323,12 @@ free:
 	return ret;
 }
 
+/*标记事件处理完成*/
 static void ucma_complete_event(struct cma_id_private *id_priv)
 {
 	pthread_mutex_lock(&id_priv->mut);
 	id_priv->events_completed++;/*增加completed*/
-	pthread_cond_signal(&id_priv->cond);
+	pthread_cond_signal(&id_priv->cond);/*唤醒条件变量*/
 	pthread_mutex_unlock(&id_priv->mut);
 }
 
@@ -2618,7 +2635,7 @@ retry:
 	**/
 	memset(evt, 0, sizeof(*evt));
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT/*请求获取event*/, &resp, sizeof resp);
-	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令,并获得响应*/
+	ret = write(channel->fd, &cmd, sizeof cmd);/*向cm写入命令,并获得响应,如无event将阻塞*/
 	if (ret != sizeof cmd) {
 		free(evt);
 		return (ret >= 0) ? ERR(ENODATA) : -1;
@@ -2688,7 +2705,7 @@ retry:
 				evt->event.event = RDMA_CM_EVENT_ESTABLISHED;
 			else {
 				evt->event.event = RDMA_CM_EVENT_CONNECT_ERROR;
-				evt->id_priv->connect_error = 1;
+				evt->id_priv->connect_error = 1;/*连接出错*/
 			}
 		}
 		break;
@@ -2701,6 +2718,7 @@ retry:
 		ucma_copy_conn_event(evt, &resp.param.conn);
 		break;
 	case RDMA_CM_EVENT_REJECTED:
+		/*被拒绝*/
 		if (evt->id_priv->connect_error) {
 			ucma_complete_event(evt->id_priv);
 			goto retry;
@@ -2951,6 +2969,7 @@ int rdma_create_ep(struct rdma_cm_id **id, struct rdma_addrinfo *res,
 			ret = ERR(ENOMEM);
 			goto err;
 		}
+		/*利用res->ai_connect填充*/
 		memcpy(id_priv->connect, res->ai_connect, res->ai_connect_len);
 		id_priv->connect_len = res->ai_connect_len;
 	}
@@ -2990,8 +3009,10 @@ int ucma_max_qpsize(struct rdma_cm_id *id)
 
 	id_priv = container_of(id, struct cma_id_private, id);
 	if (id && id_priv->cma_dev) {
+		/*cma_dev已设置对绑定设备的qp队列长度*/
 		max_size = id_priv->cma_dev->max_qpsize;
 	} else {
+		/*未设置，取潜在的绑定设备中最大的qp队列长度*/
 		ucma_init_all();
 		pthread_mutex_lock(&mut);
 		list_for_each(&cma_dev_list, dev, entry)

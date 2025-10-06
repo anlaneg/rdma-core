@@ -559,7 +559,7 @@ static int rxe_destroy_cq(struct ibv_cq *ibcq)
 	return 0;
 }
 
-/*自cq队列中提取最多ne个元素*/
+/*实现poll_cq,自cq队列中提取最多ne个元素*/
 static int rxe_poll_cq(struct ibv_cq *ibcq, int ne/*期待出队数目*/, struct ibv_wc *wc/*出队内容填充*/)
 {
 	struct rxe_cq *cq = to_rcq(ibcq);
@@ -1522,7 +1522,7 @@ static int validate_send_wr(struct rxe_qp *qp, struct ibv_send_wr *ibwr,
 	return 0;
 }
 
-static void convert_send_wr(struct rxe_qp *qp, struct rxe_send_wr *kwr,
+static void convert_send_wr(struct rxe_qp *qp, struct rxe_send_wr *kwr/*出参，由uwr转换后的结果*/,
 					struct ibv_send_wr *uwr)
 {
 	struct ibv_mw *ibmw;
@@ -1530,9 +1530,9 @@ static void convert_send_wr(struct rxe_qp *qp, struct rxe_send_wr *kwr,
 
 	memset(kwr, 0, sizeof(*kwr));
 
-	kwr->wr_id		= uwr->wr_id;
-	kwr->opcode		= uwr->opcode;
-	kwr->send_flags		= uwr->send_flags;
+	kwr->wr_id		= uwr->wr_id;/*填写wr_id*/
+	kwr->opcode		= uwr->opcode;/*填写opcode*/
+	kwr->send_flags		= uwr->send_flags;/*设置发送标记*/
 	kwr->ex.imm_data	= uwr->imm_data;
 
 	switch (uwr->opcode) {
@@ -1587,7 +1587,7 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq/*发送队列*/,
 	int i;
 	unsigned int opcode = ibwr->opcode;
 
-	/*ibwr转kernel认识的wr*/
+	/*ibwr转kernel认识的wqe->wr*/
 	convert_send_wr(qp, &wqe->wr, ibwr);
 
 	if (qp_type(qp) == IBV_QPT_UD) {
@@ -1598,6 +1598,7 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq/*发送队列*/,
 			memcpy(&wqe->wr.wr.ud.av, &ah->av, sizeof(struct rxe_av));
 	}
 
+	/*处理inline标记*/
 	if (ibwr->send_flags & IBV_SEND_INLINE) {
 		uint8_t *inline_data = wqe->dma.inline_data;
 
@@ -1895,7 +1896,7 @@ static const struct verbs_context_ops rxe_ctx_ops = {
 	.create_cq = rxe_create_cq,/*创建cq*/
 	.create_cq_ex = rxe_create_cq_ex,
 	.poll_cq = rxe_poll_cq,/*轮询cq队列*/
-	.req_notify_cq = ibv_cmd_req_notify_cq,
+	.req_notify_cq = ibv_cmd_req_notify_cq,/*设置cq通知方式*/
 	.resize_cq = rxe_resize_cq,
 	.destroy_cq = rxe_destroy_cq,
 	.create_srq = rxe_create_srq,
@@ -1928,7 +1929,7 @@ static struct verbs_context *rxe_alloc_context(struct ibv_device *ibdev/*对应�
 	struct ibv_get_context cmd;
 	struct ib_uverbs_get_context_resp resp;
 
-	/*申请并初始化一个driver context*/
+	/*申请并初始化一个driver context(已初始化了默认ops)*/
 	context = verbs_init_and_alloc_context(ibdev, cmd_fd, context, ibv_ctx,
 					       RDMA_DRIVER_RXE);
 	if (!context)

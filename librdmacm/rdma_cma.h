@@ -93,7 +93,7 @@ struct rdma_ib_addr {
 
 struct rdma_addr {
 	union {
-		struct sockaddr		src_addr;
+		struct sockaddr		src_addr;/*源地址*/
 		struct sockaddr_in	src_sin;
 		struct sockaddr_in6	src_sin6;
 		struct sockaddr_storage src_storage;
@@ -110,7 +110,7 @@ struct rdma_addr {
 };
 
 struct rdma_route {
-	struct rdma_addr	 addr;
+	struct rdma_addr	 addr;/*源目的地址*/
 	struct ibv_sa_path_rec	*path_rec;
 	int			 num_paths;
 };
@@ -121,20 +121,21 @@ struct rdma_event_channel {
 };
 
 struct rdma_cm_id {
-	struct ibv_context	*verbs;
-	struct rdma_event_channel *channel;/*关联的channel(rdma_cm对应的fd)*/
+	struct ibv_context	*verbs;/*关联的ibv context(操作ib_device需要)*/
+	/*关联的channel(rdma_cm对应的fd)，通过此fd向kernel发送cma command*/
+	struct rdma_event_channel *channel;
 	void			*context;
 	struct ibv_qp		*qp;
 	struct rdma_route	 route;
-	enum rdma_port_space	 ps;
-	uint8_t			 port_num;
+	enum rdma_port_space	 ps;/*port space*/
+	uint8_t			 port_num;/*使用的ib_device port*/
 	struct rdma_cm_event	*event;/*存放读取到的event*/
 	struct ibv_comp_channel *send_cq_channel;
 	struct ibv_cq		*send_cq;
 	struct ibv_comp_channel *recv_cq_channel;
 	struct ibv_cq		*recv_cq;
 	struct ibv_srq		*srq;
-	struct ibv_pd		*pd;
+	struct ibv_pd		*pd;/*关联的pd*/
 	enum ibv_qp_type	qp_type;/*QP类型*/
 };
 

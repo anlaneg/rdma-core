@@ -563,7 +563,7 @@ out:
 LATEST_SYMVER_FUNC(ibv_create_cq, 1_1, "IBVERBS_1.1",
 		   struct ibv_cq *,
 		   struct ibv_context *context, int cqe/*cqe数目*/, void *cq_context,
-		   struct ibv_comp_channel *channel, int comp_vector)
+		   struct ibv_comp_channel *channel/*对应的comp channel*/, int comp_vector)
 {
 	struct ibv_cq *cq;
 
@@ -607,16 +607,18 @@ LATEST_SYMVER_FUNC(ibv_destroy_cq, 1_1, "IBVERBS_1.1",
 LATEST_SYMVER_FUNC(ibv_get_cq_event, 1_1, "IBVERBS_1.1",
 		   int,
 		   struct ibv_comp_channel *channel,
-		   struct ibv_cq **cq, void **cq_context)
+		   struct ibv_cq **cq, void **cq_context/*cq关联的私有数据*/)
 {
 	struct ib_uverbs_comp_event_desc ev;
 
+	/*读channel fd,获取cq event*/
 	if (read(channel->fd, &ev, sizeof ev) != sizeof ev)
 		return -1;
 
-	*cq         = (struct ibv_cq *) (uintptr_t) ev.cq_handle;
-	*cq_context = (*cq)->cq_context;
+	*cq         = (struct ibv_cq *) (uintptr_t) ev.cq_handle;/*返回的是cq指针*/
+	*cq_context = (*cq)->cq_context;/*取cq私有成员ibv_context*/
 
+	/*调用provider cq_event*/
 	get_ops((*cq)->context)->cq_event(*cq);
 
 	return 0;

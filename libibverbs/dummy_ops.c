@@ -602,7 +602,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 #define SET_PRIV_OP(ptr, name)                                                 \
 	do {                                                                   \
 		if (ops->name) {                                               \
-		    /*ops有此name成员,设置priv->ops相应成员*/\
+		    /*ops的name成员不为0,利用ops设置priv->ops相应成员*/\
 			priv->ops.name = ops->name;                            \
 			/*ptr对应的_compat_##name成员也将被设置成此成员*/\
 			(ptr)->_compat_##name = (void *)ops->name;             \
@@ -614,7 +614,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 #define SET_PRIV_OP_IC(ptr, name)                                              \
 	do {                                                                   \
 		if (ops->name)                                                 \
-		    /*ops有此name成员,设置priv->ops相应成员*/\
+		    /*ops的name成员不为0,设置priv->ops相应成员*/\
 			priv->ops.name = ops->name;                            \
 	} while (0)
 

@@ -189,7 +189,7 @@ struct ibv_device_attr {
 	uint32_t		vendor_part_id;
 	uint32_t		hw_ver;
 	int			max_qp;/*支持的最大qp数目*/
-	int			max_qp_wr;
+	int			max_qp_wr;/*支持的最大wr数目*/
 	unsigned int		device_cap_flags;
 	int			max_sge;
 	int			max_sge_rd;
@@ -1146,6 +1146,7 @@ const char *ibv_wr_opcode_str(enum ibv_wr_opcode opcode);
 
 enum ibv_send_flags {
 	IBV_SEND_FENCE		= 1 << 0,
+	/*发送完成后，硬件需要产生cqe事件;针对RC时，对方回复ack,硬件才产生cqe事件*/
 	IBV_SEND_SIGNALED	= 1 << 1,
 	IBV_SEND_SOLICITED	= 1 << 2,
 	/*inline式发送*/
@@ -1189,31 +1190,31 @@ struct ibv_send_wr {
 	struct ibv_sge	       *sg_list;
 	/*表示sg_list数组大小*/
 	int			num_sge;
-	enum ibv_wr_opcode	opcode;
-	unsigned int		send_flags;
+	enum ibv_wr_opcode	opcode;/*send_wr对应的操作码*/
+	unsigned int		send_flags;/*send标记，例如：IBV_SEND_SIGNALED等*/
 	/* When opcode is *_WITH_IMM: Immediate data in network byte order.
 	 * When opcode is *_INV: Stores the rkey to invalidate
 	 */
 	union {
-		__be32			imm_data;
+		__be32			imm_data;/*附带立即数时填充此处（网络序）*/
 		uint32_t		invalidate_rkey;
 	};
 	union {
 		struct {
 			uint64_t	remote_addr;
 			uint32_t	rkey;
-		} rdma;
+		} rdma;/*read&write操作时填写*/
 		struct {
 			uint64_t	remote_addr;
 			uint64_t	compare_add;
 			uint64_t	swap;
 			uint32_t	rkey;
-		} atomic;
+		} atomic;/*原子操作时填写*/
 		struct {
 			struct ibv_ah  *ah;
 			uint32_t	remote_qpn;
 			uint32_t	remote_qkey;
-		} ud;
+		} ud;/*对ud类QP操作时填写*/
 	} wr;
 	union {
 		struct {
@@ -1548,6 +1549,7 @@ struct ibv_cq {
     /*cq所属的context*/
 	struct ibv_context     *context;
 	struct ibv_comp_channel *channel;
+	/*此cq关联的私有数据*/
 	void		       *cq_context;
 	uint32_t		handle;
 	int			cqe;
@@ -2057,7 +2059,8 @@ struct ibv_context_ops {
 	void *(*_compat_create_cq)(void);
 	/*轮询cq队列*/
 	int			(*poll_cq)(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
-	int			(*req_notify_cq)(struct ibv_cq *cq, int solicited_only);
+	/*设置cq通知方式*/
+	int			(*req_notify_cq)(struct ibv_cq *cq, int solicited_only/*是否仅solicited时通知*/);
 	void *(*_compat_cq_event)(void);
 	void *(*_compat_resize_cq)(void);
 	void *(*_compat_destroy_cq)(void);

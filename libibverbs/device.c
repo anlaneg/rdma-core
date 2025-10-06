@@ -171,7 +171,7 @@ int ibv_get_device_index(struct ibv_device *device)
 
 void verbs_init_cq(struct ibv_cq *cq, struct ibv_context *context,
 		       struct ibv_comp_channel *channel,
-		       void *cq_context)
+		       void *cq_context/*为此cq关联的私有数据*/)
 {
 	cq->context		   = context;
 	cq->channel		   = channel;
@@ -269,7 +269,7 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
 	}
 
 	context_ex->priv->driver_id = driver_id;
-	//设置dummy式的ops,用于提供默认实现（上层调用需要变更这一ops)
+	//设置dummy式的ops,用于提供默认实现
 	verbs_set_ops(context_ex, &verbs_dummy_ops);
 	context_ex->priv->use_ioctl_write = has_ioctl_write(context);
 

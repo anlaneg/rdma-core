@@ -116,19 +116,24 @@ struct rping_cb {
 	struct ibv_pd *pd;
 	struct ibv_qp *qp;
 
+	/*recv_buf对应的recv work request*/
 	struct ibv_recv_wr rq_wr;	/* recv work request record */
+	/*recv_buf对应的sge*/
 	struct ibv_sge recv_sgl;	/* recv single SGE */
 	struct rping_rdma_info recv_buf;/* malloc'd buffer */
+	/*注册recv_buf得到的mr*/
 	struct ibv_mr *recv_mr;		/* MR associated with this buffer */
 
 	struct ibv_send_wr sq_wr;	/* send work request record */
 	struct ibv_sge send_sgl;
 	struct rping_rdma_info send_buf;/* single send buf */
+	/*注册send_mr得到的mr*/
 	struct ibv_mr *send_mr;
 
 	struct ibv_send_wr rdma_sq_wr;	/* rdma work request record */
 	struct ibv_sge rdma_sgl;	/* rdma single SGE */
 	char *rdma_buf;			/* used as rdma sink */
+	/*注册rdma_buf得到的mr*/
 	struct ibv_mr *rdma_mr;
 
 	uint32_t remote_rkey;		/* remote guys RKEY */
@@ -136,6 +141,7 @@ struct rping_cb {
 	uint32_t remote_len;		/* remote guys LEN */
 
 	char *start_buf;		/* rdma read src */
+	/*注册start_buf得到的mr*/
 	struct ibv_mr *start_mr;
 
 	enum test_state state;		/* used for cond/signalling */
@@ -191,7 +197,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 	case RDMA_CM_EVENT_CONNECT_REQUEST:
 		sem_wait(&cb->accept_ready);
 		cb->state = CONNECT_REQUEST;
-		cb->child_cm_id = cma_id;
+		cb->child_cm_id = cma_id;/*此cma_id请求建立连接*/
 		DEBUG_LOG("child cma %p\n", cb->child_cm_id);
 		sem_post(&cb->sem);
 		break;
@@ -252,13 +258,16 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 	return ret;
 }
 
+/*server端收到write操作写的内容后此回调调用*/
 static int server_recv(struct rping_cb *cb, struct ibv_wc *wc)
 {
 	if (wc->byte_len != sizeof(cb->recv_buf)) {
+		/*收到的字符不正确*/
 		fprintf(stderr, "Received bogus data, size %d\n", wc->byte_len);
 		return -1;
 	}
 
+	/*设置收到的内容*/
 	cb->remote_rkey = be32toh(cb->recv_buf.rkey);
 	cb->remote_addr = be64toh(cb->recv_buf.buf);
 	cb->remote_len  = be32toh(cb->recv_buf.size);
@@ -273,6 +282,7 @@ static int server_recv(struct rping_cb *cb, struct ibv_wc *wc)
 	return 0;
 }
 
+/*client端收到write操作写的内容后此回调调用*/
 static int client_recv(struct rping_cb *cb, struct ibv_wc *wc)
 {
 	if (wc->byte_len != sizeof(cb->recv_buf)) {
@@ -295,40 +305,46 @@ static int rping_cq_event_handler(struct rping_cb *cb)
 	int ret;
 	int flushed = 0;
 
+	/*取cqe*/
 	while ((ret = ibv_poll_cq(cb->cq, 1, &wc)) == 1) {
 		ret = 0;
 
 		if (wc.status) {
+			/*执行状态不为0（IBV_WC_SUCCESS）*/
 			if (wc.status == IBV_WC_WR_FLUSH_ERR) {
-				flushed = 1;
+				flushed = 1;/*出错原因为sq/rq被flush,可能是因为qp状态转error*/
 				continue;
 
 			}
 			fprintf(stderr,
 				"cq completion failed status %d\n",
 				wc.status);
-			ret = -1;
+			ret = -1;/*遇到其它不认识的错误*/
 			goto error;
 		}
 
+		/*当前操作已成功，检查是哪种操作成功了。*/
+		/*检查wc.opcode*/
 		switch (wc.opcode) {
 		case IBV_WC_SEND:
-			DEBUG_LOG("send completion\n");
+			DEBUG_LOG("send completion\n");/*send操作对方已回复ACK*/
 			break;
 
 		case IBV_WC_RDMA_WRITE:
-			DEBUG_LOG("rdma write completion\n");
+			DEBUG_LOG("rdma write completion\n");/*write操作执行成功*/
 			cb->state = RDMA_WRITE_COMPLETE;
-			sem_post(&cb->sem);
+			sem_post(&cb->sem);/*释放信号量*/
 			break;
 
 		case IBV_WC_RDMA_READ:
-			DEBUG_LOG("rdma read completion\n");
+			DEBUG_LOG("rdma read completion\n");/*read操作执行完成*/
 			cb->state = RDMA_READ_COMPLETE;
-			sem_post(&cb->sem);
+			sem_post(&cb->sem);/*释放信号量*/
 			break;
 
 		case IBV_WC_RECV:
+			/*wqe整个在rq上收取成功完成（且不含立即数）
+			 * 收到对端发送过来的recv_buf,解析buf内容*/
 			DEBUG_LOG("recv completion\n");
 			ret = cb->server ? server_recv(cb, &wc) :
 					   client_recv(cb, &wc);
@@ -337,7 +353,7 @@ static int rping_cq_event_handler(struct rping_cb *cb)
 				goto error;
 			}
 
-			ret = ibv_post_recv(cb->qp, &cb->rq_wr, &bad_wr);
+			ret = ibv_post_recv(cb->qp, &cb->rq_wr, &bad_wr);/*补充收buffer*/
 			if (ret) {
 				fprintf(stderr, "post recv error: %d\n", ret);
 				goto error;
@@ -346,7 +362,7 @@ static int rping_cq_event_handler(struct rping_cb *cb)
 			break;
 
 		default:
-			DEBUG_LOG("unknown!!!!! completion\n");
+			DEBUG_LOG("unknown!!!!! completion\n");/*其它不认识的*/
 			ret = -1;
 			goto error;
 		}
@@ -376,35 +392,36 @@ static void rping_init_conn_param(struct rping_cb *cb,
 }
 
 
+/*变更自身qp状态*/
 static int rping_self_modify_qp(struct rping_cb *cb, struct rdma_cm_id *id)
 {
 	struct ibv_qp_attr qp_attr;
 	int qp_attr_mask, ret;
 
 	qp_attr.qp_state = IBV_QPS_INIT;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*初始化init qp必备参数*/
 	if (ret)
 		return ret;
 
-	ret = ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);
+	ret = ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);/*初始化qp,使其达到init状态*/
 	if (ret)
 		return ret;
 
 	qp_attr.qp_state = IBV_QPS_RTR;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*初始化rtr qp必备参数*/
 	if (ret)
 		return ret;
 
-	ret = ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);
+	ret = ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);/*变更为ready to receive*/
 	if (ret)
 		return ret;
 
 	qp_attr.qp_state = IBV_QPS_RTS;
-	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);
+	ret = rdma_init_qp_attr(id, &qp_attr, &qp_attr_mask);/*初始化rts qp必备参数*/
 	if (ret)
 		return ret;
 
-	return ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);
+	return ibv_modify_qp(cb->qp, &qp_attr, qp_attr_mask);/*变更为ready to send*/
 }
 
 static int rping_accept(struct rping_cb *cb)
@@ -454,12 +471,14 @@ static int rping_disconnect(struct rping_cb *cb, struct rdma_cm_id *id)
 
 static void rping_setup_wr(struct rping_cb *cb)
 {
+	/*设置recv wr*/
 	cb->recv_sgl.addr = (uint64_t) (unsigned long) &cb->recv_buf;
 	cb->recv_sgl.length = sizeof cb->recv_buf;
 	cb->recv_sgl.lkey = cb->recv_mr->lkey;
 	cb->rq_wr.sg_list = &cb->recv_sgl;
 	cb->rq_wr.num_sge = 1;
 
+	/*设置send wr(采用send方式）*/
 	cb->send_sgl.addr = (uint64_t) (unsigned long) &cb->send_buf;
 	cb->send_sgl.length = sizeof cb->send_buf;
 	cb->send_sgl.lkey = cb->send_mr->lkey;
@@ -469,6 +488,7 @@ static void rping_setup_wr(struct rping_cb *cb)
 	cb->sq_wr.sg_list = &cb->send_sgl;
 	cb->sq_wr.num_sge = 1;
 
+	/*设置send wr(方法未指明，后续用于发送read操作）*/
 	cb->rdma_sgl.addr = (uint64_t) (unsigned long) cb->rdma_buf;
 	cb->rdma_sgl.lkey = cb->rdma_mr->lkey;
 	cb->rdma_sq_wr.send_flags = IBV_SEND_SIGNALED;
@@ -482,6 +502,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 
 	DEBUG_LOG("rping_setup_buffers called on cb %p\n", cb);
 
+	/*注册recv_buf*/
 	cb->recv_mr = ibv_reg_mr(cb->pd, &cb->recv_buf, sizeof cb->recv_buf,
 				 IBV_ACCESS_LOCAL_WRITE);
 	if (!cb->recv_mr) {
@@ -489,6 +510,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 		return errno;
 	}
 
+	/*注册send_buf*/
 	cb->send_mr = ibv_reg_mr(cb->pd, &cb->send_buf, sizeof cb->send_buf, 0);
 	if (!cb->send_mr) {
 		fprintf(stderr, "send_buf reg_mr failed\n");
@@ -496,6 +518,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 		goto err1;
 	}
 
+	/*申请并注册rdma_buf*/
 	cb->rdma_buf = malloc(cb->size);
 	if (!cb->rdma_buf) {
 		fprintf(stderr, "rdma_buf malloc failed\n");
@@ -514,6 +537,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 	}
 
 	if (!cb->server) {
+		/*申请并注册start_buf*/
 		cb->start_buf = malloc(cb->size);
 		if (!cb->start_buf) {
 			fprintf(stderr, "start_buf malloc failed\n");
@@ -574,6 +598,7 @@ static int rping_create_qp(struct rping_cb *cb)
 	init_attr.cap.max_recv_sge = 1;
 	init_attr.cap.max_send_sge = 1;
 	init_attr.qp_type = IBV_QPT_RC;
+	/*send&recv cq共用刚创建的cq*/
 	init_attr.send_cq = cb->cq;
 	init_attr.recv_cq = cb->cq;
 	id = cb->server ? cb->child_cm_id : cb->cm_id;
@@ -623,14 +648,14 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 {
 	int ret;
 
-	cb->pd = ibv_alloc_pd(cm_id->verbs);
+	cb->pd = ibv_alloc_pd(cm_id->verbs);/*申请pd*/
 	if (!cb->pd) {
 		fprintf(stderr, "ibv_alloc_pd failed\n");
 		return errno;
 	}
 	DEBUG_LOG("created pd %p\n", cb->pd);
 
-	cb->channel = ibv_create_comp_channel(cm_id->verbs);
+	cb->channel = ibv_create_comp_channel(cm_id->verbs);/*创建comp channel*/
 	if (!cb->channel) {
 		fprintf(stderr, "ibv_create_comp_channel failed\n");
 		ret = errno;
@@ -639,7 +664,7 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 	DEBUG_LOG("created channel %p\n", cb->channel);
 
 	/*创建cq*/
-	cb->cq = ibv_create_cq(cm_id->verbs, RPING_SQ_DEPTH * 2, cb,
+	cb->cq = ibv_create_cq(cm_id->verbs/*context*/, RPING_SQ_DEPTH * 2, cb/*指明要关联的私有数据*/,
 				cb->channel, 0);
 	if (!cb->cq) {
 		fprintf(stderr, "ibv_create_cq failed\n");
@@ -648,7 +673,7 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 	}
 	DEBUG_LOG("created cq %p\n", cb->cq);
 
-	ret = ibv_req_notify_cq(cb->cq, 0);
+	ret = ibv_req_notify_cq(cb->cq, 0);/*关闭cq通知*/
 	if (ret) {
 		fprintf(stderr, "ibv_create_cq failed\n");
 		ret = errno;
@@ -713,14 +738,16 @@ static void *cq_thread(void *arg)
 			pthread_exit(NULL);
 		}
 		if (ev_cq != cb->cq) {
+			/*返回的不是当前CQ*/
 			fprintf(stderr, "Unknown CQ!\n");
 			pthread_exit(NULL);
 		}
-		ret = ibv_req_notify_cq(cb->cq, 0);
+		ret = ibv_req_notify_cq(cb->cq, 0);/*设置为next_comp时通知（仅一次，通知后即生效）*/
 		if (ret) {
 			fprintf(stderr, "Failed to set notify!\n");
 			pthread_exit(NULL);
 		}
+		/*读取cq队列(由于创建此qp时，此cq被scq,rcq共用，故可以获取到sq,rq上产生的cqe)*/
 		ret = rping_cq_event_handler(cb);
 		ibv_ack_cq_events(cb->cq, 1);
 		if (ret)
@@ -758,12 +785,12 @@ static int rping_test_server(struct rping_cb *cb)
 		DEBUG_LOG("server received sink adv\n");
 
 		/* Issue RDMA Read. */
-		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_READ;
-		cb->rdma_sq_wr.wr.rdma.rkey = cb->remote_rkey;
-		cb->rdma_sq_wr.wr.rdma.remote_addr = cb->remote_addr;
+		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_READ;/*指明采用read方法*/
+		cb->rdma_sq_wr.wr.rdma.rkey = cb->remote_rkey;/*要读的远端key*/
+		cb->rdma_sq_wr.wr.rdma.remote_addr = cb->remote_addr;/*要读的远端地址*/
 		cb->rdma_sq_wr.sg_list->length = cb->remote_len;
 
-		ret = ibv_post_send(cb->qp, &cb->rdma_sq_wr, &bad_wr);
+		ret = ibv_post_send(cb->qp, &cb->rdma_sq_wr, &bad_wr);/*执行read操作*/
 		if (ret) {
 			fprintf(stderr, "post send error %d\n", ret);
 			break;
@@ -771,21 +798,21 @@ static int rping_test_server(struct rping_cb *cb)
 		DEBUG_LOG("server posted rdma read req \n");
 
 		/* Wait for read completion */
-		sem_wait(&cb->sem);
+		sem_wait(&cb->sem);/*等待对端ACK*/
 		if (cb->state != RDMA_READ_COMPLETE) {
 			fprintf(stderr, "wait for RDMA_READ_COMPLETE state %d\n",
 				cb->state);
 			ret = -1;
 			break;
 		}
-		DEBUG_LOG("server received read complete\n");
+		DEBUG_LOG("server received read complete\n");/*received完成*/
 
 		/* Display data in recv buf */
 		if (cb->verbose)
 			printf("server ping data: %s\n", cb->rdma_buf);
 
 		/* Tell client to continue */
-		ret = ibv_post_send(cb->qp, &cb->sq_wr, &bad_wr);
+		ret = ibv_post_send(cb->qp, &cb->sq_wr, &bad_wr);/*向对端发送sq_wr*/
 		if (ret) {
 			fprintf(stderr, "post send error %d\n", ret);
 			break;
@@ -803,7 +830,7 @@ static int rping_test_server(struct rping_cb *cb)
 		DEBUG_LOG("server received sink adv\n");
 
 		/* RDMA Write echo data */
-		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_WRITE;
+		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_WRITE;/*指明write操作*/
 		cb->rdma_sq_wr.wr.rdma.rkey = cb->remote_rkey;
 		cb->rdma_sq_wr.wr.rdma.remote_addr = cb->remote_addr;
 		cb->rdma_sq_wr.sg_list->length = strlen(cb->rdma_buf) + 1;
@@ -850,7 +877,7 @@ static int rping_bind_server(struct rping_cb *cb)
 	else
 		((struct sockaddr_in6 *) &cb->sin)->sin6_port = cb->port;
 
-	ret = rdma_bind_addr(cb->cm_id, (struct sockaddr *) &cb->sin);/*服务端绑定源地址*/
+	ret = rdma_bind_addr(cb->cm_id, (struct sockaddr *) &cb->sin);/*绑定源地址,ib设备*/
 	if (ret) {
 		perror("rdma_bind_addr");
 		return ret;
@@ -858,7 +885,7 @@ static int rping_bind_server(struct rping_cb *cb)
 	DEBUG_LOG("rdma_bind_addr successful\n");
 
 	DEBUG_LOG("rdma_listen\n");
-	ret = rdma_listen(cb->cm_id, 3);
+	ret = rdma_listen(cb->cm_id, 3);/*监听*/
 	if (ret) {
 		perror("rdma_listen");
 		return ret;
@@ -901,12 +928,14 @@ static void *rping_persistent_server_thread(void *arg)
 		goto err1;
 	}
 
+	/*设置收buffer(1个）*/
 	ret = ibv_post_recv(cb->qp, &cb->rq_wr, &bad_wr);
 	if (ret) {
 		fprintf(stderr, "ibv_post_recv failed: %d\n", ret);
 		goto err2;
 	}
 
+	/*启动cq线程，此线程关注sq与rq的cqe,了解当前执行情况*/
 	ret = pthread_create(&cb->cqthread, NULL, cq_thread, cb);
 	if (ret) {
 		perror("pthread_create");
@@ -1021,6 +1050,7 @@ static int rping_run_server(struct rping_cb *cb)
 		goto err2;
 	}
 
+	/*创建线程处理cq*/
 	ret = pthread_create(&cb->cqthread, NULL, cq_thread, cb);
 	if (ret) {
 		perror("pthread_create");
@@ -1393,14 +1423,14 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	/*打开rdma_cm字符设备*/
+	/*打开rdma_cm字符设备,之后cm的所有命令请求走此channel*/
 	cb->cm_channel = create_event_channel();
 	if (!cb->cm_channel) {
 		ret = errno;
 		goto out;
 	}
 
-	/*创建context*/
+	/*创建rdma_cm_id*/
 	ret = rdma_create_id(cb->cm_channel, &cb->cm_id, cb, RDMA_PS_TCP);
 	if (ret) {
 		perror("rdma_create_id");

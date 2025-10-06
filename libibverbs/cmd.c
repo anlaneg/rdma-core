@@ -245,7 +245,7 @@ out:
 	return ret;
 }
 
-int ibv_cmd_req_notify_cq(struct ibv_cq *ibcq, int solicited_only)
+int ibv_cmd_req_notify_cq(struct ibv_cq *ibcq, int solicited_only/*是否仅solicited时通知*/)
 {
 	struct ibv_req_notify_cq req;
 
@@ -255,7 +255,7 @@ int ibv_cmd_req_notify_cq(struct ibv_cq *ibcq, int solicited_only)
 	};
 	return execute_cmd_write_req(ibcq->context,
 				     IB_USER_VERBS_CMD_REQ_NOTIFY_CQ, &req,
-				     sizeof(req));
+				     sizeof(req));/*向kernel请求*/
 }
 
 int ibv_cmd_resize_cq(struct ibv_cq *cq, int cqe,

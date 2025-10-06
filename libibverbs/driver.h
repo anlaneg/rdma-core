@@ -352,7 +352,7 @@ struct verbs_context_ops {
 	int (*bind_mw)(struct ibv_qp *qp, struct ibv_mw *mw,
 		       struct ibv_mw_bind *mw_bind);
 	int (*close_xrcd)(struct ibv_xrcd *xrcd);
-	void (*cq_event)(struct ibv_cq *cq);
+	void (*cq_event)(struct ibv_cq *cq);/*如果未提供此回调，则默认为空实现*/
 	struct ibv_ah *(*create_ah)(struct ibv_pd *pd,
 				    struct ibv_ah_attr *attr);
 	struct ibv_counters *(*create_counters)(struct ibv_context *context,
