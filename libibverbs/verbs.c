@@ -567,7 +567,7 @@ LATEST_SYMVER_FUNC(ibv_create_cq, 1_1, "IBVERBS_1.1",
 {
 	struct ibv_cq *cq;
 
-	/*创建cq*/
+	/*利用provider的api 创建cq*/
 	cq = get_ops(context)->create_cq(context, cqe, channel, comp_vector);
 
 	if (cq)

@@ -573,6 +573,7 @@ static void rs_configure(void)
 		goto out;
 
 	if (ucma_init())
+		/*ucma初始化失败*/
 		goto out;
 	ucma_ib_init();
 
@@ -679,6 +680,7 @@ static struct rsocket *rs_alloc(struct rsocket *inherited_rs, int type)
 			rs->target_iomap_size = inherited_rs->target_iomap_size;
 		}
 	} else {
+		/*未指明inherited_rs*/
 		rs->sbuf_size = def_wmem;
 		rs->rbuf_size = def_mem;
 		rs->sq_inline = def_inline;
@@ -1211,7 +1213,7 @@ int rsocket(int domain, int type, int protocol)
 	if ((domain != AF_INET && domain != AF_INET6 && domain != AF_IB)/*仅支持以上三种domain*/ ||
 	    ((type != SOCK_STREAM) && (type != SOCK_DGRAM)) /*仅支持以上二种type*/||
 	    (type == SOCK_STREAM && protocol && protocol != IPPROTO_TCP) ||
-	    (type == SOCK_DGRAM && protocol && protocol != IPPROTO_UDP))
+	    (type == SOCK_DGRAM && protocol && protocol != IPPROTO_UDP))/*仅支持以上两种proto*/
 		return ERR(ENOTSUP);
 
 	rs_configure();
@@ -1220,6 +1222,7 @@ int rsocket(int domain, int type, int protocol)
 		return ERR(ENOMEM);
 
 	if (type == SOCK_STREAM) {
+		/*创建rdma_cm_id*/
 		ret = rdma_create_id(NULL, &rs->cm_id, rs, RDMA_PS_TCP);
 		if (ret)
 			goto err;

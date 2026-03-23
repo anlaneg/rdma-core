@@ -126,10 +126,10 @@ rdma_post_sendv(struct rdma_cm_id *id, void *context, struct ibv_sge *sgl,
 	wr.next = NULL;
 	wr.sg_list = sgl;
 	wr.num_sge = nsge;
-	wr.opcode = IBV_WR_SEND;
+	wr.opcode = IBV_WR_SEND;/*send操作*/
 	wr.send_flags = flags;
 
-	return rdma_seterrno(ibv_post_send(id->qp, &wr, &bad));
+	return rdma_seterrno(ibv_post_send(id->qp/*针对cm id对应的qp进行操作*/, &wr, &bad));
 }
 
 static inline int

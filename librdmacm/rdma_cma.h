@@ -111,8 +111,8 @@ struct rdma_addr {
 
 struct rdma_route {
 	struct rdma_addr	 addr;/*源目的地址*/
-	struct ibv_sa_path_rec	*path_rec;
-	int			 num_paths;
+	struct ibv_sa_path_rec	*path_rec;/*路径信息*/
+	int			 num_paths;/*path_rec数组长度*/
 };
 
 struct rdma_event_channel {
@@ -154,7 +154,7 @@ struct rdma_conn_param {
 	uint8_t rnr_retry_count;
 	/* Fields below ignored if a QP is created on the rdma_cm_id. */
 	uint8_t srq;
-	uint32_t qp_num;
+	uint32_t qp_num;/*qp编号*/
 };
 
 struct rdma_ud_param {

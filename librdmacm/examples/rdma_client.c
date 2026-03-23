@@ -106,6 +106,7 @@ static int run(void)
 
 	ret = rdma_connect(id, NULL);
 	if (ret) {
+		/*连接出错*/
 		perror("rdma_connect");
 		goto out_dereg_send;
 	}

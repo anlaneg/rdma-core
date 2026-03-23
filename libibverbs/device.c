@@ -166,7 +166,7 @@ int ibv_get_device_index(struct ibv_device *device)
 {
 	struct verbs_sysfs_dev *sysfs_dev = verbs_get_device(device)->sysfs;
 
-	return sysfs_dev ? sysfs_dev->ibdev_idx : -1;
+	return sysfs_dev ? sysfs_dev->ibdev_idx : -1/*应置为UCMA_INVALID_IB_INDEX*/;
 }
 
 void verbs_init_cq(struct ibv_cq *cq, struct ibv_context *context,

@@ -102,10 +102,10 @@ struct ibv_sa_service_rec {
 
 struct ibv_path_record {
 	__be64		service_id;
-	union ibv_gid	dgid;
-	union ibv_gid	sgid;
+	union ibv_gid	dgid;/*目的gid*/
+	union ibv_gid	sgid;/*源gid*/
 	__be16		dlid;
-	__be16		slid;
+	__be16		slid;/*源link id*/
 	__be32		flowlabel_hoplimit; /* resv-31:28 flow label-27:8 hop limit-7:0*/
 	uint8_t		tclass;
 	uint8_t		reversible_numpath; /* reversible-7:7 num path-6:0 */

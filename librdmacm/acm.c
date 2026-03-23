@@ -47,20 +47,20 @@
 #include <infiniband/sa.h>
 
 static pthread_mutex_t acm_lock = PTHREAD_MUTEX_INITIALIZER;
-static int sock = -1;
+static int sock = -1;/*记录连接到IBACM SERVER的socket*/
 static uint16_t server_port;
 
 static int ucma_set_server_port(void)
 {
 	FILE *f;
 
-	/*读取配置的port*/
+	/*自文件中读取配置的port*/
 	if ((f = fopen(IBACM_PORT_FILE, "r" STREAM_CLOEXEC))) {
 		if (fscanf(f, "%" SCNu16, &server_port) != 1)
 			server_port = 0;
 		fclose(f);
 	} else
-		server_port = 0;
+		server_port = 0;/*未读到，置0*/
 
 	return server_port;
 }
@@ -85,15 +85,16 @@ void ucma_ib_init(void)
 		goto unlock;
 
 	if (ucma_set_server_port()) {
+		/*读取server port成功，创建tcp socket*/
 		sock = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
 		if (sock < 0)
 			goto out;
 
 		memset(&addr, 0, sizeof(addr));
 		addr.any.sa_family = AF_INET;
-		addr.inet.sin_addr.s_addr = htobe32(INADDR_LOOPBACK);
+		addr.inet.sin_addr.s_addr = htobe32(INADDR_LOOPBACK);/*127.0.0.1*/
 		addr.inet.sin_port = htobe16(server_port);
-		ret = connect(sock, &addr.any, sizeof(addr.inet));
+		ret = connect(sock, &addr.any, sizeof(addr.inet));/*连接到本地server port*/
 		if (ret) {
 			close(sock);
 			sock = -1;
@@ -108,8 +109,8 @@ void ucma_ib_init(void)
 		addr.any.sa_family = AF_UNIX;
 		BUILD_ASSERT(sizeof(IBACM_SERVER_PATH) <=
 			     sizeof(addr.unx.sun_path));
-		strcpy(addr.unx.sun_path, IBACM_SERVER_PATH);
-		ret = connect(sock, &addr.any, sizeof(addr.unx));/*连接server socket*/
+		strcpy(addr.unx.sun_path, IBACM_SERVER_PATH);/*指定连接目的地址*/
+		ret = connect(sock, &addr.any, sizeof(addr.unx));/*连接server*/
 		if (ret) {
 			close(sock);
 			sock = -1;
@@ -253,6 +254,7 @@ static void ucma_ib_save_resp(struct rdma_addrinfo *rai, struct acm_msg *msg)
 	struct sockaddr_in6 *sin6;
 	int i, cnt, path_cnt = 0;
 
+	/*获取ep数目*/
 	cnt = (msg->hdr.length - ACM_MSG_HDR_LENGTH) / ACM_MSG_EP_LENGTH;
 	for (i = 0; i < cnt; i++) {
 		ep_data = &msg->resolve_data[i];
@@ -335,7 +337,7 @@ void ucma_ib_resolve(struct rdma_addrinfo **rai,
 
 	ucma_ib_init();
 	if (sock < 0)
-		return;
+		return;/*连接ibacm server失败*/
 
 	memset(&msg, 0, sizeof msg);
 	msg.hdr.version = ACM_VERSION;
@@ -396,7 +398,7 @@ void ucma_ib_resolve(struct rdma_addrinfo **rai,
 		return;
 	}
 
-	/*收取消息*/
+	/*收取响应消息*/
 	ret = recv(sock, (char *) &msg, sizeof msg, 0);
 	pthread_mutex_unlock(&acm_lock);
 	if (ret < ACM_MSG_HDR_LENGTH || ret != msg.hdr.length || msg.hdr.status)

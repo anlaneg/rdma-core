@@ -204,10 +204,10 @@ struct ucma_abi_query_path_resp {
 };
 
 struct ucma_abi_conn_param {
-	__u32 qp_num;
+	__u32 qp_num;/*qp编号*/
 	__u32 reserved;
 	__u8  private_data[RDMA_MAX_PRIVATE_DATA];
-	__u8  private_data_len;
+	__u8  private_data_len;/*私有数据长度*/
 	__u8  srq;
 	__u8  responder_resources;
 	__u8  initiator_depth;
@@ -236,7 +236,7 @@ struct ucma_abi_connect {
 	__u32 cmd;
 	__u16 in;
 	__u16 out;
-	struct ucma_abi_conn_param conn_param;
+	struct ucma_abi_conn_param conn_param;/*连接参数*/
 	__u32 id;
 	__u32 reserved;
 	struct ucma_abi_ece ece;

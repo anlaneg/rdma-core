@@ -1968,16 +1968,16 @@ int efa_post_send(struct ibv_qp *ibvqp, struct ibv_send_wr *wr,
 		sq_desc_offset = (wq->pc & wq->desc_mask) *
 				 sizeof(tx_wqe);
 		mmio_memcpy_x64(sq->desc + sq_desc_offset, &tx_wqe,
-				sizeof(tx_wqe));
+				sizeof(tx_wqe));/*写入内容到sq*/
 
 		/* advance index and change phase */
-		efa_sq_advance_post_idx(sq);
+		efa_sq_advance_post_idx(sq);/*更新sq->index(即写位置）*/
 		curbatch++;
 
 		if (curbatch == sq->max_batch_wr) {
 			curbatch = 0;
 			mmio_flush_writes();
-			efa_sq_ring_doorbell(sq, wq->pc);
+			efa_sq_ring_doorbell(sq, wq->pc);/*doorbell通知*/
 			mmio_wc_start();
 		}
 		rdma_tracepoint(rdma_core_efa, post_send, qp->dev->name, wr->wr_id,
@@ -1988,6 +1988,7 @@ int efa_post_send(struct ibv_qp *ibvqp, struct ibv_send_wr *wr,
 
 ring_db:
 	if (curbatch) {
+		/*发完后，未达到max_batch_wr,执行doorbell通知*/
 		mmio_flush_writes();
 		efa_sq_ring_doorbell(sq, wq->pc);
 	}

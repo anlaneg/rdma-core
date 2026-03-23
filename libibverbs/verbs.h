@@ -2654,6 +2654,7 @@ __ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsigned int access,
 	if (is_access_const && (access & IBV_ACCESS_OPTIONAL_RANGE) == 0)
 		return ibv_reg_mr(pd, addr, length, (int)access);
 	else
+		/*指明了iova地址，其与addr相同*/
 		return ibv_reg_mr_iova2(pd, addr, length, (uintptr_t)addr,
 					access);
 }
@@ -3210,7 +3211,7 @@ ibv_query_rt_values_ex(struct ibv_context *context,
 
 	vctx = verbs_get_ctx_op(context, query_rt_values);
 	if (!vctx)
-		return EOPNOTSUPP;
+		return EOPNOTSUPP;/*无此回调*/
 
 	return vctx->query_rt_values(context, values);
 }

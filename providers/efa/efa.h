@@ -102,7 +102,7 @@ struct efa_wq {
 	int phase;
 	pthread_spinlock_t wqlock;
 
-	uint32_t *db;
+	uint32_t *db;/*sq的door bell*/
 	uint16_t sub_cq_idx;
 };
 
