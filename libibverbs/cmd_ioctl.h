@@ -311,7 +311,7 @@ fill_attr_in(struct ibv_command_buffer *cmd, uint16_t attr_id, const void *data,
 
 	attr->len = len;
 	/*内容长度小于u64,则填充到attr->data,否则使指针指向*/
-	if (len <= sizeof(uint64_t))
+	if (len <= sizeof(uint64_t) && data)
 		memcpy(&attr->data, data, len);
 	else
 		attr->data = ioctl_ptr_to_u64(data);

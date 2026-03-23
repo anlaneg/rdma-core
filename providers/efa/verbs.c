@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 /*
- * Copyright 2019-2025 Amazon.com, Inc. or its affiliates. All rights reserved.
+ * Copyright 2019-2026 Amazon.com, Inc. or its affiliates. All rights reserved.
  */
 
 #include <assert.h>
@@ -56,6 +56,7 @@ struct efa_wq_init_attr {
 	int cmd_fd;
 	int pgsz;
 	uint16_t sub_cq_idx;
+	bool need_lock;
 };
 
 int efa_query_port(struct ibv_context *ibvctx, uint8_t port,
@@ -175,6 +176,9 @@ int efadv_query_device(struct ibv_context *ibvctx,
 
 		if (EFA_DEV_CAP(ctx, UNSOLICITED_WRITE_RECV))
 			attr->device_caps |= EFADV_DEVICE_ATTR_CAPS_UNSOLICITED_WRITE_RECV;
+
+		if (EFA_DEV_CAP(ctx, CQ_WITH_EXT_MEM))
+			attr->device_caps |= EFADV_DEVICE_ATTR_CAPS_CQ_WITH_EXT_MEM_DMABUF;
 	}
 
 	if (vext_field_avail(typeof(*attr), max_rdma_size, inlen)) {
@@ -211,6 +215,7 @@ struct ibv_pd *efa_alloc_pd(struct ibv_context *ibvctx)
 		goto out;
 	}
 
+	atomic_init(&pd->refcount, 0);
 	pd->pdn = resp.pdn;
 
 	return &pd->ibvpd;
@@ -221,10 +226,83 @@ out:
 	return NULL;
 }
 
+struct ibv_pd *efa_alloc_parent_domain(struct ibv_context *ibvctx,
+				       struct ibv_parent_domain_init_attr *attr)
+{
+	struct efa_parent_domain *parent_domain;
+	struct efa_pd *pd;
+
+	if (ibv_check_alloc_parent_domain(attr)) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (!check_comp_mask(attr->comp_mask,
+			     IBV_PARENT_DOMAIN_INIT_ATTR_PD_CONTEXT)) {
+		verbs_err(verbs_get_ctx(ibvctx), "Invalid comp_mask\n");
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	pd = to_efa_pd(attr->pd);
+
+	/* We don't allow nested parent domains */
+	if (pd->orig_pd) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	parent_domain = calloc(1, sizeof(*parent_domain));
+	if (!parent_domain) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	atomic_init(&parent_domain->refcount, 0);
+
+	if (attr->td) {
+		parent_domain->td = to_efa_td(attr->td);
+		atomic_fetch_add(&parent_domain->td->refcount, 1);
+	}
+
+	parent_domain->pd.orig_pd = pd;
+	atomic_fetch_add(&pd->refcount, 1);
+
+	ibv_initialize_parent_domain(&parent_domain->pd.ibvpd, attr->pd);
+
+	if (attr->comp_mask & IBV_PARENT_DOMAIN_INIT_ATTR_PD_CONTEXT)
+		parent_domain->pd_context = attr->pd_context;
+
+	return &parent_domain->pd.ibvpd;
+}
+
+static int efa_dealloc_parent_domain(struct efa_parent_domain *parent_domain)
+{
+	if (atomic_load(&parent_domain->refcount) > 0)
+		return EBUSY;
+
+	atomic_fetch_sub(&parent_domain->pd.orig_pd->refcount, 1);
+
+	if (parent_domain->td)
+		atomic_fetch_sub(&parent_domain->td->refcount, 1);
+
+	free(parent_domain);
+	return 0;
+}
+
 int efa_dealloc_pd(struct ibv_pd *ibvpd)
 {
+	struct efa_parent_domain *parent_domain;
 	struct efa_pd *pd = to_efa_pd(ibvpd);
 	int err;
+
+	if (pd->orig_pd) {
+		parent_domain = to_efa_parent_domain(ibvpd);
+		return efa_dealloc_parent_domain(parent_domain);
+	}
+
+	if (atomic_load(&pd->refcount) > 0)
+		return EBUSY;
 
 	err = ibv_cmd_dealloc_pd(ibvpd);
 	if (err) {
@@ -373,11 +451,15 @@ static uint32_t efa_wq_get_next_wrid_idx_locked(struct efa_wq *wq,
 
 static void efa_wq_put_wrid_idx_unlocked(struct efa_wq *wq, uint32_t wrid_idx)
 {
-	pthread_spin_lock(&wq->wqlock);
+	if (wq->need_lock)
+		pthread_spin_lock(&wq->wqlock);
+
 	wq->wrid_idx_pool_next--;
 	wq->wrid_idx_pool[wq->wrid_idx_pool_next] = wrid_idx;
 	wq->wqe_completed++;
-	pthread_spin_unlock(&wq->wqlock);
+
+	if (wq->need_lock)
+		pthread_spin_unlock(&wq->wqlock);
 }
 
 static uint32_t efa_sub_cq_get_current_index(struct efa_sub_cq *sub_cq)
@@ -468,6 +550,7 @@ static enum ibv_wc_status to_ibv_status(enum efa_io_comp_status status)
 		return IBV_WC_REM_INV_RD_REQ_ERR;
 	case EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_STATUS:
 		return IBV_WC_BAD_RESP_ERR;
+	case EFA_IO_COMP_STATUS_REMOTE_ERROR_FEATURE_MISMATCH:
 	case EFA_IO_COMP_STATUS_REMOTE_ERROR_BAD_LENGTH:
 		return IBV_WC_REM_INV_REQ_ERR;
 	case EFA_IO_COMP_STATUS_LOCAL_ERROR_UNRESP_REMOTE:
@@ -735,7 +818,7 @@ static inline int efa_poll_sub_cq(struct efa_cq *cq, struct efa_sub_cq *sub_cq,
 		 * from the table.
 		 */
 		*cur_qp = ctx->qp_table[qpn & ctx->qp_table_sz_m1];
-		if (!*cur_qp) {
+		if (!*cur_qp || qpn != (*cur_qp)->verbs_qp.qp.qp_num) {
 			cq->cur_wq = NULL;
 			verbs_err(&ctx->ibvctx,
 				  "QP[%u] does not exist in QP table\n",
@@ -803,18 +886,40 @@ int efa_poll_cq(struct ibv_cq *ibvcq, int nwc, struct ibv_wc *wc)
 	return i ?: -ret;
 }
 
-static int efa_start_poll(struct ibv_cq_ex *ibvcqx,
-			  struct ibv_poll_cq_attr *attr)
+static inline int efa_start_poll_comp_check(struct ibv_cq_ex *ibvcqx,
+					    struct ibv_poll_cq_attr *attr) ALWAYS_INLINE;
+static inline int efa_start_poll_comp_check(struct ibv_cq_ex *ibvcqx,
+					    struct ibv_poll_cq_attr *attr)
 {
-	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
-	int ret;
-
 	if (unlikely(attr->comp_mask)) {
 		verbs_err(verbs_get_ctx(ibvcqx->context),
 			  "Invalid comp_mask %u\n",
 			  attr->comp_mask);
 		return EINVAL;
 	}
+
+	return 0;
+}
+
+static inline void efa_end_poll_common(struct efa_cq *cq) ALWAYS_INLINE;
+static inline void efa_end_poll_common(struct efa_cq *cq)
+{
+	if (cq->cur_cqe) {
+		if (cq->cur_wq)
+			efa_wq_put_wrid_idx_unlocked(cq->cur_wq, cq->cur_cqe->req_id);
+		if (cq->db)
+			efa_update_cq_doorbell(cq, false);
+	}
+}
+
+static int efa_start_poll(struct ibv_cq_ex *ibvcqx,
+			  struct ibv_poll_cq_attr *attr)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+	int ret;
+
+	if (efa_start_poll_comp_check(ibvcqx, attr))
+		return EINVAL;
 
 	pthread_spin_lock(&cq->lock);
 
@@ -841,25 +946,127 @@ static void efa_end_poll(struct ibv_cq_ex *ibvcqx)
 {
 	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
 
-	if (cq->cur_cqe) {
-		if (cq->cur_wq)
-			efa_wq_put_wrid_idx_unlocked(cq->cur_wq, cq->cur_cqe->req_id);
-		if (cq->db)
-			efa_update_cq_doorbell(cq, false);
-	}
-
+	efa_end_poll_common(cq);
 	pthread_spin_unlock(&cq->lock);
 }
+
+static int efa_start_poll_single_sub_cq(struct ibv_cq_ex *ibvcqx,
+					struct ibv_poll_cq_attr *attr)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+	struct efa_qp *qp = NULL;
+	int ret;
+
+	if (efa_start_poll_comp_check(ibvcqx, attr))
+		return EINVAL;
+
+	pthread_spin_lock(&cq->lock);
+	ret = efa_poll_sub_cq(cq, cq->sub_cq_arr, &qp, NULL, true);
+	if (ret != ENOENT)
+		cq->cc++;
+
+	if (ret)
+		pthread_spin_unlock(&cq->lock);
+
+	return ret;
+}
+
+static int efa_next_poll_single_sub_cq(struct ibv_cq_ex *ibvcqx)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+	struct efa_qp *qp = NULL;
+	int ret;
+
+	if (cq->cur_wq)
+		efa_wq_put_wrid_idx_unlocked(cq->cur_wq, cq->cur_cqe->req_id);
+
+	ret = efa_poll_sub_cq(cq, cq->sub_cq_arr, &qp, NULL, true);
+	if (ret != ENOENT)
+		cq->cc++;
+
+	return ret;
+}
+
+static int efa_start_poll_single_thread(struct ibv_cq_ex *ibvcqx,
+					struct ibv_poll_cq_attr *attr)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+
+	if (efa_start_poll_comp_check(ibvcqx, attr))
+		return EINVAL;
+
+	return efa_poll_sub_cqs(cq, NULL, true);
+}
+
+static void efa_end_poll_single_thread(struct ibv_cq_ex *ibvcqx)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+
+	efa_end_poll_common(cq);
+}
+
+static int efa_start_poll_single_sub_cq_single_thread(struct ibv_cq_ex *ibvcqx,
+						      struct ibv_poll_cq_attr *attr)
+{
+	struct efa_cq *cq = to_efa_cq_ex(ibvcqx);
+	struct efa_qp *qp = NULL;
+	int ret;
+
+	if (efa_start_poll_comp_check(ibvcqx, attr))
+		return EINVAL;
+
+	ret = efa_poll_sub_cq(cq, cq->sub_cq_arr, &qp, NULL, true);
+	if (ret != ENOENT)
+		cq->cc++;
+
+	return ret;
+}
+
+enum cq_pfns_attr {
+	SINGLE_SUB_CQ_PFNS = BIT(0),
+	SINGLE_THREAD_PFNS = BIT(1),
+};
+
+#define efa_start_poll_name(single_sub_cq, single_thread) efa_start_poll##single_sub_cq##single_thread
+#define efa_next_poll_name(single_sub_cq) efa_next_poll##single_sub_cq
+#define efa_end_poll_name(single_thread) efa_end_poll##single_thread
+
+#define POLL_FN_ENTRY(single_sub_cq, single_thread) { \
+		.start_poll = efa_start_poll_name(single_sub_cq, single_thread), \
+		.next_poll = efa_next_poll_name(single_sub_cq), \
+		.end_poll = efa_end_poll_name(single_thread), \
+	}
+
+static struct cq_base_ops {
+	int (*start_poll)(struct ibv_cq_ex *ibcq, struct ibv_poll_cq_attr *attr);
+	int (*next_poll)(struct ibv_cq_ex *ibcq);
+	void (*end_poll)(struct ibv_cq_ex *ibcq);
+} base_ops[] = {
+	[0] = POLL_FN_ENTRY(,),
+	[SINGLE_SUB_CQ_PFNS] = POLL_FN_ENTRY(_single_sub_cq,),
+	[SINGLE_THREAD_PFNS] = POLL_FN_ENTRY(, _single_thread),
+	[SINGLE_SUB_CQ_PFNS | SINGLE_THREAD_PFNS] = POLL_FN_ENTRY(_single_sub_cq, _single_thread)
+};
 
 static void efa_cq_fill_pfns(struct efa_cq *cq,
 			     struct ibv_cq_init_attr_ex *attr,
 			     struct efadv_cq_init_attr *efa_attr)
 {
 	struct ibv_cq_ex *ibvcqx = &cq->verbs_cq.cq_ex;
+	const struct cq_base_ops *cq_ops;
+	uint32_t cq_pfns_mask = 0;
 
-	ibvcqx->start_poll = efa_start_poll;
-	ibvcqx->end_poll = efa_end_poll;
-	ibvcqx->next_poll = efa_next_poll;
+	if (cq->num_sub_cqs == 1)
+		cq_pfns_mask |= SINGLE_SUB_CQ_PFNS;
+
+	if ((cq->parent_domain && cq->parent_domain->td) ||
+	    attr->flags & IBV_CREATE_CQ_ATTR_SINGLE_THREADED)
+		cq_pfns_mask |= SINGLE_THREAD_PFNS;
+
+	cq_ops = &base_ops[cq_pfns_mask];
+	ibvcqx->start_poll = cq_ops->start_poll;
+	ibvcqx->next_poll = cq_ops->next_poll;
+	ibvcqx->end_poll = cq_ops->end_poll;
 
 	ibvcqx->read_opcode = efa_wc_read_opcode;
 	ibvcqx->read_vendor_err = efa_wc_read_vendor_err;
@@ -880,9 +1087,9 @@ static void efa_cq_fill_pfns(struct efa_cq *cq,
 	if (attr->wc_flags & IBV_WC_EX_WITH_DLID_PATH_BITS)
 		ibvcqx->read_dlid_path_bits = efa_wc_read_dlid_path_bits;
 
-	if (efa_attr && (efa_attr->wc_flags & EFADV_WC_EX_WITH_SGID))
+	if (efa_attr->wc_flags & EFADV_WC_EX_WITH_SGID)
 		cq->dv_cq.wc_read_sgid = efa_wc_read_sgid;
-	if (efa_attr && (efa_attr->wc_flags & EFADV_WC_EX_WITH_IS_UNSOLICITED))
+	if (efa_attr->wc_flags & EFADV_WC_EX_WITH_IS_UNSOLICITED)
 		cq->dv_cq.wc_is_unsolicited = efa_wc_is_unsolicited;
 }
 
@@ -901,21 +1108,36 @@ static struct ibv_cq_ex *create_cq(struct ibv_context *ibvctx,
 				   struct efadv_cq_init_attr *efa_attr)
 {
 	struct efa_context *ctx = to_efa_context(ibvctx);
+	struct verbs_create_cq_prov_attr prov_attr = {};
+	struct efa_parent_domain *parent_domain = NULL;
 	uint16_t cqe_size = ctx->ex_cqe_size;
 	struct efa_create_cq_resp resp = {};
 	struct efa_create_cq cmd = {};
+	uint32_t cmd_flags = 0;
 	uint16_t num_sub_cqs;
 	struct efa_cq *cq;
+	struct efa_pd *pd;
 	int sub_buf_size;
 	int sub_cq_size;
 	uint8_t *buf;
 	int err;
 	int i;
 
-	if (!check_comp_mask(attr->comp_mask, 0) ||
+#define EFA_CREATE_CQ_SUPP_ATTR_MASK \
+	(IBV_CQ_INIT_ATTR_MASK_PD | IBV_CQ_INIT_ATTR_MASK_FLAGS)
+
+	if (!check_comp_mask(attr->comp_mask, EFA_CREATE_CQ_SUPP_ATTR_MASK) ||
 	    !check_comp_mask(attr->wc_flags, IBV_WC_STANDARD_FLAGS)) {
 		verbs_err(verbs_get_ctx(ibvctx),
 			  "Invalid comp_mask or wc_flags\n");
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	if (attr->comp_mask & IBV_CQ_INIT_ATTR_MASK_FLAGS &&
+	    !check_comp_mask(attr->flags, IBV_CREATE_CQ_ATTR_SINGLE_THREADED)) {
+		verbs_err(verbs_get_ctx(ibvctx),
+			  "Invalid flags\n");
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
@@ -926,24 +1148,43 @@ static struct ibv_cq_ex *create_cq(struct ibv_context *ibvctx,
 		return NULL;
 	}
 
+	if (attr->comp_mask & IBV_CQ_INIT_ATTR_MASK_PD) {
+		pd = to_efa_pd(attr->parent_domain);
+		if (!pd->orig_pd) {
+			verbs_err(verbs_get_ctx(ibvctx), "Parent domain set but not provided\n");
+			errno = EINVAL;
+			return NULL;
+		}
+
+		parent_domain = to_efa_parent_domain(attr->parent_domain);
+	}
+
 	cq = calloc(1, sizeof(*cq) +
 		       sizeof(*cq->sub_cq_arr) * ctx->sub_cqs_per_cq);
 	if (!cq)
 		return NULL;
 
-	if (efa_attr && (efa_attr->wc_flags & EFADV_WC_EX_WITH_SGID))
+	if (efa_attr->wc_flags & EFADV_WC_EX_WITH_SGID)
 		cmd.flags |= EFA_CREATE_CQ_WITH_SGID;
 
 	num_sub_cqs = ctx->sub_cqs_per_cq;
 	cmd.num_sub_cqs = num_sub_cqs;
 	cmd.cq_entry_size = cqe_size;
+
+	if (efa_attr->flags & EFADV_CQ_INIT_FLAGS_EXT_MEM_DMABUF) {
+		prov_attr.buffer.length = efa_attr->ext_mem_dmabuf.length;
+		prov_attr.buffer.dmabuf.offset = efa_attr->ext_mem_dmabuf.offset;
+		prov_attr.buffer.dmabuf.fd = efa_attr->ext_mem_dmabuf.fd;
+		cmd_flags = CREATE_CQ_CMD_FLAGS_WITH_MEM_DMABUF;
+	}
+
 	if (attr->channel)
 		cmd.flags |= EFA_CREATE_CQ_WITH_COMPLETION_CHANNEL;
 
 	attr->cqe = roundup_pow_of_two(attr->cqe);
-	err = ibv_cmd_create_cq_ex(ibvctx, attr, &cq->verbs_cq,
+	err = ibv_cmd_create_cq_ex(ibvctx, attr, &prov_attr, &cq->verbs_cq,
 				   &cmd.ibv_cmd, sizeof(cmd),
-				   &resp.ibv_resp, sizeof(resp), 0);
+				   &resp.ibv_resp, sizeof(resp), cmd_flags);
 	if (err) {
 		errno = err;
 		goto err_free_cq;
@@ -951,22 +1192,31 @@ static struct ibv_cq_ex *create_cq(struct ibv_context *ibvctx,
 
 	sub_cq_size = cq->verbs_cq.cq.cqe;
 	cq->cqn = resp.cq_idx;
-	cq->buf_size = resp.q_mmap_size;
 	cq->num_sub_cqs = num_sub_cqs;
 	cq->cqe_size = cqe_size;
 	cq->dev = ibvctx->device;
+	cq->parent_domain = parent_domain;
 
-	cq->buf = mmap(NULL, cq->buf_size, PROT_READ, MAP_SHARED,
-		       ibvctx->cmd_fd, resp.q_mmap_key);
-	if (cq->buf == MAP_FAILED)
-		goto err_destroy_cq;
+	if (efa_attr->flags & EFADV_CQ_INIT_FLAGS_EXT_MEM_DMABUF) {
+		cq->buf_size = efa_attr->ext_mem_dmabuf.length;
+		cq->buf = efa_attr->ext_mem_dmabuf.buffer;
+	} else {
+		cq->buf_size = resp.q_mmap_size;
+		cq->buf = mmap(NULL, cq->buf_size, PROT_READ, MAP_SHARED, ibvctx->cmd_fd,
+			       resp.q_mmap_key);
+		if (cq->buf == MAP_FAILED)
+			goto err_destroy_cq;
 
-	buf = cq->buf;
-	sub_buf_size = cq->cqe_size * sub_cq_size;
-	for (i = 0; i < num_sub_cqs; i++) {
-		efa_sub_cq_initialize(&cq->sub_cq_arr[i], buf, sub_cq_size,
-				      cq->cqe_size);
-		buf += sub_buf_size;
+		cq->buf_mmaped = true;
+	}
+
+	if (cq->buf) {
+		buf = cq->buf;
+		sub_buf_size = cq->cqe_size * sub_cq_size;
+		for (i = 0; i < num_sub_cqs; i++) {
+			efa_sub_cq_initialize(&cq->sub_cq_arr[i], buf, sub_cq_size, cq->cqe_size);
+			buf += sub_buf_size;
+		}
 	}
 
 	if (resp.comp_mask & EFA_CREATE_CQ_RESP_DB_OFF) {
@@ -981,11 +1231,14 @@ static struct ibv_cq_ex *create_cq(struct ibv_context *ibvctx,
 
 	efa_cq_fill_pfns(cq, attr, efa_attr);
 	pthread_spin_init(&cq->lock, PTHREAD_PROCESS_PRIVATE);
+	if (cq->parent_domain)
+		atomic_fetch_add(&cq->parent_domain->refcount, 1);
 
 	return &cq->verbs_cq.cq_ex;
 
 err_unmap_cq:
-	munmap(cq->buf, cq->buf_size);
+	if (cq->buf_mmaped)
+		munmap(cq->buf, cq->buf_size);
 err_destroy_cq:
 	ibv_cmd_destroy_cq(&cq->verbs_cq.cq);
 err_free_cq:
@@ -997,6 +1250,7 @@ err_free_cq:
 struct ibv_cq *efa_create_cq(struct ibv_context *ibvctx, int ncqe,
 			     struct ibv_comp_channel *channel, int vec)
 {
+	struct efadv_cq_init_attr efa_attr = {};
 	struct ibv_cq_init_attr_ex attr_ex = {
 		.cqe = ncqe,
 		.channel = channel,
@@ -1004,7 +1258,7 @@ struct ibv_cq *efa_create_cq(struct ibv_context *ibvctx, int ncqe,
 	};
 	struct ibv_cq_ex *ibvcqx;
 
-	ibvcqx = create_cq(ibvctx, &attr_ex, NULL);
+	ibvcqx = create_cq(ibvctx, &attr_ex, &efa_attr);
 
 	return ibvcqx ? ibv_cq_ex_to_cq(ibvcqx) : NULL;
 }
@@ -1012,7 +1266,9 @@ struct ibv_cq *efa_create_cq(struct ibv_context *ibvctx, int ncqe,
 struct ibv_cq_ex *efa_create_cq_ex(struct ibv_context *ibvctx,
 				   struct ibv_cq_init_attr_ex *attr_ex)
 {
-	return create_cq(ibvctx, attr_ex, NULL);
+	struct efadv_cq_init_attr efa_attr = {};
+
+	return create_cq(ibvctx, attr_ex, &efa_attr);
 }
 
 struct ibv_cq_ex *efadv_create_cq(struct ibv_context *ibvctx,
@@ -1020,6 +1276,7 @@ struct ibv_cq_ex *efadv_create_cq(struct ibv_context *ibvctx,
 				  struct efadv_cq_init_attr *efa_attr,
 				  uint32_t inlen)
 {
+	struct efadv_cq_init_attr local_efa_attr = {};
 	uint64_t supp_wc_flags = 0;
 	struct efa_context *ctx;
 
@@ -1031,7 +1288,7 @@ struct ibv_cq_ex *efadv_create_cq(struct ibv_context *ibvctx,
 
 	if (!vext_field_avail(struct efadv_cq_init_attr, wc_flags, inlen) ||
 	    efa_attr->comp_mask ||
-	    (inlen > sizeof(efa_attr) && !is_ext_cleared(efa_attr, inlen))) {
+	    (inlen > sizeof(*efa_attr) && !is_ext_cleared(efa_attr, inlen))) {
 		verbs_err(verbs_get_ctx(ibvctx), "Compatibility issues\n");
 		errno = EINVAL;
 		return NULL;
@@ -1049,7 +1306,33 @@ struct ibv_cq_ex *efadv_create_cq(struct ibv_context *ibvctx,
 		return NULL;
 	}
 
-	return create_cq(ibvctx, attr_ex, efa_attr);
+	memcpy(&local_efa_attr, efa_attr, min_t(uint32_t, inlen, sizeof(local_efa_attr)));
+	return create_cq(ibvctx, attr_ex, &local_efa_attr);
+}
+
+int efadv_query_cq(struct ibv_cq *ibvcq, struct efadv_cq_attr *attr, uint32_t inlen)
+{
+	struct efa_cq *cq = to_efa_cq(ibvcq);
+
+	if (!is_efa_dev(ibvcq->context->device)) {
+		verbs_err(verbs_get_ctx(ibvcq->context), "Not an EFA device\n");
+		return EOPNOTSUPP;
+	}
+
+	if (!vext_field_avail(typeof(*attr), num_entries, inlen)) {
+		verbs_err(verbs_get_ctx(ibvcq->context), "Compatibility issues\n");
+		return EINVAL;
+	}
+
+	attr->comp_mask = 0;
+	attr->buffer = cq->buf;
+	attr->entry_size = cq->cqe_size;
+	attr->num_entries = ibvcq->cqe;
+
+	if (vext_field_avail(typeof(*attr), doorbell, inlen))
+		attr->doorbell = cq->db;
+
+	return 0;
 }
 
 struct efadv_cq *efadv_cq_from_ibv_cq_ex(struct ibv_cq_ex *ibvcqx)
@@ -1072,9 +1355,12 @@ int efa_destroy_cq(struct ibv_cq *ibvcq)
 	}
 
 	munmap(cq->db_mmap_addr, to_efa_dev(cq->dev)->pg_sz);
-	munmap(cq->buf, cq->buf_size);
+	if (cq->buf_mmaped)
+		munmap(cq->buf, cq->buf_size);
 
 	pthread_spin_destroy(&cq->lock);
+	if (cq->parent_domain)
+		atomic_fetch_sub(&cq->parent_domain->refcount, 1);
 
 	free(cq);
 
@@ -1085,7 +1371,8 @@ static void efa_wq_terminate(struct efa_wq *wq, int pgsz)
 {
 	void *db_aligned;
 
-	pthread_spin_destroy(&wq->wqlock);
+	if (wq->need_lock)
+		pthread_spin_destroy(&wq->wqlock);
 
 	db_aligned = (void *)((uintptr_t)wq->db & ~(pgsz - 1));
 	munmap(db_aligned, pgsz);
@@ -1123,7 +1410,9 @@ static int efa_wq_initialize(struct efa_wq *wq, struct efa_wq_init_attr *attr)
 	for (i = 0; i < wq->wqe_cnt; i++)
 		wq->wrid_idx_pool[i] = i;
 
-	pthread_spin_init(&wq->wqlock, PTHREAD_PROCESS_PRIVATE);
+	wq->need_lock = attr->need_lock;
+	if (wq->need_lock)
+		pthread_spin_init(&wq->wqlock, PTHREAD_PROCESS_PRIVATE);
 
 	wq->sub_cq_idx = attr->sub_cq_idx;
 
@@ -1134,6 +1423,24 @@ err_free_wrid_idx_pool:
 err_free_wrid:
 	free(wq->wrid);
 	return err;
+}
+
+static bool efa_check_cq_on_same_pd_td(struct ibv_pd *ibvpd, struct ibv_cq *ibvcq)
+{
+	struct efa_parent_domain *parent_domain;
+	struct efa_pd *pd;
+	struct efa_cq *cq;
+
+	pd = to_efa_pd(ibvpd);
+	cq = to_efa_cq(ibvcq);
+
+	if (pd->orig_pd) {
+		parent_domain = to_efa_parent_domain(ibvpd);
+		if (parent_domain == cq->parent_domain && parent_domain->td)
+			return true;
+	}
+
+	return false;
 }
 
 static void efa_sq_terminate(struct efa_qp *qp)
@@ -1157,10 +1464,13 @@ static int efa_sq_initialize(struct efa_qp *qp,
 	struct efa_wq_init_attr wq_attr;
 	struct efa_sq *sq = &qp->sq;
 	size_t desc_ring_size;
+	bool need_lock;
 	int err;
 
 	if (!sq->wq.wqe_cnt)
 		return 0;
+
+	need_lock = !efa_check_cq_on_same_pd_td(attr->pd, attr->send_cq);
 
 	wq_attr = (struct efa_wq_init_attr) {
 		.db_mmap_key = resp->sq_db_mmap_key,
@@ -1168,6 +1478,7 @@ static int efa_sq_initialize(struct efa_qp *qp,
 		.cmd_fd = qp->verbs_qp.qp.context->cmd_fd,
 		.pgsz = qp->page_size,
 		.sub_cq_idx = resp->send_sub_cq_idx,
+		.need_lock = need_lock,
 	};
 
 	err = efa_wq_initialize(&qp->sq.wq, &wq_attr);
@@ -1233,14 +1544,19 @@ static void efa_rq_terminate(struct efa_qp *qp)
 	efa_wq_terminate(&rq->wq, qp->page_size);
 }
 
-static int efa_rq_initialize(struct efa_qp *qp, struct efa_create_qp_resp *resp)
+static int efa_rq_initialize(struct efa_qp *qp,
+			     const struct ibv_qp_init_attr_ex *attr,
+			     struct efa_create_qp_resp *resp)
 {
 	struct efa_wq_init_attr wq_attr;
 	struct efa_rq *rq = &qp->rq;
+	bool need_lock;
 	int err;
 
 	if (!rq->wq.wqe_cnt)
 		return 0;
+
+	need_lock = !efa_check_cq_on_same_pd_td(attr->pd, attr->recv_cq);
 
 	wq_attr = (struct efa_wq_init_attr) {
 		.db_mmap_key = resp->rq_db_mmap_key,
@@ -1248,6 +1564,7 @@ static int efa_rq_initialize(struct efa_qp *qp, struct efa_create_qp_resp *resp)
 		.cmd_fd = qp->verbs_qp.qp.context->cmd_fd,
 		.pgsz = qp->page_size,
 		.sub_cq_idx = resp->recv_sub_cq_idx,
+		.need_lock = need_lock,
 	};
 
 	err = efa_wq_initialize(&qp->rq.wq, &wq_attr);
@@ -1461,10 +1778,12 @@ static struct ibv_qp *create_qp(struct ibv_context *ibvctx,
 {
 	struct efa_context *ctx = to_efa_context(ibvctx);
 	struct efa_dev *dev = to_efa_dev(ibvctx->device);
+	struct efa_parent_domain *parent_domain;
 	struct efa_create_qp_resp resp = {};
 	struct efa_create_qp req = {};
 	struct ibv_qp *ibvqp;
 	struct efa_qp *qp;
+	struct efa_pd *pd;
 	int err;
 
 	err = efa_check_qp_attr(ctx, attr, efa_attr);
@@ -1508,7 +1827,7 @@ static struct ibv_qp *create_qp(struct ibv_context *ibvctx,
 	qp->sq_sig_all = attr->sq_sig_all;
 	qp->dev = ibvctx->device;
 
-	err = efa_rq_initialize(qp, &resp);
+	err = efa_rq_initialize(qp, attr, &resp);
 	if (err)
 		goto err_destroy_qp;
 
@@ -1523,6 +1842,13 @@ static struct ibv_qp *create_qp(struct ibv_context *ibvctx,
 	if (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS) {
 		efa_qp_fill_wr_pfns(&qp->verbs_qp.qp_ex, attr);
 		qp->verbs_qp.comp_mask |= VERBS_QP_EX;
+	}
+
+	pd = to_efa_pd(attr->pd);
+	if (pd->orig_pd) {
+		parent_domain = to_efa_parent_domain(attr->pd);
+		qp->parent_domain = parent_domain;
+		atomic_fetch_add(&parent_domain->refcount, 1);
 	}
 
 	return ibvqp;
@@ -1628,7 +1954,7 @@ struct ibv_qp *efadv_create_qp_ex(struct ibv_context *ibvctx,
 	    !vext_field_avail(struct efadv_qp_init_attr,
 			      driver_qp_type, inlen) ||
 	    efa_attr->comp_mask ||
-	    !is_reserved_cleared(efa_attr->reserved) ||
+	    efa_attr->reserved ||
 	    (inlen > sizeof(*efa_attr) && !is_ext_cleared(efa_attr, inlen))) {
 		verbs_err(verbs_get_ctx(ibvctx), "Compatibility issues\n");
 		errno = EINVAL;
@@ -1672,6 +1998,38 @@ int efa_query_qp(struct ibv_qp *ibvqp, struct ibv_qp_attr *attr,
 				&cmd, sizeof(cmd));
 }
 
+int efadv_query_qp_wqs(struct ibv_qp *ibvqp, struct efadv_wq_attr *sq_attr,
+		       struct efadv_wq_attr *rq_attr, uint32_t inlen)
+{
+	struct efa_qp *qp = to_efa_qp(ibvqp);
+
+	if (!is_efa_dev(ibvqp->context->device)) {
+		verbs_err(verbs_get_ctx(ibvqp->context), "Not an EFA device\n");
+		return EOPNOTSUPP;
+	}
+
+	if (!vext_field_avail(typeof(*sq_attr), max_batch, inlen)) {
+		verbs_err(verbs_get_ctx(ibvqp->context), "Compatibility issues\n");
+		return EINVAL;
+	}
+
+	sq_attr->comp_mask = 0;
+	sq_attr->buffer = qp->sq.desc;
+	sq_attr->entry_size = sizeof(struct efa_io_tx_wqe);
+	sq_attr->num_entries = qp->sq.wq.wqe_cnt;
+	sq_attr->doorbell = qp->sq.wq.db;
+	sq_attr->max_batch = qp->sq.max_batch_wr;
+
+	rq_attr->comp_mask = 0;
+	rq_attr->buffer = qp->rq.buf;
+	rq_attr->entry_size = sizeof(struct efa_io_rx_desc);
+	rq_attr->num_entries = qp->rq.wq.desc_mask + 1;
+	rq_attr->doorbell = qp->rq.wq.db;
+	rq_attr->max_batch = rq_attr->num_entries;
+
+	return 0;
+}
+
 int efa_query_qp_data_in_order(struct ibv_qp *ibvqp, enum ibv_wr_opcode op,
 			       uint32_t flags)
 {
@@ -1696,6 +2054,9 @@ int efa_destroy_qp(struct ibv_qp *ibvqp)
 			  ibvqp->qp_num);
 		return err;
 	}
+
+	if (qp->parent_domain)
+		atomic_fetch_sub(&qp->parent_domain->refcount, 1);
 
 	pthread_spin_lock(&ctx->qp_table_lock);
 	efa_lock_cqs(ibvqp);
@@ -1812,7 +2173,7 @@ static void efa_set_common_ctrl_flags(struct efa_io_tx_meta_desc *desc,
 	EFA_SET(&desc->ctrl2, EFA_IO_TX_META_DESC_COMP_REQ, 1);
 }
 
-#ifdef LTTNG_ENABLED
+#if defined(LTTNG_ENABLED) || defined(USDT_ENABLED)
 static uint32_t efa_get_wqe_length(struct efa_io_tx_wqe *tx_wqe)
 {
 	enum efa_io_send_op_type op_type;
@@ -1930,7 +2291,11 @@ int efa_post_send(struct ibv_qp *ibvqp, struct ibv_send_wr *wr,
 	struct efa_ah *ah;
 	int err = 0;
 
-	mmio_wc_spinlock(&wq->wqlock);
+	if (wq->need_lock)
+		mmio_wc_spinlock(&wq->wqlock);
+	else
+		mmio_wc_start();
+
 	while (wr) {
 		err = efa_post_send_validate_wr(qp, wr);
 		if (err) {
@@ -1997,7 +2362,9 @@ ring_db:
 	 * Not using mmio_wc_spinunlock as the doorbell write should be done
 	 * inside the lock.
 	 */
-	pthread_spin_unlock(&wq->wqlock);
+	if (wq->need_lock)
+		pthread_spin_unlock(&wq->wqlock);
+
 	return err;
 }
 
@@ -2273,7 +2640,11 @@ static void efa_send_wr_start(struct ibv_qp_ex *ibvqpx)
 	struct efa_qp *qp = to_efa_qp_ex(ibvqpx);
 	struct efa_sq *sq = &qp->sq;
 
-	mmio_wc_spinlock(&qp->sq.wq.wqlock);
+	if (qp->sq.wq.need_lock)
+		mmio_wc_spinlock(&qp->sq.wq.wqlock);
+	else
+		mmio_wc_start();
+
 	qp->wr_session_err = 0;
 	sq->num_wqe_pending = 0;
 	sq->phase_rb = qp->sq.wq.phase;
@@ -2351,7 +2722,8 @@ out:
 	 * Not using mmio_wc_spinunlock as the doorbell write should be done
 	 * inside the lock.
 	 */
-	pthread_spin_unlock(&sq->wq.wqlock);
+	if (sq->wq.need_lock)
+		pthread_spin_unlock(&sq->wq.wqlock);
 
 	return qp->wr_session_err;
 }
@@ -2361,7 +2733,8 @@ static void efa_send_wr_abort(struct ibv_qp_ex *ibvqpx)
 	struct efa_sq *sq = &to_efa_qp_ex(ibvqpx)->sq;
 
 	efa_sq_roll_back(sq);
-	pthread_spin_unlock(&sq->wq.wqlock);
+	if (sq->wq.need_lock)
+		pthread_spin_unlock(&sq->wq.wqlock);
 }
 
 static void efa_qp_fill_wr_pfns(struct ibv_qp_ex *ibvqpx,
@@ -2434,7 +2807,9 @@ int efa_post_recv(struct ibv_qp *ibvqp, struct ibv_recv_wr *wr,
 	int err = 0;
 	size_t i;
 
-	pthread_spin_lock(&wq->wqlock);
+	if (wq->need_lock)
+		pthread_spin_lock(&wq->wqlock);
+
 	while (wr) {
 		err = efa_post_recv_validate(qp, wr);
 		if (err) {
@@ -2487,7 +2862,9 @@ int efa_post_recv(struct ibv_qp *ibvqp, struct ibv_recv_wr *wr,
 ring_db:
 	efa_rq_ring_doorbell(&qp->rq, wq->pc);
 
-	pthread_spin_unlock(&wq->wqlock);
+	if (wq->need_lock)
+		pthread_spin_unlock(&wq->wqlock);
+
 	return err;
 }
 
@@ -2553,6 +2930,41 @@ int efa_destroy_ah(struct ibv_ah *ibvah)
 		return err;
 	}
 	free(ah);
+
+	return 0;
+}
+
+struct ibv_td *efa_alloc_td(struct ibv_context *ibvctx, struct ibv_td_init_attr *init_attr)
+{
+	struct efa_td *td;
+
+	if (!check_comp_mask(init_attr->comp_mask, 0)) {
+		verbs_err(verbs_get_ctx(ibvctx), "Invalid comp_mask\n");
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	td = calloc(1, sizeof(*td));
+	if (!td) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	td->ibvtd.context = ibvctx;
+	atomic_init(&td->refcount, 0);
+
+	return &td->ibvtd;
+}
+
+int efa_dealloc_td(struct ibv_td *ibvtd)
+{
+	struct efa_td *td;
+
+	td = to_efa_td(ibvtd);
+	if (atomic_load(&td->refcount) > 0)
+		return EBUSY;
+
+	free(td);
 
 	return 0;
 }

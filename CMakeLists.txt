@@ -24,7 +24,7 @@
 #      Use the historical search path for providers, in the standard system library.
 #  -DNO_COMPAT_SYMS=1 (default disabled)
 #      Do not generate backwards compatibility symbols in the shared
-#      libraries. This may is necessary if using a dynmic linker that does
+#      libraries. This may be necessary if using a dynamic linker that does
 #      not support symbol versions, such as uclibc.
 #  -DIOCTL_MODE=write (default both)
 #      Disable new kABI ioctl() support and support only the legacy write
@@ -52,8 +52,9 @@
 #      Disable man pages. Allows rdma-core to be built and installed
 #      (without man pages) when neither pandoc/rst2man nor the pandoc-prebuilt
 #      directory are available.
-#   -DENABLE_LTTNG (default, no tracing support)
-#      Enable LTTng tracing.
+#   -DTRACING=LTTNG/USDT/None (default None)
+#      Enable LTTng (Linux Trace Toolkit) or USDT (Userspace Statically Defined)
+#      trace points for dynamic tracing.
 
 if (${CMAKE_VERSION} VERSION_LESS "3.18.1")
 	# Centos 7 support
@@ -79,11 +80,11 @@ endif()
 set(PACKAGE_NAME "RDMA")
 
 # See Documentation/versioning.md
-set(PACKAGE_VERSION "59.0")
+set(PACKAGE_VERSION "63.0")
 # When this is changed the values in these files need changing too:
 #   debian/control
 #   debian/libibverbs1.symbols
-set(IBVERBS_PABI_VERSION "57")
+set(IBVERBS_PABI_VERSION "59")
 set(IBVERBS_PROVIDER_SUFFIX "-rdmav${IBVERBS_PABI_VERSION}.so")
 
 #-------------------------
@@ -170,6 +171,9 @@ endif()
 
 set(DISTRO_FLAVOUR "None" CACHE
   STRING "Flavour of distribution to install for. This primarily impacts the init.d scripts installed.")
+
+set(TRACING "None" CACHE
+  STRING "Enable LTTNG (Linux Trace Toolkit) or USDT (Userspace Statically Defined Tracing).")
 
 #-------------------------
 # Load CMake components
@@ -549,6 +553,19 @@ find_package(Systemd)
 include_directories(${SYSTEMD_INCLUDE_DIRS})
 RDMA_DoFixup("${SYSTEMD_FOUND}" "systemd/sd-daemon.h")
 
+# https://www.freedesktop.org/software/systemd/man/latest/sysusers.d.html
+set(SYSUSERS_DIR "")
+if (NOT ${CMAKE_VERSION} VERSION_LESS "3.4")
+  pkg_check_modules(SYSTEMD_PC systemd QUIET)
+  if (SYSTEMD_PC_FOUND)
+    pkg_get_variable(SYSUSERS_DIR systemd sysusersdir)
+  endif()
+endif()
+if ("${SYSUSERS_DIR}" STREQUAL "")
+  set(SYSUSERS_DIR "/usr/lib/sysusers.d")
+endif()
+install(FILES rdma-sysusers.conf DESTINATION "${SYSUSERS_DIR}" RENAME rdma.conf)
+
 # drm headers
 
 # Check if the headers have been installed by kernel-headers
@@ -567,10 +584,15 @@ if (DRM_INCLUDE_DIRS)
   endif()
 endif()
 
-# LTTng Tracer support
-if (DEFINED ENABLE_LTTNG)
+# Dynamic Tracing support
+if (TRACING STREQUAL "LTTNG")
+  set(ENABLE_LTTNG 1)
   include(FindLTTngUST REQUIRED)
   add_definitions(-DLTTNG_ENABLED)
+elseif (TRACING STREQUAL "USDT")
+  add_definitions(-DUSDT_ENABLED)
+elseif (NOT TRACING STREQUAL "None")
+  message(FATAL_ERROR "-DTRACING=${TRACING} is not a valid choice")
 endif()
 
 #-------------------------
@@ -731,6 +753,7 @@ add_subdirectory(providers/efa/man)
 add_subdirectory(providers/erdma)
 add_subdirectory(providers/hns)
 add_subdirectory(providers/hns/man)
+add_subdirectory(providers/ionic)
 add_subdirectory(providers/irdma)
 add_subdirectory(providers/mana)
 add_subdirectory(providers/mana/man)

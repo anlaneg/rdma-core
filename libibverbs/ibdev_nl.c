@@ -213,7 +213,7 @@ int find_sysfs_devs_nl(struct list_head *tmp_sysfs_dev_list/*收集系统中可�
 
 	nl = rdmanl_socket_alloc();
 	if (!nl)
-		return -EOPNOTSUPP;
+		return EOPNOTSUPP;
 
 	//通过netlink向kernel发送请求，要求列取当前net namespace所有ib设备，记在tmp_sysfs_dev_list上
 	if (rdmanl_get_devices(nl, find_sysfs_devs_nl_cb/*处理返回的ib设备信息*/, tmp_sysfs_dev_list/*回调参数*/))

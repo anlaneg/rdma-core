@@ -50,6 +50,13 @@ static struct ibv_dm *alloc_dm(struct ibv_context *context,
 	return NULL;
 }
 
+static struct ibv_dmah *alloc_dmah(struct ibv_context *context,
+				   struct ibv_dmah_init_attr *attr)
+{
+	errno = EOPNOTSUPP;
+	return NULL;
+}
+
 static struct ibv_mw *alloc_mw(struct ibv_pd *pd, enum ibv_mw_type type)
 {
 	errno = EOPNOTSUPP;
@@ -202,6 +209,11 @@ static struct ibv_wq *create_wq(struct ibv_context *context,
 	return NULL;
 }
 
+static int dealloc_dmah(struct ibv_dmah *st)
+{
+	return EOPNOTSUPP;
+}
+
 static int dealloc_mw(struct ibv_mw *mw)
 {
 	return EOPNOTSUPP;
@@ -271,6 +283,12 @@ static int detach_mcast(struct ibv_qp *qp, const union ibv_gid *gid,
 			uint16_t lid)
 {
 	return EOPNOTSUPP;
+}
+
+static int dm_export_dmabuf_fd(struct ibv_dm *dm)
+{
+	errno = EOPNOTSUPP;
+	return -1;
 }
 
 static void free_context(struct ibv_context *ctx)
@@ -409,6 +427,12 @@ static int query_port(struct ibv_context *context, uint8_t port_num,
 	return EOPNOTSUPP;
 }
 
+static int query_port_speed(struct ibv_context *context, uint32_t port_num,
+			    uint64_t *speed)
+{
+	return EOPNOTSUPP;
+}
+
 static int query_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask,
 		    struct ibv_qp_init_attr *init_attr)
 {
@@ -444,6 +468,13 @@ static struct ibv_mr *reg_dm_mr(struct ibv_pd *pd, struct ibv_dm *dm,
 
 static struct ibv_mr *reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 			     uint64_t hca_va,  int access)
+{
+	errno = EOPNOTSUPP;
+	return NULL;
+}
+
+static struct ibv_mr *reg_mr_ex(struct ibv_pd *pd,
+				struct ibv_mr_init_attr *mr_init_attr)
 {
 	errno = EOPNOTSUPP;
 	return NULL;
@@ -505,6 +536,7 @@ static void unimport_pd(struct ibv_pd *pd)
 const struct verbs_context_ops verbs_dummy_ops = {
 	advise_mr,
 	alloc_dm,
+	alloc_dmah,
 	alloc_mw,
 	alloc_null_mr,
 	alloc_parent_domain,
@@ -528,6 +560,7 @@ const struct verbs_context_ops verbs_dummy_ops = {
 	create_srq,
 	create_srq_ex,
 	create_wq,
+	dealloc_dmah,
 	dealloc_mw,
 	dealloc_pd,
 	dealloc_td,
@@ -542,6 +575,7 @@ const struct verbs_context_ops verbs_dummy_ops = {
 	destroy_srq,
 	destroy_wq,
 	detach_mcast,
+	dm_export_dmabuf_fd,
 	free_context,
 	free_dm,
 	get_srq_num,
@@ -564,6 +598,7 @@ const struct verbs_context_ops verbs_dummy_ops = {
 	query_device_ex,
 	query_ece,
 	query_port,
+	query_port_speed,
 	query_qp,
 	query_qp_data_in_order,
 	query_rt_values,
@@ -572,6 +607,7 @@ const struct verbs_context_ops verbs_dummy_ops = {
 	reg_dm_mr,
 	reg_dmabuf_mr,
 	reg_mr,
+	reg_mr_ex,
 	req_notify_cq,
 	rereg_mr,
 	resize_cq,
@@ -640,6 +676,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	 * 其外层的函数也会被设置（vctx->$name = ops->name）*/
 	SET_OP(vctx, advise_mr);
 	SET_OP(vctx, alloc_dm);
+	SET_OP(vctx, alloc_dmah);
 	SET_OP(ctx, alloc_mw);
 	SET_OP(vctx, alloc_null_mr);
 	SET_PRIV_OP(ctx, alloc_pd);/*priv标记的是特例：其在设置外层时，函数名称会有附加前缀的变化*/
@@ -663,6 +700,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_PRIV_OP(ctx, create_srq);
 	SET_OP(vctx, create_srq_ex);
 	SET_OP(vctx, create_wq);
+	SET_OP(vctx, dealloc_dmah);
 	SET_OP(ctx, dealloc_mw);
 	SET_PRIV_OP(ctx, dealloc_pd);
 	SET_OP(vctx, dealloc_td);
@@ -677,6 +715,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_PRIV_OP(ctx, destroy_srq);
 	SET_OP(vctx, destroy_wq);
 	SET_PRIV_OP(ctx, detach_mcast);
+	SET_OP(vctx, dm_export_dmabuf_fd);
 	SET_PRIV_OP_IC(ctx, free_context);
 	SET_OP(vctx, free_dm);
 	SET_OP(vctx, get_srq_num);
@@ -699,6 +738,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_OP(vctx, query_device_ex);
 	SET_PRIV_OP_IC(vctx, query_ece);
 	SET_PRIV_OP_IC(ctx, query_port);
+	SET_PRIV_OP_IC(ctx, query_port_speed);
 	SET_PRIV_OP(ctx, query_qp);
 	SET_PRIV_OP_IC(ctx, query_qp_data_in_order);
 	SET_OP(vctx, query_rt_values);
@@ -707,6 +747,7 @@ void verbs_set_ops(struct verbs_context *vctx,
 	SET_OP(vctx, reg_dm_mr);
 	SET_PRIV_OP_IC(vctx, reg_dmabuf_mr);
 	SET_PRIV_OP(ctx, reg_mr);
+	SET_OP(vctx, reg_mr_ex);
 	SET_OP(ctx, req_notify_cq);
 	SET_PRIV_OP(ctx, rereg_mr);
 	SET_PRIV_OP(ctx, resize_cq);

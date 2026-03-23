@@ -645,6 +645,7 @@ struct mlx5_dm {
 	void			       *mmap_va;
 	void			       *start_va;
 	uint64_t			remote_va;
+	off_t pg_off;
 };
 
 struct mlx5_mr {
@@ -808,6 +809,26 @@ struct mlx5_var_obj {
 	uint32_t handle;
 };
 
+struct mlx5dv_var_attrs {
+	uint32_t handle;
+	uint32_t page_id;
+	uint32_t length;
+	off_t mmap_off;
+};
+
+struct mlx5dv_devx_obj_attrs {
+	uint32_t handle;
+	uint32_t type;
+	uint32_t object_id;
+	uint64_t rx_icm_addr;
+	uint8_t log_obj_range;
+};
+
+struct mlx5dv_devx_umem_attrs {
+	uint32_t handle;
+	uint32_t umem_id;
+};
+
 struct mlx5_pp_obj {
 	struct mlx5dv_pp dv_pp;
 	struct ibv_context *context;
@@ -959,11 +980,11 @@ struct mlx5_devx_eq {
 };
 
 struct ibv_flow *
-_mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
-		    struct mlx5dv_flow_match_parameters *match_value,
-		    size_t num_actions,
-		    struct mlx5dv_flow_action_attr actions_attr[],
-		    struct mlx5_flow_action_attr_aux actions_attr_aux[]);
+___mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
+		      struct mlx5dv_flow_match_parameters *match_value,
+		      size_t num_actions,
+		      struct mlx5dv_flow_action_attr actions_attr[],
+		      size_t attr_len);
 
 extern int mlx5_stall_num_loop;
 extern int mlx5_stall_cq_poll_min;
@@ -1132,6 +1153,8 @@ struct ibv_qp *mlx5_create_qp_ex(struct ibv_context *context,
 				 struct ibv_qp_init_attr_ex *attr);
 int mlx5_query_port(struct ibv_context *context, uint8_t port,
 		     struct ibv_port_attr *attr);
+int mlx5_query_port_speed(struct ibv_context *context, uint32_t port,
+			  uint64_t *speed);
 
 struct ibv_pd *mlx5_alloc_pd(struct ibv_context *context);
 int mlx5_free_pd(struct ibv_pd *pd);
@@ -1144,6 +1167,7 @@ struct ibv_mr *mlx5_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 			   uint64_t hca_va, int access);
 struct ibv_mr *mlx5_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length,
 				  uint64_t iova, int fd, int access);
+struct ibv_mr *mlx5_reg_mr_ex(struct ibv_pd *pd, struct ibv_mr_init_attr *mr_init_attr);
 int mlx5_rereg_mr(struct verbs_mr *mr, int flags, struct ibv_pd *pd, void *addr,
 		  size_t length, int access);
 int mlx5_dereg_mr(struct verbs_mr *mr);
@@ -1267,6 +1291,7 @@ int mlx5_modify_flow_action_esp(struct ibv_flow_action *action,
 struct ibv_dm *mlx5_alloc_dm(struct ibv_context *context,
 			     struct ibv_alloc_dm_attr *dm_attr);
 int mlx5_free_dm(struct ibv_dm *ibdm);
+int mlx5_dm_export_dmabuf_fd(struct ibv_dm *dm);
 struct ibv_mr *mlx5_reg_dm_mr(struct ibv_pd *pd, struct ibv_dm *ibdm,
 			      uint64_t dm_offset, size_t length,
 			      unsigned int acc);
@@ -1277,6 +1302,9 @@ int mlx5_dealloc_td(struct ibv_td *td);
 struct ibv_pd *mlx5_alloc_parent_domain(struct ibv_context *context,
 					struct ibv_parent_domain_init_attr *attr);
 
+struct ibv_dmah *mlx5_alloc_dmah(struct ibv_context *context,
+				 struct ibv_dmah_init_attr *attr);
+int mlx5_dealloc_dmah(struct ibv_dmah *dmah);
 
 void *mlx5_mmap(struct mlx5_uar_info *uar, int index,
 		int cmd_fd, int page_size, int uar_type);
@@ -1583,11 +1611,12 @@ struct mlx5_dv_context_ops {
 	struct mlx5dv_flow_matcher *(*create_flow_matcher)(struct ibv_context *context,
 							   struct mlx5dv_flow_matcher_attr *attr);
 	int (*destroy_flow_matcher)(struct mlx5dv_flow_matcher *flow_matcher);
-	struct ibv_flow *(*create_flow)(struct mlx5dv_flow_matcher *flow_matcher,
-					struct mlx5dv_flow_match_parameters *match_value,
-					size_t num_actions,
-					struct mlx5dv_flow_action_attr actions_attr[],
-					struct mlx5_flow_action_attr_aux actions_attr_aux[]);
+	struct ibv_flow *(*create_flow)(
+		struct mlx5dv_flow_matcher *flow_matcher,
+		struct mlx5dv_flow_match_parameters *match_value,
+		size_t num_actions,
+		struct mlx5dv_flow_action_attr actions_attr[],
+		size_t attr_len);
 
 	struct mlx5dv_steering_anchor *(*create_steering_anchor)(struct ibv_context *conterxt,
 								 struct mlx5dv_steering_anchor_attr *attr);
@@ -1631,6 +1660,7 @@ struct mlx5_dv_context_ops {
 					size_t length, uint64_t iova, int fd,
 					int access, int mlx5_access);
 	int (*get_data_direct_sysfs_path)(struct ibv_context *context, char *buf, size_t buf_len);
+	int (*devx_uar_export_dmabuf_fd)(struct mlx5dv_devx_uar *dv_devx_uar);
 };
 
 struct mlx5_dv_context_ops *mlx5_get_dv_ops(struct ibv_context *context);

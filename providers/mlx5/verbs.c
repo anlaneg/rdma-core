@@ -59,6 +59,14 @@
 #include "wqe.h"
 #include "mlx5_ifc.h"
 
+#undef mlx5dv_create_flow
+
+struct ibv_flow *
+mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
+		   struct mlx5dv_flow_match_parameters *match_value,
+		   size_t num_actions,
+		   struct mlx5dv_flow_action_attr actions_attr[]);
+
 int mlx5_single_threaded = 0;
 
 static inline int is_xrc_tgt(int type)
@@ -121,6 +129,12 @@ int mlx5_query_port(struct ibv_context *context, uint8_t port,
 	struct ibv_query_port cmd;
 
 	return ibv_cmd_query_port(context, port, attr, &cmd, sizeof cmd);
+}
+
+int mlx5_query_port_speed(struct ibv_context *context, uint32_t port,
+			  uint64_t *speed)
+{
+	return ibv_cmd_query_port_speed(context, port, speed);
 }
 
 void mlx5_async_event(struct ibv_context *context,
@@ -449,6 +463,7 @@ static void mlx5_detach_dedicated_uar(struct ibv_context *context, struct mlx5_b
 
 struct ibv_td *mlx5_alloc_td(struct ibv_context *context, struct ibv_td_init_attr *init_attr)
 {
+	struct mlx5_context *ctx = to_mctx(context);
 	struct mlx5_td	*td;
 
 	if (init_attr->comp_mask) {
@@ -462,7 +477,12 @@ struct ibv_td *mlx5_alloc_td(struct ibv_context *context, struct ibv_td_init_att
 		return NULL;
 	}
 
-	td->bf = mlx5_attach_dedicated_uar(context, 0);
+	/* Check whether BlueFlame is supported on the device */
+	if (ctx->bf_reg_size)
+		td->bf = mlx5_attach_dedicated_uar(context, 0);
+	else
+		td->bf = ctx->nc_uar;
+
 	if (!td->bf) {
 		free(td);
 		return NULL;
@@ -482,7 +502,8 @@ int mlx5_dealloc_td(struct ibv_td *ib_td)
 	if (atomic_load(&td->refcount) > 1)
 		return EBUSY;
 
-	mlx5_detach_dedicated_uar(ib_td->context, td->bf);
+	if (!td->bf->singleton)
+		mlx5_detach_dedicated_uar(ib_td->context, td->bf);
 	free(td);
 
 	return 0;
@@ -648,6 +669,25 @@ struct ibv_mr *mlx5_reg_mr(struct ibv_pd *pd, void *addr, size_t length,
 		return NULL;
 	}
 	mr->alloc_flags = acc;
+
+	return &mr->vmr.ibv_mr;
+}
+
+struct ibv_mr *mlx5_reg_mr_ex(struct ibv_pd *pd, struct ibv_mr_init_attr *mr_init_attr)
+{
+	struct mlx5_mr *mr;
+	int ret;
+
+	mr = calloc(1, sizeof(*mr));
+	if (!mr)
+		return NULL;
+
+	ret = ibv_cmd_reg_mr_ex(pd, &mr->vmr, mr_init_attr);
+	if (ret) {
+		free(mr);
+		return NULL;
+	}
+	mr->alloc_flags = mr_init_attr->access;
 
 	return &mr->vmr.ibv_mr;
 }
@@ -1140,7 +1180,7 @@ static struct ibv_cq_ex *create_cq(struct ibv_context *context,
 		struct ibv_cq_init_attr_ex cq_attr_ex = *cq_attr;
 
 		cq_attr_ex.cqe = ncqe - 1;
-		ret = ibv_cmd_create_cq_ex2(context, &cq_attr_ex, &cq->verbs_cq,
+		ret = ibv_cmd_create_cq_ex2(context, &cq_attr_ex, NULL, &cq->verbs_cq,
 					    &cmd_ex.ibv_cmd, sizeof(cmd_ex),
 					    &resp_ex.ibv_resp, sizeof(resp_ex),
 					    CREATE_CQ_CMD_FLAGS_TS_IGNORED_EX,
@@ -2981,6 +3021,73 @@ int mlx5_query_qp(struct ibv_qp *ibqp, struct ibv_qp_attr *attr,
 
 	attr->cap = init_attr->cap;
 
+	return 0;
+}
+
+enum {
+	ALLOC_DMAH_SUPPORTED_COMP_MASK = IBV_DMAH_INIT_ATTR_MASK_CPU_ID |
+					 IBV_DMAH_INIT_ATTR_MASK_PH |
+					 IBV_DMAH_INIT_ATTR_MASK_TPH_MEM_TYPE,
+};
+
+enum {
+	ALLOC_DMAH_ST_COMP_MASK = IBV_DMAH_INIT_ATTR_MASK_CPU_ID |
+				  IBV_DMAH_INIT_ATTR_MASK_TPH_MEM_TYPE,
+};
+
+struct ibv_dmah *
+mlx5_alloc_dmah(struct ibv_context *context, struct ibv_dmah_init_attr *attr)
+{
+	struct verbs_dmah *dmah;
+	int ret;
+
+	if (!check_comp_mask(attr->comp_mask,
+			     ALLOC_DMAH_SUPPORTED_COMP_MASK)) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	if (!(attr->comp_mask & IBV_DMAH_INIT_ATTR_MASK_PH)) {
+		/* PH is a must */
+		errno = EINVAL;
+		return NULL;
+	}
+
+	/* ST is optional; however, partial data for it is not allowed */
+	if (attr->comp_mask & ALLOC_DMAH_ST_COMP_MASK) {
+		if ((attr->comp_mask & ALLOC_DMAH_ST_COMP_MASK) != ALLOC_DMAH_ST_COMP_MASK) {
+			errno = EINVAL;
+			return NULL;
+		}
+	}
+
+	dmah = calloc(1, sizeof(*dmah));
+	if (!dmah) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	ret = ibv_cmd_alloc_dmah(context, dmah, attr);
+	if (ret)
+		goto err;
+
+	return &dmah->dmah;
+
+err:
+	free(dmah);
+	return NULL;
+}
+
+int mlx5_dealloc_dmah(struct ibv_dmah *dmah)
+{
+	struct verbs_dmah *vdmah = verbs_get_dmah(dmah);
+	int ret;
+
+	ret = ibv_cmd_free_dmah(vdmah);
+	if (ret)
+		return ret;
+
+	free(vdmah);
 	return 0;
 }
 
@@ -4968,8 +5075,10 @@ static void *dm_mmap(struct ibv_context *context, struct mlx5_dm *mdm,
 
 	set_command(MLX5_IB_MMAP_DEVICE_MEM, &offset);
 	set_extended_index(page_idx, &offset);
+	mdm->pg_off = page_size * offset;
+
 	return mmap(NULL, act_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-		    context->cmd_fd, page_size * offset);
+		    context->cmd_fd, mdm->pg_off);
 }
 
 static void *_mlx5dv_dm_map_op_addr(struct ibv_dm *dm, uint8_t op)
@@ -5292,6 +5401,11 @@ struct ibv_dm *mlx5_alloc_dm(struct ibv_context *context,
 	return mlx5dv_alloc_dm(context, dm_attr, &mlx5_attr);
 }
 
+int mlx5_dm_export_dmabuf_fd(struct ibv_dm *ibdm)
+{
+	return ibv_cmd_export_dmabuf_fd(ibdm->context, to_mdm(ibdm)->pg_off);
+}
+
 struct ibv_counters *mlx5_create_counters(struct ibv_context *context,
 					  struct ibv_counters_init_attr *init_attr)
 {
@@ -5527,20 +5641,22 @@ int mlx5dv_destroy_flow_matcher(struct mlx5dv_flow_matcher *flow_matcher)
 
 #define CREATE_FLOW_MAX_FLOW_ACTIONS_SUPPORTED 8
 struct ibv_flow *
-_mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
-		    struct mlx5dv_flow_match_parameters *match_value,
-		    size_t num_actions,
-		    struct mlx5dv_flow_action_attr actions_attr[],
-		    struct mlx5_flow_action_attr_aux actions_attr_aux[])
+___mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
+		      struct mlx5dv_flow_match_parameters *match_value,
+		      size_t num_actions,
+		      struct mlx5dv_flow_action_attr actions_attr[],
+		      size_t attr_len)
 {
 	uint32_t flow_actions[CREATE_FLOW_MAX_FLOW_ACTIONS_SUPPORTED];
 	struct verbs_flow_action *vaction;
+	struct mlx5dv_flow_action_attr *attr;
 	int num_flow_actions = 0;
 	struct mlx5_flow *mflow;
 	bool have_qp = false;
 	bool have_dest_devx = false;
 	bool have_flow_tag = false;
 	bool have_counter = false;
+	bool have_bulk_counter = false;
 	bool have_default = false;
 	bool have_drop = false;
 	int ret;
@@ -5563,8 +5679,9 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 		    match_value->match_sz);
 	fill_attr_in_obj(cmd, MLX5_IB_ATTR_CREATE_FLOW_MATCHER, flow_matcher->handle);
 
+	attr = actions_attr;
 	for (i = 0; i < num_actions; i++) {
-		type = actions_attr[i].type;
+		type = attr->type;
 		switch (type) {
 		case MLX5DV_FLOW_ACTION_DEST_IBV_QP:
 			if (have_qp || have_dest_devx || have_default ||
@@ -5573,7 +5690,7 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 				goto err;
 			}
 			fill_attr_in_obj(cmd, MLX5_IB_ATTR_CREATE_FLOW_DEST_QP,
-					 actions_attr[i].qp->handle);
+					 attr->qp->handle);
 			have_qp = true;
 			break;
 		case MLX5DV_FLOW_ACTION_IBV_FLOW_ACTION:
@@ -5582,7 +5699,7 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 				errno = EOPNOTSUPP;
 				goto err;
 			}
-			vaction = container_of(actions_attr[i].action,
+			vaction = container_of(attr->action,
 					       struct verbs_flow_action,
 					       action);
 
@@ -5596,7 +5713,7 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 				goto err;
 			}
 			fill_attr_in_obj(cmd, MLX5_IB_ATTR_CREATE_FLOW_DEST_DEVX,
-					 actions_attr[i].obj->handle);
+					 attr->obj->handle);
 			have_dest_devx = true;
 			break;
 		case MLX5DV_FLOW_ACTION_TAG:
@@ -5606,24 +5723,17 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 			}
 			fill_attr_in_uint32(cmd,
 					    MLX5_IB_ATTR_CREATE_FLOW_TAG,
-					    actions_attr[i].tag_value);
+					    attr->tag_value);
 			have_flow_tag = true;
 			break;
 		case MLX5DV_FLOW_ACTION_COUNTERS_DEVX:
-			if (have_counter) {
+			if (have_counter || have_bulk_counter) {
 				errno = EOPNOTSUPP;
 				goto err;
 			}
 			fill_attr_in_objs_arr(cmd,
 					      MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX,
-					      &actions_attr[i].obj->handle, 1);
-
-			if (actions_attr_aux &&
-			    actions_attr_aux[i].type == MLX5_FLOW_ACTION_COUNTER_OFFSET)
-				fill_attr_in_ptr_array(cmd,
-						       MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET,
-						       &actions_attr_aux[i].offset, 1);
-
+					      &attr->obj->handle, 1);
 			have_counter = true;
 			break;
 		case MLX5DV_FLOW_ACTION_DEFAULT_MISS:
@@ -5648,10 +5758,25 @@ _mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 					    MLX5_IB_ATTR_CREATE_FLOW_FLAGS_DROP);
 			have_drop = true;
 			break;
+		case MLX5DV_FLOW_ACTION_COUNTERS_DEVX_WITH_OFFSET:
+			if (have_counter || have_bulk_counter) {
+				errno = EOPNOTSUPP;
+				goto err;
+			}
+			fill_attr_in_objs_arr(cmd,
+					      MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX,
+					      &attr->bulk_obj.obj->handle, 1);
+			fill_attr_in_ptr_array(cmd,
+					       MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET,
+					       &attr->bulk_obj.offset, 1);
+			have_bulk_counter = true;
+			break;
 		default:
 			errno = EOPNOTSUPP;
 			goto err;
 		}
+
+		attr = (void *)attr + attr_len;
 	}
 
 	if (num_flow_actions)
@@ -5672,10 +5797,11 @@ err:
 }
 
 struct ibv_flow *
-mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
-		   struct mlx5dv_flow_match_parameters *match_value,
-		   size_t num_actions,
-		   struct mlx5dv_flow_action_attr actions_attr[])
+__mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
+		     struct mlx5dv_flow_match_parameters *match_value,
+		     size_t num_actions,
+		     struct mlx5dv_flow_action_attr actions_attr[],
+		     size_t attr_len)
 {
 	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(flow_matcher->context);
 
@@ -5688,7 +5814,29 @@ mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
 				  match_value,
 				  num_actions,
 				  actions_attr,
-				  NULL);
+				  attr_len);
+}
+
+struct ibv_flow *
+mlx5dv_create_flow(struct mlx5dv_flow_matcher *flow_matcher,
+		   struct mlx5dv_flow_match_parameters *match_value,
+		   size_t num_actions,
+		   struct mlx5dv_flow_action_attr actions_attr[])
+{
+	size_t legacy_size = offsetof(struct mlx5dv_flow_action_attr, obj) +
+		sizeof(((struct mlx5dv_flow_action_attr *)0)->obj);
+
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(flow_matcher->context);
+
+	if (!dvops || !dvops->create_flow) {
+		errno = EOPNOTSUPP;
+		return NULL;
+	}
+
+	return dvops->create_flow(flow_matcher,
+				  match_value,
+				  num_actions,
+				  actions_attr, legacy_size);
 }
 
 static struct mlx5dv_steering_anchor *
@@ -5927,6 +6075,49 @@ int mlx5dv_devx_umem_dereg(struct mlx5dv_devx_umem *dv_devx_umem)
 
 }
 
+int mlx5dv_devx_umem_export(struct mlx5dv_devx_umem *dv_devx_umem,
+			    void *data)
+{
+	struct mlx5_devx_umem *umem = container_of(dv_devx_umem,
+						   struct mlx5_devx_umem,
+						   dv_devx_umem);
+	struct mlx5dv_devx_umem_attrs *attrs = data;
+
+	memset(data, 0, sizeof(*attrs));
+	attrs->handle = umem->handle;
+	attrs->umem_id = dv_devx_umem->umem_id;
+
+	return 0;
+}
+
+struct mlx5dv_devx_umem *
+mlx5dv_devx_umem_import(struct ibv_context *context, void *data)
+{
+	struct mlx5dv_devx_umem_attrs *attrs = data;
+	struct mlx5_devx_umem *umem;
+
+	umem = calloc(1, sizeof(*umem));
+	if (!umem) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	umem->handle = attrs->handle;
+	umem->context = context;
+	umem->dv_devx_umem.umem_id = attrs->umem_id;
+
+	return &umem->dv_devx_umem;
+}
+
+void mlx5dv_devx_umem_unimport(struct mlx5dv_devx_umem *dv_devx_umem)
+{
+	struct mlx5_devx_umem *umem = container_of(dv_devx_umem,
+						   struct mlx5_devx_umem,
+						   dv_devx_umem);
+
+	free(umem);
+}
+
 static void set_devx_obj_info(const void *in, const void *out,
 			      struct mlx5dv_devx_obj *obj)
 {
@@ -6121,6 +6312,47 @@ int mlx5dv_devx_obj_destroy(struct mlx5dv_devx_obj *obj)
 	return dvops->devx_obj_destroy(obj);
 }
 
+int mlx5dv_devx_obj_export(struct mlx5dv_devx_obj *obj, void *data)
+{
+	struct mlx5dv_devx_obj_attrs *attrs = data;
+
+	memset(data, 0, sizeof(*attrs));
+	attrs->handle = obj->handle;
+	attrs->type = obj->type;
+	attrs->object_id = obj->object_id;
+	attrs->rx_icm_addr = obj->rx_icm_addr;
+	attrs->log_obj_range = obj->log_obj_range;
+
+	return 0;
+}
+
+struct mlx5dv_devx_obj *mlx5dv_devx_obj_import(struct ibv_context *context,
+					       void *data)
+{
+	struct mlx5dv_devx_obj_attrs *attrs = data;
+	struct mlx5dv_devx_obj *obj;
+
+	obj = calloc(1, sizeof(*obj));
+	if (!obj) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	obj->handle = attrs->handle;
+	obj->type = attrs->type;
+	obj->object_id = attrs->object_id;
+	obj->rx_icm_addr = attrs->rx_icm_addr;
+	obj->log_obj_range = attrs->log_obj_range;
+	obj->context = context;
+
+	return obj;
+}
+
+void mlx5dv_devx_obj_unimport(struct mlx5dv_devx_obj *obj)
+{
+	free(obj);
+}
+
 static int _mlx5dv_devx_general_cmd(struct ibv_context *context, const void *in,
 				    size_t inlen, void *out, size_t outlen)
 {
@@ -6287,6 +6519,29 @@ void mlx5dv_devx_free_uar(struct mlx5dv_devx_uar *dv_devx_uar)
 		return;
 
 	dvops->devx_free_uar(dv_devx_uar);
+}
+
+static int
+_mlx5dv_devx_uar_export_dmabuf_fd(struct mlx5dv_devx_uar *dv_devx_uar)
+{
+	struct mlx5_devx_uar *uar = container_of(dv_devx_uar, struct mlx5_devx_uar,
+						 dv_devx_uar);
+
+	return ibv_cmd_export_dmabuf_fd(uar->context, dv_devx_uar->mmap_off);
+}
+
+int mlx5dv_devx_uar_export_dmabuf_fd(struct mlx5dv_devx_uar *dv_devx_uar)
+{
+	struct mlx5_devx_uar *uar = container_of(dv_devx_uar, struct mlx5_devx_uar,
+						 dv_devx_uar);
+	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(uar->context);
+
+	if (!dvops || !dvops->devx_uar_export_dmabuf_fd) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+
+	return dvops->devx_uar_export_dmabuf_fd(dv_devx_uar);
 }
 
 static int _mlx5dv_devx_query_eqn(struct ibv_context *context,
@@ -7788,13 +8043,13 @@ _mlx5dv_alloc_var(struct ibv_context *context, uint32_t flags)
 	DECLARE_COMMAND_BUFFER(cmd,
 			       MLX5_IB_OBJECT_VAR,
 			       MLX5_IB_METHOD_VAR_OBJ_ALLOC,
-			       4);
+			       5);
 
 	struct ib_uverbs_attr *handle;
 	struct mlx5_var_obj *obj;
 	int ret;
 
-	if (flags) {
+	if (!check_comp_mask(flags, MLX5DV_VAR_ALLOC_FLAG_TLP)) {
 		errno = EOPNOTSUPP;
 		return NULL;
 	}
@@ -7804,6 +8059,9 @@ _mlx5dv_alloc_var(struct ibv_context *context, uint32_t flags)
 		errno = ENOMEM;
 		return NULL;
 	}
+
+	if (flags)
+		fill_attr_in_uint32(cmd, MLX5_IB_ATTR_VAR_OBJ_ALLOC_FLAGS, flags);
 
 	handle = fill_attr_out_obj(cmd, MLX5_IB_ATTR_VAR_OBJ_ALLOC_HANDLE);
 	fill_attr_out_ptr(cmd, MLX5_IB_ATTR_VAR_OBJ_ALLOC_MMAP_OFFSET,
@@ -7867,6 +8125,61 @@ void mlx5dv_free_var(struct mlx5dv_var *dv_var)
 		return;
 
 	return dvops->free_var(dv_var);
+}
+
+int mlx5dv_var_export(struct mlx5dv_var *dv_var, void *data)
+{
+	struct mlx5_var_obj *obj = container_of(dv_var, struct mlx5_var_obj,
+						dv_var);
+	struct mlx5dv_var_attrs *attrs = data;
+
+	memset(data, 0, sizeof(*attrs));
+
+	attrs->handle = obj->handle;
+	attrs->page_id = dv_var->page_id;
+	attrs->length = dv_var->length;
+	attrs->mmap_off = dv_var->mmap_off;
+
+	return 0;
+}
+
+struct mlx5dv_var *mlx5dv_var_import(struct ibv_context *context,
+				     void *data)
+{
+	struct mlx5dv_var_attrs *attrs = data;
+	struct mlx5_var_obj *obj;
+
+	obj = calloc(1, sizeof(*obj));
+	if (!obj) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	obj->handle = attrs->handle;
+	obj->context = context;
+	obj->dv_var.page_id = attrs->page_id;
+	obj->dv_var.length = attrs->length;
+	obj->dv_var.mmap_off = attrs->mmap_off;
+
+	return &obj->dv_var;
+}
+
+void mlx5dv_var_unimport(struct mlx5dv_var *dv_var)
+{
+	struct mlx5_var_obj *obj = container_of(dv_var, struct mlx5_var_obj,
+						dv_var);
+
+	free(obj);
+}
+
+void _mlx5dv_get_export_sizes(struct mlx5dv_export_sizes *sizes,
+			      size_t sizes_len)
+{
+	memset(sizes, 0, sizes_len);
+
+	sizes->var_attrs_size = sizeof(struct mlx5dv_var_attrs);
+	sizes->devx_umem_attrs_size = sizeof(struct mlx5dv_devx_umem_attrs);
+	sizes->devx_obj_attrs_size = sizeof(struct mlx5dv_devx_obj_attrs);
 }
 
 static struct mlx5dv_pp *_mlx5dv_pp_alloc(struct ibv_context *context,
@@ -8054,6 +8367,7 @@ void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 
 	ops->devx_alloc_uar = _mlx5dv_devx_alloc_uar;
 	ops->devx_free_uar = _mlx5dv_devx_free_uar;
+	ops->devx_uar_export_dmabuf_fd = _mlx5dv_devx_uar_export_dmabuf_fd;
 
 	ops->devx_umem_reg = _mlx5dv_devx_umem_reg;
 	ops->devx_umem_reg_ex = _mlx5dv_devx_umem_reg_ex;
@@ -8092,7 +8406,7 @@ void mlx5_set_dv_ctx_ops(struct mlx5_dv_context_ops *ops)
 	ops->create_flow_action_packet_reformat = _mlx5dv_create_flow_action_packet_reformat;
 	ops->create_flow_matcher = _mlx5dv_create_flow_matcher;
 	ops->destroy_flow_matcher = _mlx5dv_destroy_flow_matcher;
-	ops->create_flow = _mlx5dv_create_flow;
+	ops->create_flow = ___mlx5dv_create_flow;
 
 	ops->map_ah_to_qp = _mlx5dv_map_ah_to_qp;
 	ops->query_port = __mlx5dv_query_port;/*查询port信息*/

@@ -20,7 +20,7 @@ cimport pyverbs.librdmacm as cm
 from pyverbs.cmid cimport CMID
 from pyverbs.xrcd cimport XRCD
 from pyverbs.addr cimport GID
-from pyverbs.mr import DMMR
+from pyverbs.mr import DMMR, DMAHandle
 from pyverbs.pd cimport PD
 from pyverbs.qp cimport QP
 from libc.stdlib cimport free, malloc
@@ -28,6 +28,7 @@ from libc.string cimport memset
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
+from libc.stdint cimport uintptr_t
 from pyverbs.utils import gid_str
 
 cdef extern from 'endian.h':
@@ -122,6 +123,8 @@ cdef class Context(PyverbsCM):
         self.wqs = weakref.WeakSet()
         self.rwq_ind_tbls = weakref.WeakSet()
         self.crypto_logins = weakref.WeakSet()
+        self.event_channels = weakref.WeakSet()
+        self.dmahs = weakref.WeakSet()
 
         self.name = kwargs.get('name')
         provider_attr = kwargs.get('attr')
@@ -178,7 +181,7 @@ cdef class Context(PyverbsCM):
                 self.logger.debug('Closing Context')
             close_weakrefs([self.qps, self.crypto_logins, self.rwq_ind_tbls, self.wqs, self.ccs, self.cqs,
                             self.dms, self.pds, self.xrcds, self.vars, self.sched_leafs,
-                            self.sched_nodes, self.dr_domains])
+                            self.sched_nodes, self.dr_domains, self.event_channels, self.dmahs])
             rc = v.ibv_close_device(self.context)
             if rc != 0:
                 raise PyverbsRDMAErrno(f'Failed to close device {self.name}')
@@ -186,7 +189,7 @@ cdef class Context(PyverbsCM):
 
     @property
     def context(self):
-        return <object>self.context
+        return <uintptr_t>self.context
 
     @property
     def num_comp_vectors(self):
@@ -345,6 +348,8 @@ cdef class Context(PyverbsCM):
             self.wqs.add(obj)
         elif isinstance(obj, RwqIndTable):
             self.rwq_ind_tbls.add(obj)
+        elif isinstance(obj, DMAHandle):
+            self.dmahs.add(obj)
         else:
             raise PyverbsError('Unrecognized object type')
 

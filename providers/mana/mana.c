@@ -35,16 +35,56 @@ struct mana_context *to_mctx(struct ibv_context *ibctx)
 	return container_of(ibctx, struct mana_context, ibv_ctx.context);
 }
 
-void *mana_alloc_mem(uint32_t size)
+void *mana_alloc_mem(size_t size)
 {
 	void *buf;
+
+	if (size == 0)
+		return NULL;
 
 	buf = mmap(NULL, size, PROT_READ | PROT_WRITE,
 		   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 	if (buf == MAP_FAILED)
 		return NULL;
+
+	if (ibv_dontfork_range(buf, size))
+		goto unmap;
+
 	return buf;
+
+unmap:
+	munmap(buf, size);
+	return NULL;
+}
+
+void mana_dealloc_mem(void *buf, size_t size)
+{
+	if (buf) {
+		ibv_dofork_range(buf, size);
+		munmap(buf, size);
+	}
+}
+
+int create_shadow_queue(struct shadow_queue *queue, uint32_t length, uint32_t stride)
+{
+	length = roundup_pow_of_two(length);
+	stride = align(stride, 8);
+
+	queue->buffer = mana_alloc_mem(stride * length);
+	if (!queue->buffer)
+		return -1;
+
+	queue->length = length;
+	queue->stride = stride;
+	reset_shadow_queue(queue);
+	return 0;
+}
+
+void destroy_shadow_queue(struct shadow_queue *queue)
+{
+	mana_dealloc_mem(queue->buffer, queue->stride * queue->length);
+	queue->buffer = NULL;
 }
 
 int mana_query_device_ex(struct ibv_context *context,
@@ -221,6 +261,70 @@ int mana_dereg_mr(struct verbs_mr *vmr)
 	return 0;
 }
 
+struct ibv_dm *mana_alloc_dm(struct ibv_context *context,
+			     struct ibv_alloc_dm_attr *dm_attr)
+{
+	struct verbs_dm *dm;
+	int ret;
+
+	dm = malloc(sizeof(*dm));
+	if (!dm)
+		return NULL;
+
+	ret = ibv_cmd_alloc_dm(context, dm_attr, dm, NULL);
+	if (ret) {
+		verbs_err(verbs_get_ctx(context),
+			  "Failed to alloc DM\n");
+		errno = ret;
+		free(dm);
+		return NULL;
+	}
+
+	return &dm->dm;
+}
+
+int mana_free_dm(struct ibv_dm *ibdm)
+{
+	struct verbs_dm *dm = container_of(ibdm, struct verbs_dm, dm);
+	int ret;
+
+	ret = ibv_cmd_free_dm(dm);
+	if (ret) {
+		verbs_err(verbs_get_ctx(ibdm->context), "Failed to free DM\n");
+		return ret;
+	}
+
+	free(dm);
+	return 0;
+}
+
+struct ibv_mr *mana_reg_dm_mr(struct ibv_pd *pd, struct ibv_dm *ibdm,
+			      uint64_t dm_offset, size_t length,
+			      unsigned int acc)
+{
+	struct verbs_dm *dm = container_of(ibdm, struct verbs_dm, dm);
+	struct verbs_mr *vmr;
+	int ret;
+
+	vmr = calloc(1, sizeof(*vmr));
+	if (!vmr) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	ret = ibv_cmd_reg_dm_mr(pd, dm, dm_offset, length, acc,
+				vmr, NULL);
+	if (ret) {
+		verbs_err(verbs_get_ctx(pd->context),
+			  "Failed to register DM MR\n");
+		errno = ret;
+		free(vmr);
+		return NULL;
+	}
+
+	return &vmr->ibv_mr;
+}
+
 static void mana_free_context(struct ibv_context *ibctx)
 {
 	struct mana_context *context = to_mctx(ibctx);
@@ -259,6 +363,7 @@ static void mana_async_event(struct ibv_context *context,
 
 static const struct verbs_context_ops mana_ctx_ops = {
 	.alloc_pd = mana_alloc_pd,
+	.alloc_dm = mana_alloc_dm,
 	.async_event = mana_async_event,
 	.alloc_parent_domain = mana_alloc_parent_domain,
 	.create_cq = mana_create_cq,
@@ -273,6 +378,7 @@ static const struct verbs_context_ops mana_ctx_ops = {
 	.destroy_rwq_ind_table = mana_destroy_rwq_ind_table,
 	.destroy_wq = mana_destroy_wq,
 	.free_context = mana_free_context,
+	.free_dm = mana_free_dm,
 	.modify_wq = mana_modify_wq,
 	.modify_qp = mana_modify_qp,
 	.poll_cq = mana_poll_cq,
@@ -281,6 +387,7 @@ static const struct verbs_context_ops mana_ctx_ops = {
 	.query_device_ex = mana_query_device_ex,
 	.query_port = mana_query_port,
 	.reg_dmabuf_mr = mana_reg_dmabuf_mr,
+	.reg_dm_mr = mana_reg_dm_mr,
 	.reg_mr = mana_reg_mr,
 	.req_notify_cq = mana_arm_cq,
 };

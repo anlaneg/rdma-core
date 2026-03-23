@@ -253,6 +253,13 @@ int rdma_getaddrinfo(const char *node/*主机地址*/, const char *service,
 	if (ret)
 		return ret;
 
+	if (hints && hints->ai_flags & RAI_SA) {
+		if (node || (hints->ai_flags & RAI_DNS))
+			return ERR(EOPNOTSUPP);
+
+		return ucma_getaddrinfo_sa(service, res);
+	}
+
 	/*申请结构体*/
 	rai = calloc(1, sizeof(*rai));
 	if (!rai)

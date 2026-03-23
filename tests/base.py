@@ -3,6 +3,7 @@
 
 import multiprocessing as mp
 import subprocess
+import functools
 import unittest
 import tempfile
 import random
@@ -437,18 +438,16 @@ class RDMACMBaseTest(RDMATestCase):
         for side in proc_res.keys():
             if proc_res[side] == 5:
                 raise unittest.SkipTest(f'SkipTest occurred on {side} side')
-        # Check if the test processes raise exceptions.
-        res_exception = False
-        for side in proc_res:
-            if 0 < proc_res[side] < 5:
-                res_exception = True
-        if res_exception:
-            raise Exception('Exception in active/passive side occurred')
-        # Raise exeption if the test proceses was terminate.
+       # Raise exeption if the test proceses was terminate.
         if bad_flow and not proc_killed:
             raise Exception('Bad flow: traffic passed which is not expected')
         if not bad_flow and proc_killed:
             raise Exception('RDMA CM test procces is stuck, kill the test')
+
+        # Check if the test processes raise exceptions.
+        for side in proc_res:
+            if proc_res[side] != 0:
+                raise Exception(f'Exception in {side} side occurred')
 
     def rdmacm_traffic(self, connection_resources=None, passive=None, **kwargs):
         """
@@ -532,7 +531,35 @@ class RDMACMBaseTest(RDMATestCase):
         sys.exit(2)
 
 
-class BaseResources(object):
+def catch_skiptest(func):
+    """
+    Decorator to catch unittest.SkipTest in __init__ resource functions.
+    It gracefully closes the context and all of its underlying resources.
+    """
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            func(self, *args, **kwargs)
+        except unittest.SkipTest as e:
+            if hasattr(self, 'ctx') and self.ctx:
+               self.ctx.close()
+            raise e
+    return wrapper
+
+
+class SkipTestMeta(type):
+    """
+    Metaclass to automatically wrap __init__ in catch_skiptest.
+    It should only be used in resource classes, such as those inheriting from
+    BaseResources.
+    """
+    def __new__(cls, name, bases, dct):
+        if "__init__" in dct:
+            dct["__init__"] = catch_skiptest(dct["__init__"])
+        return super().__new__(cls, name, bases, dct)
+
+
+class BaseResources(object, metaclass=SkipTestMeta):
     """
     BaseResources class is a base aggregator object which contains basic
     resources like Context and PD. It opens a context over the given device
@@ -548,6 +575,7 @@ class BaseResources(object):
         self.dev_name = dev_name
         self.gid_index = gid_index
         self.ib_port = ib_port
+        self.ctx = None
         self.create_context()
         self.create_pd()
 
