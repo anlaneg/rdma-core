@@ -163,6 +163,7 @@ static int cmd_get_context(struct verbs_context *context_ex,
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_GET_CONTEXT_CORE_SUPPORT,
 			  &core_support);
 
+	/*填充fds属性*/
 	if (fds)
 		fill_attr_in_ptr_array(cmdb, UVERBS_ATTR_GET_CONTEXT_FD_ARR,
 				       fds->arr, fds->count);
@@ -197,11 +198,12 @@ static int cmd_get_context(struct verbs_context *context_ex,
 	return 0;
 }
 
+/*指明get context*/
 int ibv_cmd_get_context(struct verbs_context *context_ex,
-			struct ibv_get_context *cmd/*命令buffer*/, size_t cmd_size/*cmd buffer大小*/,
+			struct ibv_get_context *cmd/*命令buffer*/, size_t cmd_size/*命令buffer大小*/,
 			struct ibv_fd_arr *fd_arr,
-			struct ib_uverbs_get_context_resp *resp,
-			size_t resp_size)
+			struct ib_uverbs_get_context_resp *resp/*响应buffer*/,
+			size_t resp_size/*响应buffer大小*/)
 {
     /*定义command buffer:cmdb,调用get context方法*/
 	DECLARE_CMD_BUFFER_COMPAT(cmdb, UVERBS_OBJECT_DEVICE,

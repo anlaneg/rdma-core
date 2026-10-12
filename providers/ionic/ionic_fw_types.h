@@ -12,8 +12,8 @@
 
 /* wqe scatter gather element */
 struct ionic_sge {
-	__be64				va;
-	__be32				len;
+	__be64				va;/*数据地址*/
+	__be32				len;/*内容长度*/
 	__be32				lkey;
 };
 
@@ -64,7 +64,7 @@ enum ionic_status {
 
 /* data payload part of v1 wqe */
 union ionic_v1_pld {
-	struct ionic_sge	sgl[2];
+	struct ionic_sge	sgl[2];/*sgelist信息（最多支持2个）*/
 	__be32			spec32[8];
 	__be16			spec16[16];
 	__u8			data[32];
@@ -88,6 +88,7 @@ struct ionic_v1_cqe {
 		} send;
 	};
 	__be32				status_length;
+	/*多个字段的数据，有24bits的qid,4bits的type,以及flags*/
 	__be32				qid_type_flags;
 };
 
@@ -126,10 +127,10 @@ enum ionic_v1_cqe_qtf_bits {
 /* v1 base wqe header */
 struct ionic_v1_base_hdr {
 	__u64				wqe_id;
-	__u8				op;
-	__u8				num_sge_key;
-	__be16				flags;
-	__be32				imm_data_key;
+	__u8				op;/*操作码*/
+	__u8				num_sge_key;/*sge数目*/
+	__be16				flags;/*标记，例如IONIC_V1_FLAG_INL（inline数据）*/
+	__be32				imm_data_key;/*设置imm data*/
 };
 
 /* v1 receive wqe body */
@@ -152,8 +153,8 @@ struct ionic_v1_common_bdy {
 			__be32		remote_rkey;
 		} rdma;
 	};
-	__be32				length;
-	union ionic_v1_pld		pld;
+	__be32				length;/*内容长度*/
+	union ionic_v1_pld		pld;/*存放数据*/
 };
 
 /* v1 atomic wqe body */
@@ -221,6 +222,7 @@ enum ionic_v1_op {
 	/* flags */
 	IONIC_V1_FLAG_FENCE		= 1u << 0,
 	IONIC_V1_FLAG_SOL		= 1u << 1,
+	/*inline标记*/
 	IONIC_V1_FLAG_INL		= 1u << 2,
 	IONIC_V1_FLAG_SIG		= 1u << 3,
 	IONIC_V1_FLAG_COLOR		= 1u << 4,

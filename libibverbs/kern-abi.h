@@ -150,14 +150,15 @@ struct empty {};
  * Implicit padding can arise in various cases where the structs are not sizes
  * to a multiple of 8 bytes.
  */
-#define DECLARE_DRV_CMD(_name, _enum, _kabi_req, _kabi_resp)                   \
+#define DECLARE_DRV_CMD(_name/*结构体名称*/, _enum, _kabi_req, _kabi_resp)                   \
 	struct _name {                                                         \
 		IBV_ABI_REQ(_enum) ibv_cmd;                                    \
 		union {                                                        \
 			_STRUCT_##_kabi_req;                                   \
 			struct _kabi_req drv_payload;                          \
 		};                                                             \
-	};                                                                     \
+	};\
+	/*命令响应结构体*/                                                  \
 	struct _name##_resp {                                                  \
 		IBV_KABI_RESP(_enum) ibv_resp;                                 \
 		union {                                                        \

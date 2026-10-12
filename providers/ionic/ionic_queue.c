@@ -10,6 +10,7 @@
 #include "ionic_queue.h"
 #include "ionic_memory.h"
 
+/*申请q所需要的内存*/
 static void ionic_queue_map(struct ionic_queue *q, struct ionic_pd *pd, uint64_t pd_tag, int stride)
 {
 	if (pd && pd->alloc) {
@@ -44,14 +45,15 @@ static void ionic_queue_unmap(struct ionic_queue *q)
 	ionic_unmap(q->ptr, q->size);
 }
 
+/*初始化ionic queue*/
 int ionic_queue_init(struct ionic_queue *q, struct ionic_pd *pd,
 		     uint64_t pd_tag, int pg_shift, int depth, size_t stride)
 {
 	if (depth < 0 || depth > IONIC_QUEUE_DEPTH_MAX)
-		return -EINVAL;
+		return -EINVAL;/*队列深度有误*/
 
 	if (stride == 0 || stride > IONIC_QUEUE_STRIDE_MAX)
-		return -EINVAL;
+		return -EINVAL;/*步长值有误*/
 
 	if (depth == 0)
 		depth = 1;
@@ -59,6 +61,7 @@ int ionic_queue_init(struct ionic_queue *q, struct ionic_pd *pd,
 	q->depth_log2 = ilog32(depth);
 	q->stride_log2 = ilog64(stride - 1);
 
+	/*小于单个页，扩大队列深度*/
 	if (q->depth_log2 + q->stride_log2 < pg_shift)
 		q->depth_log2 = pg_shift - q->stride_log2;
 
@@ -69,8 +72,8 @@ int ionic_queue_init(struct ionic_queue *q, struct ionic_pd *pd,
 	if (!q->ptr)
 		return errno;
 
-	q->prod = 0;
-	q->cons = 0;
+	q->prod = 0;/*初始化生产者指针为0*/
+	q->cons = 0;/*初始化消费者指针为0*/
 	q->dbell = 0;
 
 	return 0;

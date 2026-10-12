@@ -51,11 +51,11 @@ struct ionic_ctx_resp {
 };
 
 struct ionic_qdesc {
-	__aligned_u64 addr;
-	__u32 size;
-	__u16 mask;
-	__u8 depth_log2;
-	__u8 stride_log2;
+	__aligned_u64 addr;/*cq起始地址*/
+	__u32 size;/*cq占用的内存总大小*/
+	__u16 mask;/*cq队列深度mask*/
+	__u8 depth_log2;/*cq队列深度（以2为底深度的对数）*/
+	__u8 stride_log2;/*cq队列元素步长（以2为底步长的对数）*/
 };
 
 struct ionic_ah_resp {

@@ -353,7 +353,7 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr/*待注册的地�
 LATEST_SYMVER_FUNC(ibv_reg_mr, 1_1, "IBVERBS_1.1",
 		   struct ibv_mr *,
 		   struct ibv_pd *pd, void *addr/*待注册地址可以为空*/,
-		   size_t length, int access)
+		   size_t length, int access/*访问权限*/)
 {
 	return ibv_reg_mr_iova2(pd, addr/*待注册的起始地址*/, length/*地址长度*/, (uintptr_t)addr/*待注册的起始地址（iova)*/, access/*访问权限*/);
 }
@@ -432,6 +432,7 @@ int ibv_dm_export_dmabuf_fd(struct ibv_dm *dm)
 	return get_ops(dm->context)->dm_export_dmabuf_fd(dm);
 }
 
+/*实现dma buffer注册*/
 struct ibv_mr *ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset,
 				 size_t length, uint64_t iova, int fd,
 				 int access)
@@ -578,7 +579,7 @@ struct ibv_comp_channel *ibv_create_comp_channel(struct ibv_context *context)
 	if (!channel)
 		return NULL;
 
-	/*创建comp channel*/
+	/*创建comp channel(用于event处理）*/
 	req.core_payload = (struct ib_uverbs_create_comp_channel){};
 	if (execute_cmd_write(context, IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL,
 			      &req, sizeof(req), &resp, sizeof(resp))) {
@@ -620,7 +621,7 @@ out:
 LATEST_SYMVER_FUNC(ibv_create_cq, 1_1, "IBVERBS_1.1",
 		   struct ibv_cq *,
 		   struct ibv_context *context, int cqe/*cqe数目*/, void *cq_context,
-		   struct ibv_comp_channel *channel/*对应的comp channel*/, int comp_vector)
+		   struct ibv_comp_channel *channel/*对应的comp channel（用于event处理）*/, int comp_vector)
 {
 	struct ibv_cq *cq;
 
@@ -628,7 +629,7 @@ LATEST_SYMVER_FUNC(ibv_create_cq, 1_1, "IBVERBS_1.1",
 	cq = get_ops(context)->create_cq(context, cqe, channel, comp_vector);
 
 	if (cq)
-	    /*初始化cq*/
+	    /*申请成功，初始化cq*/
 		verbs_init_cq(cq, context, channel, cq_context);
 
 	return cq;

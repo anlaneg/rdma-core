@@ -127,8 +127,10 @@ static inline void ionic_mmio_memcpy_x64(void *dst, const void *src, size_t byte
 		mmio_memcpy_x64(dst, src, bytecnt);
 }
 
+/*对cq进行加锁*/
 #define ionic_cq_spin_lock(cq) do {			\
 	if (unlikely(!(cq)->lockfree))			\
+		/*此cq不免锁，故加spin lock*/\
 		pthread_spin_lock(&(cq)->lock);		\
 } while (0)
 
@@ -143,24 +145,29 @@ static inline void ionic_mmio_memcpy_x64(void *dst, const void *src, size_t byte
 
 #define ionic_rq_spin_lock(qp) do {			\
 	if (unlikely(!(qp)->lockfree))			\
+		/*非无锁对列，对rq加锁*/\
 		pthread_spin_lock(&(qp)->rq.lock);	\
 } while (0)
 
 #define ionic_rq_spin_unlock(qp) do {			\
 	if (unlikely(!(qp)->lockfree))			\
+		/*非无锁对列，对rq解锁*/\
 		pthread_spin_unlock(&(qp)->rq.lock);	\
 } while (0)
 
 #define ionic_sq_spin_lock(qp) do {			\
 	if (unlikely(!(qp)->lockfree))			\
+		/*非无锁对列，对sq加锁*/\
 		pthread_spin_lock(&(qp)->sq.lock);	\
 } while (0)
 
 #define ionic_sq_spin_unlock(qp) do {			\
 	if (unlikely(!(qp)->lockfree))			\
+		/*非无锁对列，对sq解锁*/\
 		pthread_spin_unlock(&(qp)->sq.lock);	\
 } while (0)
 
+/*按版本号，选择不同的opcode*/
 #define IONIC_OP(version, opname) \
 	((version) < 2 ? IONIC_V1_OP_##opname : IONIC_V2_OP_##opname)
 
@@ -269,6 +276,7 @@ static struct ibv_pd *ionic_alloc_pd(struct ibv_context *ibctx)
 
 	pd->udma_mask = ionic_ctx_udma_mask(ctx);
 
+	/*指明cmd开启*/
 	pd->sq_cmb = IONIC_CMB_ENABLE;
 	if (ctx->sq_expdb)
 		pd->sq_cmb |= IONIC_CMB_EXPDB;
@@ -331,9 +339,9 @@ err_mr:
 
 static struct ibv_mr *ionic_reg_mr(struct ibv_pd *ibpd,
 				   void *addr,
-				   size_t len,
+				   size_t len/*mr长度*/,
 				   uint64_t hca_va,
-				   int access)
+				   int access/*权限*/)
 {
 	struct ibv_pd *root_ibpd = to_ionic_root_ibpd(ibpd);
 	struct verbs_mr *vmr;
@@ -347,11 +355,12 @@ static struct ibv_mr *ionic_reg_mr(struct ibv_pd *ibpd,
 		goto err_mr;
 	}
 
+	/*注册mr*/
 	rc = ibv_cmd_reg_mr(root_ibpd, addr, len,
 			    hca_va,
-			    access, vmr,
-			    &req, sizeof(req),
-			    &resp, sizeof(resp));
+			    access/*权限*/, vmr,
+			    &req/*请求buffer*/, sizeof(req),
+			    &resp/*响应buffer*/, sizeof(resp));
 	if (rc)
 		goto err_cmd;
 
@@ -387,18 +396,20 @@ static void ionic_vcq_cq_deinit(struct ionic_cq *cq)
 	pthread_spin_destroy(&cq->lock);
 }
 
+/*为cq申请内存，初始化，并返回此cq的描述信息*/
 static int ionic_vcq_cq_init1(struct ionic_ctx *ctx,
 			      struct ionic_vcq *vcq,
 			      struct ionic_cq *cq,
 			      struct ibv_cq_init_attr_ex *ex,
 			      struct ionic_pd *pd,
-			      struct ionic_qdesc *req_cq)
+			      struct ionic_qdesc *req_cq/*出参，指出cq描述信息*/)
 {
 	int rc;
 
-	cq->vcq = vcq;
+	cq->vcq = vcq;/*设置此cq从属的vcq*/
 
-	cq->lockfree = false;
+	cq->lockfree = false;/*指定需要加锁*/
+	/*这个自旋锁 只给当前进程内部的多线程互斥用*/
 	pthread_spin_init(&cq->lock, PTHREAD_PROCESS_PRIVATE);
 	list_head_init(&cq->poll_sq);
 	list_head_init(&cq->poll_rq);
@@ -407,7 +418,7 @@ static int ionic_vcq_cq_init1(struct ionic_ctx *ctx,
 
 	rc = ionic_queue_init(&cq->q, pd, IONIC_PD_TAG_CQ,
 			      ctx->pg_shift, ex->cqe + IONIC_CQ_GRACE,
-			      sizeof(struct ionic_v1_cqe));
+			      sizeof(struct ionic_v1_cqe)/*cqe元素大小*/);
 	if (rc)
 		goto err_queue;
 
@@ -415,7 +426,7 @@ static int ionic_vcq_cq_init1(struct ionic_ctx *ctx,
 	cq->reserve = cq->q.mask;
 	cq->reserve_pending = 0;
 
-	req_cq->addr = (uintptr_t)cq->q.ptr;
+	req_cq->addr = (uintptr_t)cq->q.ptr;/*设置cq起始地址*/
 	req_cq->size = cq->q.size;
 	req_cq->mask = cq->q.mask;
 	req_cq->depth_log2 = cq->q.depth_log2;
@@ -431,9 +442,9 @@ err_queue:
 
 static void ionic_vcq_cq_init2(struct ionic_cq *cq, uint32_t resp_cqid)
 {
-	cq->cqid = resp_cqid;
+	cq->cqid = resp_cqid;/*设置此cq编号*/
 
-	ionic_queue_dbell_init(&cq->q, cq->cqid);
+	ionic_queue_dbell_init(&cq->q, cq->cqid);/*为doorbell设备qid*/
 }
 
 /*
@@ -548,6 +559,7 @@ static uint8_t ionic_wc_read_dlid_path_bits(struct ibv_cq_ex *ibcq_ex)
 	return vcq->cur_wc.dlid_path_bits;
 }
 
+/*创建初始化cq*/
 static struct ibv_cq_ex *ionic_create_cq_ex(struct ibv_context *ibctx,
 					    struct ibv_cq_init_attr_ex *ex)
 {
@@ -559,17 +571,20 @@ static struct ibv_cq_ex *ionic_create_cq_ex(struct ibv_context *ibctx,
 	int cq_i, rc;
 
 	if (ex->wc_flags & ~IONIC_CQ_SUPPORTED_WC_FLAGS) {
+		/*提供了不支持的flags,报错*/
 		rc = ENOTSUP;
 		goto err;
 	}
 
 	if (ex->cqe < 1 || ex->cqe + IONIC_CQ_GRACE > 0xffff) {
+		/*cqe过小或者cqe配置过大（不得超过64K)*/
 		rc = EINVAL;
 		goto err;
 	}
 
 	vcq = calloc(1, sizeof(*vcq));
 	if (!vcq) {
+		/*申请结构体失败*/
 		rc = ENOMEM;
 		goto err;
 	}
@@ -578,20 +593,23 @@ static struct ibv_cq_ex *ionic_create_cq_ex(struct ibv_context *ibctx,
 		pd = to_ionic_pd(ex->parent_domain);
 		vcq->udma_mask = pd->udma_mask;
 	} else {
+		/*设置udma mask(所有均可用）*/
 		vcq->udma_mask = ionic_ctx_udma_mask(ctx);
 	}
 
 	for (cq_i = 0; cq_i < ctx->udma_count; ++cq_i) {
 		if (!(vcq->udma_mask & BIT(cq_i)))
-			continue;
+			continue;/*跳过掩码不容许的*/
 
-		rc = ionic_vcq_cq_init1(ctx, vcq, &vcq->cq[cq_i], ex, pd, &req.cq[cq_i]);
+		/*初始化cq*/
+		rc = ionic_vcq_cq_init1(ctx, vcq, &vcq->cq[cq_i], ex, pd, &req.cq[cq_i]/*指明cq描述信息*/);
 		if (rc)
 			goto err_cq;
 	}
 
 	req.udma_mask = vcq->udma_mask;
 
+	/*向kernel发送请求，创建cq*/
 	rc = ibv_cmd_create_cq(ibctx, ex->cqe, ex->channel,
 			       ex->comp_vector, &vcq->vcq.cq,
 			       &req.ibv_cmd, sizeof(req),
@@ -604,6 +622,7 @@ static struct ibv_cq_ex *ionic_create_cq_ex(struct ibv_context *ibctx,
 		goto err_udma;
 	}
 
+	/*获得cq对应的qid,再次初始化cq*/
 	for (cq_i = 0; cq_i < ctx->udma_count; ++cq_i) {
 		if (!(vcq->udma_mask & BIT(cq_i)))
 			continue;
@@ -611,6 +630,7 @@ static struct ibv_cq_ex *ionic_create_cq_ex(struct ibv_context *ibctx,
 		ionic_vcq_cq_init2(&vcq->cq[cq_i], resp.cqid[cq_i]);
 	}
 
+	/*设置cq_ex*/
 	vcq->vcq.cq_ex.start_poll = ionic_start_poll;
 	vcq->vcq.cq_ex.next_poll = ionic_next_poll;
 	vcq->vcq.cq_ex.end_poll = ionic_end_poll;
@@ -650,11 +670,11 @@ err_cq:
 	free(vcq);
 err:
 	errno = rc;
-	return NULL;
+	return NULL;/*返回失败，指定errno*/
 }
 
-static struct ibv_cq *ionic_create_cq(struct ibv_context *ibctx, int ncqe,
-				      struct ibv_comp_channel *channel,
+static struct ibv_cq *ionic_create_cq(struct ibv_context *ibctx, int ncqe/*队列深度（cqe总数）*/,
+				      struct ibv_comp_channel *channel/*指明为此cq关联的event channel*/,
 				      int vec)
 {
 	struct ibv_cq_init_attr_ex ex = {
@@ -669,6 +689,7 @@ static struct ibv_cq *ionic_create_cq(struct ibv_context *ibctx, int ncqe,
 		return NULL;
 	}
 
+	/*创建cq*/
 	ibcq = ionic_create_cq_ex(ibctx, &ex);
 
 	return ibv_cq_ex_to_cq(ibcq);
@@ -1073,6 +1094,7 @@ static int ionic_comp_msn(struct ionic_ctx *ctx,
 		meta->len = be32toh(cqe->status_length);
 		meta->ibsts = ionic_to_ibv_status(meta->len);
 
+		/*此cqe被标记为error,显示日志*/
 		verbs_err(&ctx->vctx, "cqe with error %u for %#x (msn), qpid %u cqid %u",
 			  meta->ibsts, be32toh(cqe->send.msg_msn),
 			  qp->qpid, cq->cqid);
@@ -1177,6 +1199,7 @@ static void ionic_reserve_sync_cq(struct ionic_ctx *ctx, struct ionic_cq *cq)
 		verbs_debug(&ctx->vctx, "dbell cq %u val %" PRIx64 " rsv %d",
 			    cq->cqid, ionic_queue_dbell_val(&cq->q),
 			    cq->reserve);
+		/*知会cq调度*/
 		ionic_dbell_ring(&ctx->dbpage[ctx->cq_qtype],
 				 ionic_queue_dbell_val(&cq->q));
 	}
@@ -1214,8 +1237,8 @@ static void ionic_reserve_cq(struct ionic_ctx *ctx, struct ionic_cq *cq,
 	}
 }
 
-static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq,
-			     int nwc, struct ibv_wc *wc)
+static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq/*要poll的cq队列*/,
+			     int nwc/*wc数组长度*/, struct ibv_wc *wc)
 {
 	struct ionic_qp *qp, *qp_next;
 	struct ionic_v1_cqe *cqe;
@@ -1237,7 +1260,7 @@ static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq,
 
 	list_for_each_safe(&cq->poll_sq, qp, qp_next, cq_poll_sq) {
 		if (npolled == nwc)
-			goto out;
+			goto out;/*达到要求的总数，跳出*/
 
 		ionic_sq_spin_lock(qp);
 		rc = ionic_poll_send_many(ctx, cq, qp, wc + npolled, nwc - npolled);
@@ -1245,9 +1268,9 @@ static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq,
 		ionic_sq_spin_unlock(qp);
 
 		if (rc < 0)
-			goto out;
+			goto out;/*失败，跳出*/
 
-		npolled += rc;
+		npolled += rc;/*已poll到的数目增加*/
 
 		if (!peek)
 			list_del_init(&qp->cq_poll_sq);
@@ -1263,9 +1286,11 @@ static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq,
 		qid = ionic_v1_cqe_qtf_qid(qtf);
 		type = ionic_v1_cqe_qtf_type(qtf);
 
+		/*利用qid查询qp*/
 		qp = ionic_tbl_lookup(&ctx->qp_tbl, qid);
 
 		if (unlikely(!qp)) {
+			/*cq指明的qp不存在*/
 			verbs_err(&ctx->vctx, "cq %d pos %d missing qp for qid %#x",
 				  cq->cqid, cq->q.prod, qid);
 			goto cq_next;
@@ -1405,7 +1430,7 @@ out:
  * Functions with "poll" in the name return negative error numbers, or
  * greater or equal to zero number of completions on success.
  */
-static int ionic_poll_cq(struct ibv_cq *ibcq, int nwc, struct ibv_wc *wc)
+static int ionic_poll_cq(struct ibv_cq *ibcq, int nwc/*wc数组长度*/, struct ibv_wc *wc)
 {
 	struct ionic_ctx *ctx = to_ionic_ctx(ibcq->context);
 	struct ionic_vcq *vcq = to_ionic_vcq(ibcq);
@@ -1426,6 +1451,7 @@ static int ionic_poll_cq(struct ibv_cq *ibcq, int nwc, struct ibv_wc *wc)
 					   nwc - npolled, wc + npolled);
 
 		if (rc_tmp >= 0)
+			/*已poll出来的元素数增加*/
 			npolled += rc_tmp;
 		else if (!rc)
 			rc = rc_tmp;
@@ -1481,7 +1507,7 @@ static bool ionic_expdb_wqe_size_supported(struct ionic_ctx *ctx,
 
 static int ionic_set_cmb(struct ionic_ctx *ctx, struct ionic_queue *queue,
 			 uint8_t cmb, uint64_t cmb_offset, uint8_t qtype,
-			 void **cmb_ptr)
+			 void **cmb_ptr/*出参，映射的cmb_offset*/)
 {
 	uint64_t db_base, db_data;
 	uint16_t wqe_sz, pos;
@@ -1489,6 +1515,7 @@ static int ionic_set_cmb(struct ionic_ctx *ctx, struct ionic_queue *queue,
 	void *db_ptr;
 
 	if (!(cmb & IONIC_CMB_ENABLE)) {
+		/*没有开启CMB,直接置NULL，并返回*/
 		*cmb_ptr = NULL;
 		return 0;
 	}
@@ -1498,19 +1525,20 @@ static int ionic_set_cmb(struct ionic_ctx *ctx, struct ionic_queue *queue,
 	if (!*cmb_ptr)
 		return errno;
 
+	/*开启了Extended Doorbell方式，预填doorbells信息*/
 	if (cmb & IONIC_CMB_EXPDB) {
 		/* Pre-fill express doorbells into our buffer */
 		wqe_sz = 1 << queue->stride_log2;
-		db_ptr = queue->ptr + wqe_sz - IONIC_EXP_DBELL_SZ;
+		db_ptr = queue->ptr + wqe_sz - IONIC_EXP_DBELL_SZ;/*doorbell地址位于wqe后面，占用8字节*/
 
 		/* Assume ring 0 */
 		db_base = ((uint64_t)qtype << 48) | queue->dbell |
 			((0x03 | 0x8) << 19); /* SCHED_SET | PICI_PISET */
 
 		for (pos = 0; pos <= queue->mask; pos++, db_ptr += wqe_sz) {
-			db_addr = (__le64 *)db_ptr;
-			db_data = db_base | ((pos + 1) & queue->mask);
-			*db_addr = htole64(db_data);
+			db_addr = (__le64 *)db_ptr;/*取wqe后面的8bytes*/
+			db_data = db_base | ((pos + 1) & queue->mask);/*构造索引变化信息*/
+			*db_addr = htole64(db_data);/*填写doorbells信息*/
 		}
 	}
 
@@ -1518,24 +1546,24 @@ static int ionic_set_cmb(struct ionic_ctx *ctx, struct ionic_queue *queue,
 }
 
 static int ionic_qp_sq_init(struct ionic_ctx *ctx, struct ionic_qp *qp, struct ionic_pd *pd,
-			    int max_wr, int max_sge, int max_data)
+			    int max_wr/*最大wr数目*/, int max_sge/*最大sge数目*/, int max_data/*最大inline数据*/)
 {
 	uint32_t wqe_size;
 	int rc;
 
 	if (!qp->has_sq)
-		return 0;
+		return 0;/*无sq，则不初始化*/
 
 	if (max_wr < 0 || max_wr > 0xffff)
-		return EINVAL;
+		return EINVAL;/*wr数目过大*/
 	if (max_sge < 0)
 		return EINVAL;
 	if (max_sge > ionic_v1_send_wqe_max_sge(ctx->max_stride, 0, false))
-		return EINVAL;
+		return EINVAL;/*最大sge超限*/
 	if (max_data < 0)
 		return EINVAL;
 	if (max_data > ionic_v1_send_wqe_max_data(ctx->max_stride, false))
-		return EINVAL;
+		return EINVAL;/*最大inline数据超限*/
 
 	qp->sq.spec = ionic_v1_use_spec_sge(max_sge, ctx->spec);
 
@@ -1551,8 +1579,9 @@ static int ionic_qp_sq_init(struct ionic_ctx *ctx, struct ionic_qp *qp, struct i
 		wqe_size = ionic_v1_send_wqe_min_size(max_sge, max_data,
 						      qp->sq.spec, false);
 
+	/*初始化sq*/
 	rc = ionic_queue_init(&qp->sq.queue, pd, IONIC_PD_TAG_SQ,
-			      ctx->pg_shift, max_wr, wqe_size);
+			      ctx->pg_shift, max_wr, wqe_size/*wqe的大小*/);
 	if (rc)
 		goto err_sq;
 
@@ -1624,7 +1653,8 @@ static int ionic_qp_rq_init(struct ionic_ctx *ctx, struct ionic_qp *qp, struct i
 	if (!(qp->rq.cmb & IONIC_CMB_EXPDB))
 		wqe_size = ionic_v1_recv_wqe_min_size(max_sge, qp->rq.spec, false);
 
-	rc = ionic_queue_init(&qp->rq.queue, pd, pd_tag, ctx->pg_shift, max_wr, wqe_size);
+	/*初始化rq*/
+	rc = ionic_queue_init(&qp->rq.queue, pd, pd_tag, ctx->pg_shift, max_wr, wqe_size/*wqe大小*/);
 	if (rc)
 		goto err_rq;
 
@@ -1671,6 +1701,7 @@ static void ionic_qp_rq_destroy(struct ionic_qp *qp)
 	ionic_queue_destroy(&qp->rq.queue);
 }
 
+/*用于实现qp创建*/
 static struct ibv_qp *ionic_create_qp_ex(struct ibv_context *ibctx,
 					 struct ibv_qp_init_attr_ex *ex)
 {
@@ -1704,24 +1735,26 @@ static struct ibv_qp *ionic_create_qp_ex(struct ibv_context *ibctx,
 	qp->sq.cmb = pd->sq_cmb;
 	qp->rq.cmb = pd->rq_cmb;
 
+	/*初始化sq*/
 	rc = ionic_qp_sq_init(ctx, qp, pd, ex->cap.max_send_wr,
 			      ex->cap.max_send_sge, ex->cap.max_inline_data);
 	if (rc)
 		goto err_sq;
 
+	/*初始化rq*/
 	rc = ionic_qp_rq_init(ctx, qp, pd, ex->cap.max_recv_wr,
 			      ex->cap.max_recv_sge);
 	if (rc)
 		goto err_rq;
 
-	req.sq.addr = (uintptr_t)qp->sq.queue.ptr;
-	req.sq.size = qp->sq.queue.size;
+	req.sq.addr = (uintptr_t)qp->sq.queue.ptr;/*sq对应的起始地址*/
+	req.sq.size = qp->sq.queue.size;/*sq占用内存长度*/
 	req.sq.mask = qp->sq.queue.mask;
 	req.sq.depth_log2 = qp->sq.queue.depth_log2;
 	req.sq.stride_log2 = qp->sq.queue.stride_log2;
 	req.sq_cmb = qp->sq.cmb;
 
-	req.rq.addr = (uintptr_t)qp->rq.queue.ptr;
+	req.rq.addr = (uintptr_t)qp->rq.queue.ptr;/*rq对应的起始地址*/
 	req.rq.size = qp->rq.queue.size;
 	req.rq.mask = qp->rq.queue.mask;
 	req.rq.depth_log2 = qp->rq.queue.depth_log2;
@@ -1741,7 +1774,7 @@ static struct ibv_qp *ionic_create_qp_ex(struct ibv_context *ibctx,
 	if (rc)
 		goto err_cmd;
 
-	qp->qpid = resp.qpid;
+	qp->qpid = resp.qpid;/*设置qpid*/
 	qp->udma_idx = resp.udma_idx;
 
 	ionic_queue_dbell_init(&qp->sq.queue, qp->qpid);
@@ -1750,6 +1783,7 @@ static struct ibv_qp *ionic_create_qp_ex(struct ibv_context *ibctx,
 	qp->sq.cmb = resp.sq_cmb;
 	qp->rq.cmb = resp.rq_cmb;
 
+	/*如果开启了CMB且支持doorbell扩展，则提前填写生产指针变更，此长度将算在WQE中，cmb发送时直接复制过去*/
 	rc = ionic_set_cmb(ctx, &qp->sq.queue, qp->sq.cmb, resp.sq_cmb_offset,
 			   ctx->sq_qtype, &qp->sq.cmb_ptr);
 	if (rc)
@@ -1897,6 +1931,7 @@ static void ionic_reset_qp(struct ionic_ctx *ctx, struct ionic_qp *qp)
 	}
 }
 
+/*处理qp属性修改*/
 static int ionic_modify_qp(struct ibv_qp *ibqp,
 			   struct ibv_qp_attr *attr,
 			   int attr_mask)
@@ -1909,6 +1944,7 @@ static int ionic_modify_qp(struct ibv_qp *ibqp,
 	if (!attr_mask)
 		return 0;
 
+	/*通过kernel修改qp*/
 	rc = ibv_cmd_modify_qp(ibqp, attr, attr_mask, &cmd, sizeof(cmd));
 	if (rc)
 		goto err_cmd;
@@ -2012,7 +2048,7 @@ static int ionic_destroy_qp(struct ibv_qp *ibqp)
 	return 0;
 }
 
-static int64_t ionic_prep_inline(void *data, uint32_t max_data,
+static int64_t ionic_prep_inline(void *data/*内容填写位置*/, uint32_t max_data/*最大长度*/,
 				 struct ibv_sge *ibv_sgl, int num_sge)
 {
 	int64_t len = 0, sg_len;
@@ -2025,12 +2061,13 @@ static int64_t ionic_prep_inline(void *data, uint32_t max_data,
 		if (unlikely(len + sg_len > max_data))
 			return -EINVAL;
 
+		/*填写内容*/
 		memcpy(data + len, (void *)(uintptr_t)ibv_sgl[sg_i].addr, sg_len);
 
-		len += sg_len;
+		len += sg_len;/*offset增加*/
 	}
 
-	return len;
+	return len;/*返回内容长度*/
 }
 
 static int64_t ionic_v1_prep_pld(struct ionic_v1_wqe *wqe,
@@ -2070,8 +2107,8 @@ static int64_t ionic_v1_prep_pld(struct ionic_v1_wqe *wqe,
 		if (unlikely(len + sg_len > bit_31))
 			return -EINVAL;
 
-		sgl[sg_i].va = htobe64(ibv_sgl[sg_i].addr);
-		sgl[sg_i].len = htobe32(sg_len);
+		sgl[sg_i].va = htobe64(ibv_sgl[sg_i].addr);/*填写内容地址*/
+		sgl[sg_i].len = htobe32(sg_len);/*填写内容长度*/
 		sgl[sg_i].lkey = htobe32(ibv_sgl[sg_i].lkey);
 
 		if (spec32) {
@@ -2100,7 +2137,7 @@ static void ionic_v1_prep_base(struct ionic_qp *qp,
 	meta->signal = false;
 	meta->local_comp = false;
 
-	wqe->base.wqe_id = qp->sq.queue.prod;
+	wqe->base.wqe_id = qp->sq.queue.prod;/*wqe在sq中所属的生产者索引*/
 	if (qp->sq.color)
 		wqe->base.flags |= htobe16(IONIC_V1_FLAG_COLOR);
 
@@ -2126,12 +2163,15 @@ static void ionic_v1_prep_base(struct ionic_qp *qp,
 
 	verbs_debug(&ctx->vctx, "post send %u prod %u",
 		    qp->qpid, qp->sq.queue.prod);
+	/*显示wqe内容*/
 	ionic_dbg_xdump(ctx, "wqe", wqe, 1u << qp->sq.queue.stride_log2);
 
-	ionic_queue_produce(&qp->sq.queue);
+	ionic_queue_produce(&qp->sq.queue);/*更新生产者指针*/
+	/*每次生产者指针绕回时，color反转*/
 	qp->sq.color = ionic_color_wrap(qp->sq.queue.prod, qp->sq.color);
 }
 
+/*填充wqe*/
 static int ionic_v1_prep_common(struct ionic_qp *qp,
 				struct ibv_send_wr *wr,
 				struct ionic_sq_meta *meta,
@@ -2141,18 +2181,20 @@ static int ionic_v1_prep_common(struct ionic_qp *qp,
 	uint32_t mval;
 
 	if (wr->send_flags & IBV_SEND_INLINE) {
+		/*指明了inline*/
 		wqe->base.num_sge_key = 0;
+		/*设置inline标记*/
 		wqe->base.flags |= htobe16(IONIC_V1_FLAG_INL);
 		mval = ionic_v1_send_wqe_max_data(qp->sq.queue.stride_log2,
 						  qp->sq.cmb & IONIC_CMB_EXPDB);
 		signed_len = ionic_prep_inline(wqe->common.pld.data, mval,
-					       wr->sg_list, wr->num_sge);
+					       wr->sg_list, wr->num_sge);/*inline内容填写*/
 	} else {
 		wqe->base.num_sge_key = wr->num_sge;
 		mval = ionic_v1_send_wqe_max_sge(qp->sq.queue.stride_log2, qp->sq.spec,
 						 qp->sq.cmb & IONIC_CMB_EXPDB);
-		signed_len = ionic_v1_prep_pld(wqe, &wqe->common.pld,
-					       qp->sq.spec, mval,
+		signed_len = ionic_v1_prep_pld(wqe/*填写位置*/, &wqe->common.pld,
+					       qp->sq.spec, mval/*最大长度*/,
 					       wr->sg_list, wr->num_sge);
 	}
 
@@ -2160,18 +2202,20 @@ static int ionic_v1_prep_common(struct ionic_qp *qp,
 		return -signed_len;
 
 	meta->len = signed_len;
-	wqe->common.length = htobe32(signed_len);
+	wqe->common.length = htobe32(signed_len);/*设置内容长度*/
 
 	ionic_v1_prep_base(qp, wr, meta, wqe);
 
 	return 0;
 }
 
+/*wqe空间清零*/
 static void ionic_prep_sq_wqe(struct ionic_qp *qp, void *wqe)
 {
 	uint32_t wqe_sz = 1u << qp->sq.queue.stride_log2;
 
 	if (qp->sq.cmb & IONIC_CMB_EXPDB)
+		/*开启了exp doorbell,不清除预填的doorbell生产者索引*/
 		memset(wqe, 0, wqe_sz - IONIC_EXP_DBELL_SZ);
 	else
 		memset(wqe, 0, wqe_sz);
@@ -2187,6 +2231,7 @@ static void ionic_prep_rq_wqe(struct ionic_qp *qp, void *wqe)
 		memset(wqe, 0, wqe_sz);
 }
 
+/*将wr填写到sq*/
 static int ionic_v1_prep_send(struct ionic_qp *qp,
 			      struct ibv_send_wr *wr)
 {
@@ -2195,15 +2240,16 @@ static int ionic_v1_prep_send(struct ionic_qp *qp,
 	struct ionic_v1_wqe *wqe;
 
 	meta = &qp->sq.meta[qp->sq.queue.prod];
+	/*取sq生产者指针对应的wqe*/
 	wqe = ionic_queue_at_prod(&qp->sq.queue);
 
-	ionic_prep_sq_wqe(qp, wqe);
+	ionic_prep_sq_wqe(qp, wqe);/*清空wqe原有内容*/
 
-	meta->ibop = IBV_WC_SEND;
+	meta->ibop = IBV_WC_SEND;/*指明opcode为send*/
 
 	switch (wr->opcode) {
 	case IBV_WR_SEND:
-		wqe->base.op = IONIC_OP(ctx->version, SEND);
+		wqe->base.op = IONIC_OP(ctx->version, SEND);/*指明wqe中的opcode*/
 		break;
 	case IBV_WR_SEND_WITH_IMM:
 		wqe->base.op = IONIC_OP(ctx->version, SEND_IMM);
@@ -2217,6 +2263,7 @@ static int ionic_v1_prep_send(struct ionic_qp *qp,
 		return EINVAL;
 	}
 
+	/*填充wqe*/
 	return ionic_v1_prep_common(qp, wr, meta, wqe);
 }
 
@@ -2266,16 +2313,16 @@ static int ionic_v1_prep_rdma(struct ionic_qp *qp,
 	struct ionic_v1_wqe *wqe;
 
 	meta = &qp->sq.meta[qp->sq.queue.prod];
-	wqe = ionic_queue_at_prod(&qp->sq.queue);
+	wqe = ionic_queue_at_prod(&qp->sq.queue);/*取待写wqe*/
 
-	ionic_prep_sq_wqe(qp, wqe);
+	ionic_prep_sq_wqe(qp, wqe);/*空间清零*/
 
 	meta->ibop = IBV_WC_RDMA_WRITE;
 
 	switch (wr->opcode) {
 	case IBV_WR_RDMA_READ:
 		if (wr->send_flags & (IBV_SEND_SOLICITED | IBV_SEND_INLINE))
-			return EINVAL;
+			return EINVAL;/*读操作不得有以上标记*/
 		meta->ibop = IBV_WC_RDMA_READ;
 		wqe->base.op = IONIC_OP(ctx->version, RDMA_READ);
 		break;
@@ -2294,6 +2341,7 @@ static int ionic_v1_prep_rdma(struct ionic_qp *qp,
 
 	wqe->common.rdma.remote_va_high =
 		htobe32(wr->wr.rdma.remote_addr >> 32);
+	/*写rkey*/
 	wqe->common.rdma.remote_va_low = htobe32(wr->wr.rdma.remote_addr);
 	wqe->common.rdma.remote_rkey = htobe32(wr->wr.rdma.rkey);
 
@@ -2308,10 +2356,10 @@ static int ionic_v1_prep_atomic(struct ionic_qp *qp,
 	struct ionic_v1_wqe *wqe;
 
 	if (wr->num_sge != 1 || wr->sg_list[0].length != 8)
-		return EINVAL;
+		return EINVAL;/*长度与sge传值有误*/
 
 	if (wr->send_flags & (IBV_SEND_SOLICITED | IBV_SEND_INLINE))
-		return EINVAL;
+		return EINVAL;/*不得有以上标记*/
 
 	meta = &qp->sq.meta[qp->sq.queue.prod];
 	wqe = ionic_queue_at_prod(&qp->sq.queue);
@@ -2433,6 +2481,7 @@ static int ionic_v1_prep_bind(struct ionic_qp *qp,
 	return 0;
 }
 
+/*将wr内容写入到wqe*/
 static int ionic_v1_prep_one_rc(struct ionic_qp *qp,
 				struct ibv_send_wr *wr,
 				bool send_path)
@@ -2444,11 +2493,13 @@ static int ionic_v1_prep_one_rc(struct ionic_qp *qp,
 	case IBV_WR_SEND:
 	case IBV_WR_SEND_WITH_IMM:
 	case IBV_WR_SEND_WITH_INV:
+		/*send操作处理(将wr填充到wqe)*/
 		rc = ionic_v1_prep_send(qp, wr);
 		break;
 	case IBV_WR_RDMA_READ:
 	case IBV_WR_RDMA_WRITE:
 	case IBV_WR_RDMA_WRITE_WITH_IMM:
+		/*read/write操作处理*/
 		rc = ionic_v1_prep_rdma(qp, wr);
 		break;
 	case IBV_WR_ATOMIC_CMP_AND_SWP:
@@ -2489,7 +2540,7 @@ static int ionic_v1_prep_one_ud(struct ionic_qp *qp,
 }
 
 static void ionic_post_cmb_common(struct ionic_ctx *ctx,
-				  struct ionic_queue *queue,
+				  struct ionic_queue *queue/*要存入的队列*/,
 				  uint8_t cmb,
 				  void *cmb_ptr,
 				  uint16_t *cmb_prod,
@@ -2502,20 +2553,20 @@ static void ionic_post_cmb_common(struct ionic_ctx *ctx,
 	uint16_t pos, end;
 	uint8_t stride_log2, cmb_wc;
 
-	stride_log2 = queue->stride_log2;
+	stride_log2 = queue->stride_log2;/*取步长大小*/
 
 	pos = *cmb_prod;
-	end = queue->prod;
+	end = queue->prod;/*取生产者指针位置*/
 
 	cmb_wc = !(cmb & IONIC_CMB_UC);
 
 	if (cmb & IONIC_CMB_EXPDB) {
 		/* Express doorbell mode: copy each WQE individually with barriers */
 		while (pos != end) {
-			cmb_dst_ptr = cmb_ptr + ((size_t)pos << stride_log2);
-			wqe_src_ptr = ionic_queue_at(queue, pos);
+			cmb_dst_ptr = cmb_ptr + ((size_t)pos << stride_log2);/*cmb存放位置内存指针*/
+			wqe_src_ptr = ionic_queue_at(queue, pos);/*wqe存放位置起始指针*/
 
-			stride = 1u << stride_log2;
+			stride = 1u << stride_log2;/*wqe长度*/
 			do {
 				udma_to_device_barrier();
 				/* only fence before last 64B of each
@@ -2523,6 +2574,8 @@ static void ionic_post_cmb_common(struct ionic_ctx *ctx,
 				 */
 				if (cmb_wc && stride <= 64)
 					mmio_flush_writes();
+				/*将wqe内容写入到cmb（注意此流程看起来没有doorbell，实际在cmb初始化时已在wqe后面填写了生产指针变更信息）
+				 * 双方约定写这个位置，就相当于发了doorbell*/
 				ionic_mmio_memcpy_x64_64(cmb_dst_ptr, wqe_src_ptr);
 
 				stride -= 64;
@@ -2530,6 +2583,7 @@ static void ionic_post_cmb_common(struct ionic_ctx *ctx,
 				wqe_src_ptr += 64;
 			} while (stride);
 
+			/*下一个位置*/
 			pos = ionic_queue_next(queue, pos);
 		}
 	} else {
@@ -2562,6 +2616,7 @@ static void ionic_post_cmb_common(struct ionic_ctx *ctx,
 		/* Ring doorbell */
 		verbs_debug(&ctx->vctx, "dbell qp %u qtype %d val %" PRIx64,
 			    qpid, qtype, queue->dbell | pos);
+		/*这种传统的需要触发doorbell,指定qtype,qid,生产者指针*/
 		ionic_dbell_ring(&ctx->dbpage[qtype], queue->dbell | pos);
 	}
 
@@ -2571,7 +2626,7 @@ static void ionic_post_cmb_common(struct ionic_ctx *ctx,
 static void ionic_post_send_cmb(struct ionic_ctx *ctx, struct ionic_qp *qp)
 {
 	ionic_post_cmb_common(ctx,
-			      &qp->sq.queue,
+			      &qp->sq.queue/*放入sq队列*/,
 			      qp->sq.cmb,
 			      qp->sq.cmb_ptr,
 			      &qp->sq.cmb_prod,
@@ -2582,7 +2637,7 @@ static void ionic_post_send_cmb(struct ionic_ctx *ctx, struct ionic_qp *qp)
 static void ionic_post_recv_cmb(struct ionic_ctx *ctx, struct ionic_qp *qp)
 {
 	ionic_post_cmb_common(ctx,
-			      &qp->rq.queue,
+			      &qp->rq.queue/*放入rq队列*/,
 			      qp->rq.cmb,
 			      qp->rq.cmb_ptr,
 			      &qp->rq.cmb_prod,
@@ -2592,7 +2647,7 @@ static void ionic_post_recv_cmb(struct ionic_ctx *ctx, struct ionic_qp *qp)
 
 static int ionic_post_send_common(struct ionic_ctx *ctx,
 				  struct ionic_cq *cq,
-				  struct ionic_qp *qp,
+				  struct ionic_qp *qp/*对应的qp*/,
 				  struct ibv_send_wr *wr,
 				  struct ibv_send_wr **bad,
 				  bool send_path)
@@ -2601,24 +2656,29 @@ static int ionic_post_send_common(struct ionic_ctx *ctx,
 	uint16_t old_prod;
 
 	if (unlikely(!bad))
-		return EINVAL;
+		return EINVAL;/*bad不得为空*/
 
 	if (unlikely(!qp->has_sq)) {
+		/*qp必须有sq，报错*/
 		*bad = wr;
 		return EINVAL;
 	}
 
 	if (unlikely(qp->vqp.qp.state < IBV_QPS_RTS)) {
+		/*状态未达到ready to send,不能发送,报错*/
 		*bad = wr;
 		return EINVAL;
 	}
 
 	ionic_sq_spin_lock(qp);
 
+	/*取当前生产者指针*/
 	old_prod = qp->sq.queue.prod;
 
+	/*处理wr list,填写内容到qp.sq*/
 	while (wr) {
 		if (ionic_queue_full(&qp->sq.queue)) {
+			/*发送队列已满，报错*/
 			verbs_info(&ctx->vctx,
 				   "send queue full cons %u prod %u",
 				   qp->sq.queue.cons, qp->sq.queue.prod);
@@ -2629,6 +2689,7 @@ static int ionic_post_send_common(struct ionic_ctx *ctx,
 		if (qp->vqp.qp.qp_type == IBV_QPT_UD)
 			rc = ionic_v1_prep_one_ud(qp, wr);
 		else
+			/*rc qp发送处理*/
 			rc = ionic_v1_prep_one_rc(qp, wr, send_path);
 		if (rc)
 			goto out;
@@ -2637,6 +2698,7 @@ static int ionic_post_send_common(struct ionic_ctx *ctx,
 	}
 
 out:
+	/*获得共产生了多少wqe(这个数据未使用）*/
 	old_prod = (qp->sq.queue.prod - old_prod) & qp->sq.queue.mask;
 
 	if (ionic_cq_spin_trylock(cq)) {
@@ -2650,14 +2712,16 @@ out:
 		spend = (qp->sq.queue.prod - qp->sq.old_prod) & qp->sq.queue.mask;
 		ionic_reserve_cq(ctx, cq, spend);
 
-		qp->sq.old_prod = qp->sq.queue.prod;
+		qp->sq.old_prod = qp->sq.queue.prod;/*记录本次触发door bell时生产者指针位置*/
 
 		if (qp->sq.cmb_ptr) {
+			/*采用将wqe内容写入到cmb，再触发doorbell*/
 			ionic_post_send_cmb(ctx, qp);
 		} else {
 			udma_to_device_barrier();
 			verbs_debug(&ctx->vctx, "dbell qp %u sq val %" PRIx64,
 				    qp->qpid, ionic_queue_dbell_val(&qp->sq.queue));
+			/*触发door bell(指明qtype,qid,生产者指针)*/
 			ionic_dbell_ring(&ctx->dbpage[ctx->sq_qtype],
 					 ionic_queue_dbell_val(&qp->sq.queue));
 		}
@@ -2708,7 +2772,7 @@ static int ionic_v1_prep_recv(struct ionic_qp *qp,
 
 	meta->wrid = wr->wr_id;
 
-	wqe->base.wqe_id = qp->rq.queue.prod;
+	wqe->base.wqe_id = qp->rq.queue.prod;/*wqe在rq中所属的生产者指针*/
 	wqe->base.num_sge_key = wr->num_sge;
 
 	qp->rq.meta_idx[qp->rq.queue.prod] = meta - qp->rq.meta;
@@ -2755,12 +2819,14 @@ static int ionic_post_recv_common(struct ionic_ctx *ctx,
 
 	while (wr) {
 		if (ionic_queue_full(&qp->rq.queue)) {
+			/*RQ队列已满*/
 			verbs_info(&ctx->vctx, "recv queue full cons %u prod %u",
 				   qp->rq.queue.cons, qp->rq.queue.prod);
 			rc = ENOMEM;
 			goto out;
 		}
 
+		/*填充RQ队列*/
 		rc = ionic_v1_prep_recv(qp, wr);
 		if (rc)
 			goto out;
@@ -2796,6 +2862,7 @@ out:
 			verbs_debug(&ctx->vctx, "dbell qp %u rq val %" PRIx64,
 				    qp->qpid,
 				    ionic_queue_dbell_val(&qp->rq.queue));
+			/*触发RQ队列调度*/
 			ionic_dbell_ring(&ctx->dbpage[ctx->rq_qtype],
 					 ionic_queue_dbell_val(&qp->rq.queue));
 		}
@@ -2824,7 +2891,7 @@ static int ionic_post_send(struct ibv_qp *ibqp,
 	struct ionic_qp *qp = to_ionic_qp(ibqp);
 	struct ionic_cq *cq = to_ionic_vcq_cq(qp->vqp.qp.send_cq, qp->udma_idx);
 
-	return ionic_post_send_common(ctx, cq, qp, wr, bad, true);
+	return ionic_post_send_common(ctx, cq/*指明cq*/, qp/*指明qp*/, wr/*要发送的内容*/, bad, true);
 }
 
 static int ionic_post_recv(struct ibv_qp *ibqp,
@@ -2856,7 +2923,7 @@ static struct ibv_qp *ionic_create_qp(struct ibv_pd *ibpd,
 	struct ibv_qp *ibqp;
 
 	vctx = container_of(ibpd->context, struct verbs_context, context);
-	ibqp = vctx->create_qp_ex(&vctx->context, &ex);
+	ibqp = vctx->create_qp_ex(&vctx->context, &ex);/*复用create_qp_ex接口*/
 
 	attr->cap = ex.cap;
 
@@ -2959,7 +3026,7 @@ static int ionic_bind_mw(struct ibv_qp *ibqp, struct ibv_mw *ibmw,
 	if (bind->bind_info.length)
 		wr.bind_mw.rkey = ibv_inc_rkey(ibmw->rkey);
 
-	rc = ionic_post_send_common(ctx, cq, qp, &wr, &bad, false);
+	rc = ionic_post_send_common(ctx, cq, qp, &wr, &bad, false/*非send*/);
 	if (!rc)
 		ibmw->rkey = wr.bind_mw.rkey;
 
@@ -2994,6 +3061,7 @@ static void ionic_free_context(struct ibv_context *ibctx)
 	free(ctx);
 }
 
+/*检查是否为ionic创建的context*/
 bool is_ionic_ctx(struct ibv_context *ibctx)
 {
 	/* whatever we do here must be safe with non-ionic ibctx. */
@@ -3008,21 +3076,21 @@ static const struct verbs_context_ops ionic_ctx_ops = {
 	.alloc_parent_domain	= ionic_alloc_parent_domain,
 	.alloc_pd		= ionic_alloc_pd,
 	.dealloc_pd		= ionic_dealloc_pd,
-	.reg_dmabuf_mr		= ionic_reg_dmabuf_mr,
-	.reg_mr			= ionic_reg_mr,
+	.reg_dmabuf_mr		= ionic_reg_dmabuf_mr,/*注册dma buffer形式的mr*/
+	.reg_mr			= ionic_reg_mr,/*实现mr注册*/
 	.dereg_mr		= ionic_dereg_mr,
-	.create_cq		= ionic_create_cq,
-	.create_cq_ex		= ionic_create_cq_ex,
-	.poll_cq		= ionic_poll_cq,
+	.create_cq		= ionic_create_cq,/*创建complete queue*/
+	.create_cq_ex		= ionic_create_cq_ex,/*创建cq*/
+	.poll_cq		= ionic_poll_cq,/*poll cq回调*/
 	.req_notify_cq		= ionic_req_notify_cq,
 	.destroy_cq		= ionic_destroy_cq,
-	.create_qp		= ionic_create_qp,
-	.create_qp_ex		= ionic_create_qp_ex,
+	.create_qp		= ionic_create_qp,/*创建qp*/
+	.create_qp_ex		= ionic_create_qp_ex,/*创建qp*/
 	.query_qp		= ionic_query_qp,
-	.modify_qp		= ionic_modify_qp,
+	.modify_qp		= ionic_modify_qp,/*实现modify qp*/
 	.destroy_qp		= ionic_destroy_qp,
-	.post_send		= ionic_post_send,
-	.post_recv		= ionic_post_recv,
+	.post_send		= ionic_post_send,/*实现post send*/
+	.post_recv		= ionic_post_recv,/*实现post recv*/
 	.create_ah		= ionic_create_ah,
 	.destroy_ah		= ionic_destroy_ah,
 	.alloc_mw		= ionic_alloc_mw,

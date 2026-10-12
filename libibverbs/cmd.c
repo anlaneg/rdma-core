@@ -590,7 +590,7 @@ int ibv_cmd_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	/*设置属性fields*/
 	copy_modify_qp_fields(qp, attr, attr_mask, &cmd->core_payload);
 
-	/*执行qp修改*/
+	/*通过kernel执行qp修改*/
 	return execute_cmd_write_req(qp->context, IB_USER_VERBS_CMD_MODIFY_QP,
 				     cmd, cmd_size);
 }

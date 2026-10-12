@@ -33,6 +33,7 @@ static inline int to_ionic_mr_flags(int access)
 	return flags;
 }
 
+/*state由ionic转换为ib标准格式*/
 static inline int ionic_to_ibv_status(int sts)
 {
 	switch (sts) {
@@ -59,7 +60,7 @@ static inline int ionic_to_ibv_status(int sts)
 	case IONIC_STS_REMOTE_OPER_ERR:
 		return IBV_WC_REM_OP_ERR;
 	case IONIC_STS_RETRY_EXCEEDED:
-		return IBV_WC_RETRY_EXC_ERR;
+		return IBV_WC_RETRY_EXC_ERR;/*重传超时*/
 	case IONIC_STS_RNR_RETRY_EXCEEDED:
 		return IBV_WC_RNR_RETRY_EXC_ERR;
 	case IONIC_STS_XRC_VIO_ERR:
@@ -97,16 +98,19 @@ static inline void ionic_v1_cqe_clean(struct ionic_v1_cqe *cqe)
 
 static inline uint32_t ionic_v1_cqe_qtf(struct ionic_v1_cqe *cqe)
 {
+	/*取得qid,type,flags三字段组成的uint32_t*/
 	return be32toh(cqe->qid_type_flags);
 }
 
 static inline uint8_t ionic_v1_cqe_qtf_type(uint32_t qtf)
 {
+	/*取type字段(占4bits)*/
 	return (qtf >> IONIC_V1_CQE_TYPE_SHIFT) & IONIC_V1_CQE_TYPE_MASK;
 }
 
 static inline uint32_t ionic_v1_cqe_qtf_qid(uint32_t qtf)
 {
+	/*取qid(占用24bits)*/
 	return qtf >> IONIC_V1_CQE_QID_SHIFT;
 }
 
@@ -143,7 +147,7 @@ static inline int ionic_v1_send_wqe_max_sge(uint8_t stride_log2, int spec, bool 
 	int num_sge = 0;
 
 	if (expdb)
-		sge -= 1;
+		sge -= 1;/*减去8个字节*/
 
 	if (spec > IONIC_V1_SPEC_FIRST_SGE)
 		num_sge = IONIC_V1_SPEC_FIRST_SGE;
@@ -159,9 +163,11 @@ static inline int ionic_v1_send_wqe_max_sge(uint8_t stride_log2, int spec, bool 
 static inline int ionic_v1_send_wqe_max_data(uint8_t stride_log2, bool expdb)
 {
 	struct ionic_v1_wqe *wqe = (void *)0;
+	/*wqe大小*/
 	__u8 *data = (void *)(uintptr_t)(1ull << stride_log2);
 
 	if (expdb)
+		/*减去IONIC_EXP_DBELL_SZ*/
 		data -= IONIC_EXP_DBELL_SZ;
 
 	return data - wqe->common.pld.data;

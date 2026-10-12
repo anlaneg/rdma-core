@@ -775,7 +775,7 @@ void ibverbs_device_put(struct ibv_device *dev)
 	struct verbs_device *verbs_device = verbs_get_device(dev);
 
 	if (atomic_fetch_sub(&verbs_device->refcount, 1) == 1) {
-		/*无应用引用此值*/
+		/*无应用引用此值,释放此设备*/
 		free(verbs_device->sysfs);
 		if (verbs_device->ops->uninit_device)
 			verbs_device->ops->uninit_device(verbs_device);

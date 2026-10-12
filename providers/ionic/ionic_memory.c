@@ -14,6 +14,7 @@
 #define IONIC_DEV_MFLAGS	MAP_SHARED
 #define IONIC_DEV_MPROT		PROT_WRITE
 
+/*申请内存*/
 void *ionic_map_anon(size_t size)
 {
 	void *ptr;
@@ -33,7 +34,7 @@ void *ionic_map_anon(size_t size)
 	return ptr;
 }
 
-void *ionic_map_device(size_t size, int fd, size_t offset)
+void *ionic_map_device(size_t size, int fd, size_t offset/*map偏移量*/)
 {
 	void *ptr;
 	int rc;

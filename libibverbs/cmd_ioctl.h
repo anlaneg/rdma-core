@@ -301,7 +301,7 @@ static inline uint32_t read_attr_obj(uint16_t attr_id,
 /* Send attributes of kernel type UVERBS_ATTR_TYPE_PTR_IN */
 static inline struct ib_uverbs_attr *
 fill_attr_in(struct ibv_command_buffer *cmd, uint16_t attr_id, const void *data,
-	     size_t len)
+	     size_t len/*属性长度*/)
 {
 	struct ib_uverbs_attr *attr = _ioctl_next_attr(cmd, attr_id);
 
@@ -309,7 +309,7 @@ fill_attr_in(struct ibv_command_buffer *cmd, uint16_t attr_id, const void *data,
 	    /*无效长度*/
 		cmd->buffer_error = 1;
 
-	attr->len = len;
+	attr->len = len;/*指明内容长度*/
 	/*内容长度小于u64,则填充到attr->data,否则使指针指向*/
 	if (len <= sizeof(uint64_t) && data)
 		memcpy(&attr->data, data, len);

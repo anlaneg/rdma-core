@@ -951,8 +951,8 @@ enum ibv_qp_type {
 };
 
 struct ibv_qp_cap {
-	uint32_t		max_send_wr;
-	uint32_t		max_recv_wr;
+	uint32_t		max_send_wr;/*最大send时wr数目*/
+	uint32_t		max_recv_wr;/*最大recv时wr数目*/
 	uint32_t		max_send_sge;
 	uint32_t		max_recv_sge;
 	uint32_t		max_inline_data;
@@ -960,9 +960,9 @@ struct ibv_qp_cap {
 
 struct ibv_qp_init_attr {
 	void		       *qp_context;
-	/*发送对应的cq*/
+	/*qp发送对应的cq*/
 	struct ibv_cq	       *send_cq;
-	/*接收对应的cq*/
+	/*qp接收对应的cq*/
 	struct ibv_cq	       *recv_cq;
 	struct ibv_srq	       *srq;
 	struct ibv_qp_cap	cap;
@@ -1210,7 +1210,7 @@ struct ibv_fd_arr {
 
 struct ibv_send_wr {
 	uint64_t		wr_id;
-	/*指向另一个send_wr,用于串成链表*/
+	/*容许指向另一个send_wr,用于串成链表*/
 	struct ibv_send_wr     *next;
 	struct ibv_sge	       *sg_list;
 	/*表示sg_list数组大小*/
@@ -1353,7 +1353,7 @@ struct ibv_qp {
 	uint32_t		handle;
 	uint32_t		qp_num;
 	enum ibv_qp_state       state;
-	enum ibv_qp_type	qp_type;
+	enum ibv_qp_type	qp_type;/*qp类型*/
 
 	pthread_mutex_t		mutex;
 	pthread_cond_t		cond;
@@ -2146,7 +2146,7 @@ struct ibv_cq_init_attr_ex {
 	/* Completion channel where completion events will be queued.
 	 * May be NULL if completion events will not be used.
 	 */
-	struct ibv_comp_channel *channel;
+	struct ibv_comp_channel *channel;/*为此cq关联的event channel*/
 	/* Completion vector used to signal completion events.
 	 *  Must be < context->num_comp_vectors.
 	 */

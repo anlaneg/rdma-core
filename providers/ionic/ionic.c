@@ -8,7 +8,8 @@
 
 #include "ionic.h"
 
-static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
+/*创建ionic对应的verbs_context*/
+static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev/*关联的ib设备*/,
 						 int cmd_fd,
 						 void *private_data)
 {
@@ -18,8 +19,9 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 	uint64_t mask;
 	int rc;
 
+	/*指明ionic对应的verbs_context为ionic_ctx,且其结构体中verbs_context的名称为vctx，申请并初始化*/
 	ctx = verbs_init_and_alloc_context(ibdev, cmd_fd, ctx, vctx,
-					   RDMA_DRIVER_IONIC);
+					   RDMA_DRIVER_IONIC/*driver驱动编号*/);
 	if (!ctx) {
 		rc = errno;
 		goto err_ctx;
@@ -33,6 +35,7 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 	ctx->pg_shift = resp.page_shift;
 
 	if (resp.version < IONIC_MIN_RDMA_VERSION) {
+		/*版本检查*/
 		verbs_err(&ctx->vctx, "ionic: Firmware RDMA Version %u\n",
 			  resp.version);
 		verbs_err(&ctx->vctx, "ionic: Driver Min RDMA Version %u\n",
@@ -42,6 +45,7 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 	}
 
 	if (resp.version > IONIC_MAX_RDMA_VERSION) {
+		/*版本检查*/
 		verbs_err(&ctx->vctx, "ionic: Firmware RDMA Version %u\n",
 			  resp.version);
 		verbs_err(&ctx->vctx, "ionic: Driver Max RDMA Version %u\n",
@@ -59,6 +63,7 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 		goto err_cmd;
 	}
 
+	/*udma_count数量有误*/
 	if (resp.udma_count != 1 && resp.udma_count != 2) {
 		verbs_err(&ctx->vctx, "ionic: udma_count %d invalid\n",
 			  resp.udma_count);
@@ -78,6 +83,7 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 	ctx->rq_expdb = !!(resp.expdb_qtypes & IONIC_EXPDB_RQ);
 
 	mask = (1u << ctx->pg_shift) - 1;
+	/*映射doorbell page*/
 	ctx->dbpage_page = ionic_map_device(1u << ctx->pg_shift, cmd_fd,
 					    resp.dbell_offset & ~mask);
 	if (!ctx->dbpage_page) {
@@ -89,6 +95,7 @@ static struct verbs_context *ionic_alloc_context(struct ibv_device *ibdev,
 	pthread_mutex_init(&ctx->mut, NULL);
 	ionic_tbl_init(&ctx->qp_tbl);
 
+	/*初始化ctx的ops*/
 	ionic_verbs_set_ops(ctx);
 
 	ctx->spec = resp.max_spec;
@@ -145,7 +152,7 @@ static const struct verbs_device_ops ionic_dev_ops = {
 	.match_table		= cna_table,
 	.alloc_device		= ionic_alloc_device,
 	.uninit_device		= ionic_uninit_device,
-	.alloc_context		= ionic_alloc_context,
+	.alloc_context		= ionic_alloc_context,/*用于申请并初始化context*/
 };
 
 PROVIDER_DRIVER(ionic, ionic_dev_ops);

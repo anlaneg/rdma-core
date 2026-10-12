@@ -424,6 +424,7 @@ int ibv_cmd_create_qp_ex(struct ibv_context *context,
 	return ibv_icmd_create_qp(context, qp, NULL, attr_ex, cmdb);
 }
 
+/*通过此接口向kernel请求创建qp*/
 int ibv_cmd_create_qp_ex2(struct ibv_context *context,
 			  struct verbs_qp *qp,
 			  struct ibv_qp_init_attr_ex *attr_ex,

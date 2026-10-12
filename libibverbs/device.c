@@ -178,7 +178,7 @@ void verbs_init_cq(struct ibv_cq *cq, struct ibv_context *context,
 
 	if (cq->channel) {
 		pthread_mutex_lock(&context->mutex);
-		++cq->channel->refcnt;
+		++cq->channel->refcnt;/*增加channel引用计数*/
 		pthread_mutex_unlock(&context->mutex);
 	}
 
@@ -229,6 +229,7 @@ static bool has_ioctl_write(struct ibv_context *ctx)
 	 */
 	fill_attr_const_in(cmdb, UVERBS_ATTR_WRITE_CMD,
 			   IB_USER_VERBS_CMD_QUERY_DEVICE);
+	/*利用ioctl进行查询*/
 	rc = execute_ioctl(ctx, cmdb);
 	if (rc == EPROTONOSUPPORT)
 		return false;
@@ -249,6 +250,7 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
 	/*verbs context中有ibv_context*/
 	struct ibv_context *context = &context_ex->context;
 
+	/*增加此设备引用*/
 	ibverbs_device_hold(device);
 
 	/*初始化ib context*/
@@ -260,7 +262,7 @@ int verbs_init_context(struct verbs_context *context_ex/*要初始化的verbs_co
 	context_ex->context.abi_compat = __VERBS_ABI_IS_EXTENDED;
 	context_ex->sz = sizeof(*context_ex);/*这个值本身总等于verbs_context,增加它的意义在哪？*/
 
-	/*申请私有结构体*/
+	/*申请私有结构体（私有大小也是固定的，比较不合理）*/
 	context_ex->priv = calloc(1, sizeof(*context_ex->priv));
 	if (!context_ex->priv) {
 		errno = ENOMEM;

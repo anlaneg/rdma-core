@@ -71,7 +71,7 @@ struct pingpong_context {
 	struct ibv_mr		*mr;
 	struct ibv_dm		*dm;
 	union {
-		struct ibv_cq		*cq;
+		struct ibv_cq		*cq;/*创建的cq*/
 		struct ibv_cq_ex	*cq_ex;
 	} cq_s;
 	struct ibv_qp		*qp;/*qp信息*/
@@ -81,7 +81,7 @@ struct pingpong_context {
 	/*消息大小*/
 	int			 size;
 	int			 send_flags;
-	int			 rx_depth;
+	int			 rx_depth;/*rx队列深度*/
 	int			 pending;
 	struct ibv_port_attr     portinfo;
 	uint64_t		 completion_timestamp_mask;
@@ -105,7 +105,7 @@ static int pp_connect_ctx(struct pingpong_context *ctx, int port, int my_psn,
 			  struct pingpong_dest *dest/*对端信息*/, int sgid_idx)
 {
 	struct ibv_qp_attr attr = {
-		.qp_state		= IBV_QPS_RTR,
+		.qp_state		= IBV_QPS_RTR,/*指明状态为RTR*/
 		.path_mtu		= mtu,/*path对应的mtu*/
 		.dest_qp_num		= dest->qpn,/*目标qpn*/
 		.rq_psn			= dest->psn,/*目标端首个psn*/
@@ -138,9 +138,10 @@ static int pp_connect_ctx(struct pingpong_context *ctx, int port, int my_psn,
 		return 1;
 	}
 
+	/*指明为RTS状态*/
 	attr.qp_state	    = IBV_QPS_RTS;
-	attr.timeout	    = 14;
-	attr.retry_cnt	    = 7;
+	attr.timeout	    = 14;/*超时时间*/
+	attr.retry_cnt	    = 7;/*重传次数*/
 	attr.rnr_retry	    = 7;
 	attr.sq_psn	    = my_psn;
 	attr.max_rd_atomic  = 1;
@@ -499,6 +500,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 			.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP
 		};
 
+		/*利用context创建cq_ex*/
 		ctx->cq_s.cq_ex = ibv_create_cq_ex(ctx->context, &attr_ex);
 	} else {
 		/*利用context创建cq*/
@@ -531,7 +533,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 
 			init_attr_ex.send_cq = pp_cq(ctx);
 			init_attr_ex.recv_cq = pp_cq(ctx);
-			init_attr_ex.cap.max_send_wr = 1;
+			init_attr_ex.cap.max_send_wr = 1;/*发送时wr数目最大为1*/
 			init_attr_ex.cap.max_recv_wr = rx_depth;
 			init_attr_ex.cap.max_send_sge = 1;
 			init_attr_ex.cap.max_recv_sge = 1;
@@ -570,7 +572,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 			.qp_access_flags = 0
 		};
 
-		/*更新qp(为什么要更新？）*/
+		/*更新qp到INIT状态*/
 		if (ibv_modify_qp(ctx->qp, &attr,
 				  IBV_QP_STATE              |
 				  IBV_QP_PKEY_INDEX         |
@@ -1155,6 +1157,7 @@ int main(int argc, char *argv[])
 			struct ibv_cq *ev_cq;
 			void          *ev_ctx;
 
+			/*获取event*/
 			if (ibv_get_cq_event(ctx->channel, &ev_cq, &ev_ctx)) {
 				fprintf(stderr, "Failed to get cq_event\n");
 				return 1;

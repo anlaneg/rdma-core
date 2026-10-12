@@ -454,6 +454,7 @@ struct verbs_context_ops {
 	struct ibv_xrcd *(*open_xrcd)(
 		struct ibv_context *context,
 		struct ibv_xrcd_init_attr *xrcd_init_attr);
+	/*自队列cq中poll cqe*/
 	int (*poll_cq)(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
 	/*为rq队列提供可接收数据的buffer*/
 	int (*post_recv)(struct ibv_qp *qp, struct ibv_recv_wr *wr/*可接收数据的buffer*/,

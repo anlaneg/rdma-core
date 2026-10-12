@@ -60,7 +60,7 @@ static uint8_t ionic_dv_cmb_val(bool enable, bool expdb, bool require)
 	return cmb;
 }
 
-int ionic_dv_pd_set_sqcmb(struct ibv_pd *ibpd, bool enable, bool expdb, bool require)
+int ionic_dv_pd_set_sqcmb(struct ibv_pd *ibpd, bool enable/*是否开启cmb*/, bool expdb, bool require)
 {
 	struct ionic_ctx *ctx;
 	struct ionic_pd *pd;

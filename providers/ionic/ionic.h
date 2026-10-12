@@ -63,22 +63,22 @@ struct ionic_ctx {
 	int			spec;
 	uint32_t		pg_shift;
 
-	int			version;
+	int			version;/*版本号*/
 	uint8_t			opcodes;
 
-	uint8_t			sq_qtype;
+	uint8_t			sq_qtype;/*sq的queue类型（硬件提供的id编号，软件在指明sq时需提供此值），下同*/
 	uint8_t			rq_qtype;
 	uint8_t			cq_qtype;
 
 	uint8_t			max_stride;
 
-	uint8_t			udma_count;
+	uint8_t			udma_count;/*可用的udma总数*/
 	uint8_t			expdb_mask;
 	bool			sq_expdb;
 	bool			rq_expdb;
 
-	void			*dbpage_page;
-	uint64_t		*dbpage;
+	void			*dbpage_page;/*映射的doorbell页*/
+	uint64_t		*dbpage;/*doorbell内存起始地址*/
 
 	pthread_mutex_t		mut;
 	struct ionic_tbl_root	qp_tbl;
@@ -91,7 +91,7 @@ struct ionic_pd {
 	struct ibv_pd		*root_ibpd;
 
 	uint8_t			udma_mask;
-	uint8_t			sq_cmb;
+	uint8_t			sq_cmb;/*sq队列cmb开启标记*/
 	uint8_t			rq_cmb;
 
 	void *(*alloc)(struct ibv_pd *pd, void *pd_context, size_t size,
@@ -102,11 +102,11 @@ struct ionic_pd {
 };
 
 struct ionic_cq {
-	struct ionic_vcq	*vcq;
+	struct ionic_vcq	*vcq;/*从属的ionic_vcq*/
 
 	uint32_t		cqid;
 
-	pthread_spinlock_t	lock;
+	pthread_spinlock_t	lock;/*保护此cq*/
 	unsigned long		cqseq;
 
 	struct list_head	poll_sq;
@@ -118,7 +118,7 @@ struct ionic_cq {
 	bool			color;
 	bool			deferred_arm;
 	bool			deferred_arm_sol_only;
-	bool			lockfree;
+	bool			lockfree;/*是否无锁cq*/
 	int			reserve;
 	int			reserve_pending;
 	uint16_t		arm_any_prod;
@@ -127,7 +127,7 @@ struct ionic_cq {
 
 struct ionic_vcq {
 	struct verbs_cq		vcq;
-	struct ionic_cq		cq[2];
+	struct ionic_cq		cq[2];/*当前udma数目为2，故这里数组长度为2*/
 	uint8_t			udma_mask;
 	uint8_t			poll_idx;
 	struct ibv_wc		cur_wc; /* for use with start_poll/next_poll */
@@ -137,7 +137,7 @@ struct ionic_sq_meta {
 	uint64_t		wrid;
 	uint32_t		len;
 	uint16_t		seq;
-	uint8_t			ibop;
+	uint8_t			ibop;/*操作码*/
 	uint8_t			ibsts;
 	bool			remote;
 	bool			signal;
@@ -150,7 +150,7 @@ struct ionic_rq_meta {
 };
 
 struct ionic_rq {
-	pthread_spinlock_t	lock;
+	pthread_spinlock_t	lock;/*用于保护rq*/
 	struct ionic_queue	queue;
 
 	void			*cmb_ptr;
@@ -166,11 +166,11 @@ struct ionic_rq {
 };
 
 struct ionic_sq {
-	pthread_spinlock_t	lock;
-	struct ionic_queue	queue;
+	pthread_spinlock_t	lock;/*用于保护sq*/
+	struct ionic_queue	queue;/*sq队列*/
 
 	void			*cmb_ptr;
-	struct ionic_sq_meta	*meta;
+	struct ionic_sq_meta	*meta;/*sq元数据*/
 	uint16_t		*msn_idx;
 
 	int			spec;
@@ -182,6 +182,7 @@ struct ionic_sq {
 
 	bool			flush;
 	bool			flush_rcvd;
+	/*color是一个反转标记，每当sq的生产者指针达到0时，color标记反转*/
 	bool			color;
 };
 
@@ -192,15 +193,15 @@ struct ionic_qp {
 	uint8_t			udma_idx;
 	bool			has_sq;
 	bool			has_rq;
-	bool			lockfree;
+	bool			lockfree;/*是否无锁队列*/
 
 	struct list_node	cq_poll_sq;
 	struct list_node	cq_poll_rq;
 	struct list_node	cq_flush_sq;
 	struct list_node	cq_flush_rq;
 
-	struct ionic_sq		sq;
-	struct ionic_rq		rq;
+	struct ionic_sq		sq;/*此qp对应的send queue*/
+	struct ionic_rq		rq;/*此qp对应的recv queue*/
 };
 
 struct ionic_ah {
@@ -215,16 +216,19 @@ struct ionic_dev {
 
 bool is_ionic_ctx(struct ibv_context *ibctx);
 
+/*检查此pd是否ionic创建的*/
 static inline bool is_ionic_pd(struct ibv_pd *ibpd)
 {
 	return is_ionic_ctx(ibpd->context);
 }
 
+/*检查此cq是否ionic创建的*/
 static inline bool is_ionic_cq(struct ibv_cq *ibcq)
 {
 	return is_ionic_ctx(ibcq->context);
 }
 
+/*检查此qp是否ionic创建的*/
 static inline bool is_ionic_qp(struct ibv_qp *ibqp)
 {
 	return is_ionic_ctx(ibqp->context);
@@ -235,11 +239,13 @@ static inline struct ionic_dev *to_ionic_dev(struct ibv_device *ibdev)
 	return container_of(ibdev, struct ionic_dev, vdev.device);
 }
 
+/*由ibctx获取ionic_ctx结构体*/
 static inline struct ionic_ctx *to_ionic_ctx(struct ibv_context *ibctx)
 {
 	return container_of(ibctx, struct ionic_ctx, vctx.context);
 }
 
+/*由ibpd获取ionic_pd结构体*/
 static inline struct ionic_pd *to_ionic_pd(struct ibv_pd *ibpd)
 {
 	return container_of(ibpd, struct ionic_pd, ibpd);
@@ -265,12 +271,14 @@ static inline struct ionic_vcq *to_ionic_vcq(struct ibv_cq *ibcq)
 	return container_of(ibcq, struct ionic_vcq, vcq.cq);
 }
 
+/*ibv_cq转换为ionic_cq*/
 static inline struct ionic_cq *to_ionic_vcq_cq(struct ibv_cq *ibcq,
-					       uint8_t udma_idx)
+					       uint8_t udma_idx/*使用哪个udma索引*/)
 {
 	return &to_ionic_vcq(ibcq)->cq[udma_idx];
 }
 
+/*转换为ionic_qp*/
 static inline struct ionic_qp *to_ionic_qp(struct ibv_qp *ibqp)
 {
 	return container_of(ibqp, struct ionic_qp, vqp.qp);
@@ -286,6 +294,7 @@ static inline bool ionic_ibop_is_local(enum ibv_wr_opcode op)
 	return op == IBV_WR_LOCAL_INV || op == IBV_WR_BIND_MW;
 }
 
+/*生成udma 可用mask*/
 static inline uint8_t ionic_ctx_udma_mask(struct ionic_ctx *ctx)
 {
 	return BIT(ctx->udma_count) - 1;

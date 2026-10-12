@@ -62,9 +62,9 @@ static int ibv_icmd_create_cq(struct ibv_context *context, int cqe,
 	fill_attr_out_ptr(cmdb, UVERBS_ATTR_CREATE_CQ_RESP_CQE, &resp_cqe);
 
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_CQE, cqe);/*指明cqe数目*/
-	fill_attr_in_uint64(cmdb, UVERBS_ATTR_CREATE_CQ_USER_HANDLE, (uintptr_t)cq);
+	fill_attr_in_uint64(cmdb, UVERBS_ATTR_CREATE_CQ_USER_HANDLE, (uintptr_t)cq);/*指明此cq在用户态的handle(即指针）*/
 	if (channel)
-		/*如果有channel,则指定channel fd*/
+		/*如果有event channel,则指定channel fd*/
 		fill_attr_in_fd(cmdb, UVERBS_ATTR_CREATE_CQ_COMP_CHANNEL, channel->fd);
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_CREATE_CQ_COMP_VECTOR, comp_vector);
 	async_fd_attr = fill_attr_in_fd(cmdb, UVERBS_ATTR_CREATE_CQ_EVENT_FD, context->async_fd);

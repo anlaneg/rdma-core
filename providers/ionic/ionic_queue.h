@@ -13,7 +13,9 @@
 #include <util/udma_barrier.h>
 #include <util/util.h>
 
+/*qid占用24位*/
 #define IONIC_QID_MASK		(BIT_ULL(24) - 1)
+/*qid所处位置为24bit到47bit，故需左移24bit*/
 #define IONIC_DBELL_QID_SHIFT	24
 #define IONIC_DBELL_RING_ARM	BIT_ULL(16)
 #define IONIC_DBELL_RING_SONLY	BIT_ULL(17)
@@ -32,14 +34,14 @@ struct ionic_pd;
  * @dbell:	Doorbell identifying bits
  */
 struct ionic_queue {
-	size_t size;
-	void *ptr;
-	uint16_t prod;
-	uint16_t cons;
-	uint16_t mask;
-	uint8_t depth_log2;
-	uint8_t stride_log2;
-	uint64_t dbell;
+	size_t size;/*1 << (depth_log2 + stride_log) 即为队列占用内存总大小*/
+	void *ptr;/*队列起始指针*/
+	uint16_t prod;/*生产者索引*/
+	uint16_t cons;/*消费者索引*/
+	uint16_t mask;/*队列深度掩码*/
+	uint8_t depth_log2;/*队列深度（以2为底size的对数)*/
+	uint8_t stride_log2;/*队列中存放的是wqe,每个wqe大小（以2为底size的对数)*/
+	uint64_t dbell;/*用于指定doorbell对应的qid,*/
 
 	struct ionic_pd *pd;
 	uint64_t pd_tag;
@@ -143,6 +145,7 @@ static inline bool ionic_color_wrap(uint16_t prod, bool color)
  */
 static inline void *ionic_queue_at(struct ionic_queue *q, uint16_t idx)
 {
+	/*针对此q取索引idx对应的内容*/
 	return q->ptr + ((unsigned long)idx << q->stride_log2);
 }
 
@@ -154,7 +157,7 @@ static inline void *ionic_queue_at(struct ionic_queue *q, uint16_t idx)
  */
 static inline void *ionic_queue_at_prod(struct ionic_queue *q)
 {
-	return ionic_queue_at(q, q->prod);
+	return ionic_queue_at(q, q->prod/*生产者索引*/);
 }
 
 /**
@@ -212,6 +215,7 @@ static inline void ionic_queue_consume(struct ionic_queue *q)
 static inline void ionic_queue_dbell_init(struct ionic_queue *q,
 					  uint32_t qid)
 {
+	/*填写doorbell中的qid信息*/
 	q->dbell = ((uint64_t)qid & IONIC_QID_MASK) << IONIC_DBELL_QID_SHIFT;
 }
 
@@ -231,6 +235,7 @@ static inline uint64_t ionic_queue_dbell_val(struct ionic_queue *q)
  */
 static inline void ionic_dbell_ring(uint64_t *dbreg, uint64_t val)
 {
+	/*触发doorbell*/
 	mmio_write64_le(dbreg, htole64(val));
 }
 

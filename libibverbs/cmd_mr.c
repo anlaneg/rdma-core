@@ -123,7 +123,7 @@ int ibv_cmd_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length,
 			  struct ibv_command_buffer *driver)
 {
 	DECLARE_COMMAND_BUFFER_LINK(cmdb, UVERBS_OBJECT_MR,
-				    UVERBS_METHOD_REG_DMABUF_MR,
+				    UVERBS_METHOD_REG_DMABUF_MR,/*调用dmabuf mr*/
 				    9,
 				    driver);
 	struct ib_uverbs_attr *handle;
@@ -141,7 +141,7 @@ int ibv_cmd_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length,
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_REG_DMABUF_MR_FD, fd);
 	fill_attr_in_uint32(cmdb, UVERBS_ATTR_REG_DMABUF_MR_ACCESS_FLAGS, access);
 
-	ret = execute_ioctl(pd->context, cmdb);
+	ret = execute_ioctl(pd->context, cmdb);/*走kernel注册*/
 	if (ret)
 		return errno;
 
