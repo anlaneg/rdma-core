@@ -1140,6 +1140,7 @@ static int ionic_comp_npg(struct ionic_ctx *ctx,
 		meta->len = st_len;
 		meta->ibsts = ionic_to_ibv_status(st_len);
 		meta->remote = false;
+		//cqe with error local QP operation error报错对应的即为IBV_WC_LOC_QP_OP_ERR
 		verbs_err(&ctx->vctx, "cqe with error %s for %#x (npg), qpid %u cqid %u",
 			  ibv_wc_status_str(meta->ibsts),
 			  be32toh(cqe->send.msg_msn),
@@ -1151,12 +1152,13 @@ static int ionic_comp_npg(struct ionic_ctx *ctx,
 
 static bool ionic_next_cqe(struct ionic_ctx *ctx,
 			   struct ionic_cq *cq,
-			   struct ionic_v1_cqe **cqe)
+			   struct ionic_v1_cqe **cqe/*出参，取得cqe*/)
 {
+	/*取cq生产者对应的cqe*/
 	struct ionic_v1_cqe *qcqe = ionic_queue_at_prod(&cq->q);
 
 	if (unlikely(cq->color != ionic_v1_cqe_color(qcqe)))
-		return false;
+		return false;/*color不同，无数据*/
 
 	udma_from_device_barrier();
 
@@ -1263,6 +1265,7 @@ static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq/*要poll
 			goto out;/*达到要求的总数，跳出*/
 
 		ionic_sq_spin_lock(qp);
+		/*自qp中poll*/
 		rc = ionic_poll_send_many(ctx, cq, qp, wc + npolled, nwc - npolled);
 		peek = ionic_peek_send(qp);
 		ionic_sq_spin_unlock(qp);
@@ -1280,11 +1283,11 @@ static int ionic_poll_vcq_cq(struct ionic_ctx *ctx, struct ionic_cq *cq/*要poll
 
 	while (likely(ionic_next_cqe(ctx, cq, &cqe))) {
 		if (npolled == nwc)
-			goto out;
+			goto out;/*已足够，不出队*/
 
 		qtf = ionic_v1_cqe_qtf(cqe);
-		qid = ionic_v1_cqe_qtf_qid(qtf);
-		type = ionic_v1_cqe_qtf_type(qtf);
+		qid = ionic_v1_cqe_qtf_qid(qtf);/*取cqe对应的qid*/
+		type = ionic_v1_cqe_qtf_type(qtf);/*取cqe对应的type*/
 
 		/*利用qid查询qp*/
 		qp = ionic_tbl_lookup(&ctx->qp_tbl, qid);
@@ -1448,7 +1451,7 @@ static int ionic_poll_cq(struct ibv_cq *ibcq, int nwc/*wc数组长度*/, struct 
 			continue;
 
 		rc_tmp = ionic_poll_vcq_cq(ctx, &vcq->cq[cq_ix],
-					   nwc - npolled, wc + npolled);
+					   nwc - npolled/*还需要poll多少*/, wc + npolled);
 
 		if (rc_tmp >= 0)
 			/*已poll出来的元素数增加*/

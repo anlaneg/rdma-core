@@ -683,7 +683,7 @@ struct ib_uverbs_ex_create_qp_resp {
  * alignment of the modify QP parameters.
  */
 struct ib_uverbs_qp_dest {
-	__u8  dgid[16];
+	__u8  dgid[16];/*目的gid*/
 	__u32 flow_label;
 	__u16 dlid;
 	__u16 reserved;
@@ -750,7 +750,7 @@ struct ib_uverbs_modify_qp {
 	__u32 qp_access_flags;
 	__u16 pkey_index;
 	__u16 alt_pkey_index;
-	__u8  qp_state;
+	__u8  qp_state;/*qp状态*/
 	__u8  cur_qp_state;
 	__u8  path_mtu;
 	__u8  path_mig_state;

@@ -528,7 +528,7 @@ static void copy_modify_qp_fields(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	}
 
 	if (attr_mask & IBV_QP_PATH_MTU)
-		cmd->path_mtu = attr->path_mtu;
+		cmd->path_mtu = attr->path_mtu;/*设置mtu*/
 	if (attr_mask & IBV_QP_TIMEOUT)
 		cmd->timeout = attr->timeout;
 	if (attr_mask & IBV_QP_RETRY_CNT)

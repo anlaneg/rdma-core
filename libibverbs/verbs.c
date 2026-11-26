@@ -808,7 +808,7 @@ int ibv_query_qp_data_in_order(struct ibv_qp *qp, enum ibv_wr_opcode op,
 /*修改qp属性*/
 LATEST_SYMVER_FUNC(ibv_modify_qp, 1_1, "IBVERBS_1.1",
 		   int,
-		   struct ibv_qp *qp, struct ibv_qp_attr *attr,
+		   struct ibv_qp *qp, struct ibv_qp_attr *attr/*要修改的属性*/,
 		   int attr_mask/*采用掩码指出哪些成员有效*/)
 {
 	int ret;

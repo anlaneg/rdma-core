@@ -81,7 +81,7 @@ struct ionic_ctx {
 	uint64_t		*dbpage;/*doorbell内存起始地址*/
 
 	pthread_mutex_t		mut;
-	struct ionic_tbl_root	qp_tbl;
+	struct ionic_tbl_root	qp_tbl;/*通过qid可查询qp*/
 
 	FILE			*dbg_file;
 };
@@ -300,8 +300,9 @@ static inline uint8_t ionic_ctx_udma_mask(struct ionic_ctx *ctx)
 	return BIT(ctx->udma_count) - 1;
 }
 
-static inline void ionic_dbg_xdump(struct ionic_ctx *ctx, const char *str,
-				   const void *ptr, size_t size)
+/*dump指定ptr对应的内容*/
+static inline void ionic_dbg_xdump(struct ionic_ctx *ctx, const char *str/*内容前缀*/,
+				   const void *ptr, size_t size/*内容长度*/)
 {
 	const uint8_t *ptr8 = ptr;
 	int i;

@@ -41,7 +41,7 @@ static inline int ionic_to_ibv_status(int sts)
 		return IBV_WC_SUCCESS;
 	case IONIC_STS_LOCAL_LEN_ERR:
 		return IBV_WC_LOC_LEN_ERR;
-	case IONIC_STS_LOCAL_QP_OPER_ERR:
+	case IONIC_STS_LOCAL_QP_OPER_ERR:/*本端操作错误*/
 		return IBV_WC_LOC_QP_OP_ERR;
 	case IONIC_STS_LOCAL_PROT_ERR:
 		return IBV_WC_LOC_PROT_ERR;
@@ -76,6 +76,7 @@ static inline bool ionic_v1_cqe_color(struct ionic_v1_cqe *cqe)
 
 static inline bool ionic_v1_cqe_error(struct ionic_v1_cqe *cqe)
 {
+	/*是否error cqe*/
 	return !!(cqe->qid_type_flags & htobe32(IONIC_V1_CQE_ERROR));
 }
 
